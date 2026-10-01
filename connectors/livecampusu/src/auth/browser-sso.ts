@@ -69,9 +69,7 @@ export function isLoggedInPage(deployment: LcuDeploymentProfile, url: string): b
   // Any other LCU screen except the login screen also means the session is live
   // (home variants differ per deployment, and SSO may land on a deep link).
   return (
-    screen !== deployment.auth.loginScreenId &&
-    !PUBLIC_SCREEN.test(screen) &&
-    !/error/i.test(rel)
+    screen !== deployment.auth.loginScreenId && !PUBLIC_SCREEN.test(screen) && !/error/i.test(rel)
   );
 }
 
