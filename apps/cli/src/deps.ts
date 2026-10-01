@@ -162,27 +162,57 @@ export function defaultPrompt(question: string): Promise<string> {
 
 /** Read one line from the terminal without echoing it. */
 export function defaultPromptSecret(question: string): Promise<string> {
+  const input = process.stdin;
   const output = process.stderr;
   output.write(question);
-  let muted = true;
-  const rl = createInterface({
-    input: process.stdin,
-    output: new Writable({
-      write(chunk: Buffer | string, _encoding, callback) {
-        if (!muted) output.write(chunk);
-        callback();
-      },
-    }),
-    terminal: process.stdin.isTTY === true,
-  });
+  if (!input.isTTY) return readLine(input);
+  // Raw mode reads keystrokes directly; readline with a muted output stream returned '' on Windows.
   return new Promise((resolve) => {
-    rl.question('', (answer) => {
-      muted = false;
-      output.write('\n');
+    let buf = '';
+    const cleanup = () => {
+      input.off('data', onData);
+      input.setRawMode(false);
+      input.pause();
+    };
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') {
+          cleanup();
+          output.write('\n');
+          resolve(buf);
+          return;
+        }
+        if (ch === '\u0003') {
+          cleanup();
+          output.write('\n');
+          process.exit(130);
+        }
+        if (ch === '\u0008' || ch === '\u007f') {
+          buf = [...buf].slice(0, -1).join('');
+          continue;
+        }
+        if (ch >= ' ') buf += ch;
+      }
+    };
+    input.setEncoding('utf8');
+    input.setRawMode(true);
+    input.resume();
+    input.on('data', onData);
+  });
+}
+
+function readLine(input: NodeJS.ReadStream): Promise<string> {
+  const rl = createInterface({ input, terminal: false });
+  return new Promise((resolve) => {
+    let done = false;
+    rl.once('line', (line) => {
+      done = true;
       rl.close();
-      resolve(answer);
+      resolve(line);
     });
-    rl.once('close', () => resolve(''));
+    rl.once('close', () => {
+      if (!done) resolve('');
+    });
   });
 }
 

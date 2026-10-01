@@ -125,6 +125,11 @@ export function registerRemote(program: Command, h: Harness): void {
             );
           passphrase = await readSecret(ctx, '新しいパスフレーズ: ');
           const again = await readSecret(ctx, 'もう一度: ');
+          if (passphrase === '')
+            throw new CliError(
+              '入力を読み取れませんでした。PowerShellなどのターミナルで直接実行してください',
+              1,
+            );
           if (passphrase !== again) throw new CliError('2回の入力が一致しません', 1);
         }
         const problem = passphraseProblem(passphrase);
