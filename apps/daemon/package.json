@@ -1,7 +1,7 @@
 {
   "name": "@unicontext/daemon",
   "version": "1.0.0",
-  "description": "unicontextd daemon (stub)",
+  "description": "unicontextd: sync, notifications, REST, Web UI and MCP on 127.0.0.1 (ﾂｧ34)",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -11,7 +11,19 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./api-types": {
+      "types": "./dist/api-types.d.ts",
+      "import": "./dist/api-types.js"
+    },
+    "./package.json": "./package.json",
+    "./lib": {
+      "types": "./dist/lib.d.ts",
+      "import": "./dist/lib.js"
     }
+  },
+  "bin": {
+    "unicontextd": "./dist/bin.js"
   },
   "files": [
     "dist"
@@ -20,6 +32,32 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/core": "workspace:*"
+    "@fastify/static": "^10.1.5",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@unicontext/auth": "workspace:*",
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/context-engine": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/database": "workspace:*",
+    "@unicontext/mcp": "workspace:*",
+    "@unicontext/notifications": "workspace:*",
+    "@unicontext/provenance": "workspace:*",
+    "@unicontext/sync-engine": "workspace:*",
+    "fastify": "^5.12.5",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5",
+    "@unicontext/search": "workspace:*"
+  },
+  "optionalDependencies": {
+    "@unicontext/livecampusu": "workspace:*",
+    "@unicontext/microsoft365": "workspace:*",
+    "@unicontext/local-files": "workspace:*",
+    "@unicontext/syllabus": "workspace:*",
+    "@unicontext/chatgpt-record": "workspace:*",
+    "@unicontext/adapter-mcp": "workspace:*",
+    "@unicontext/adapter-cli": "workspace:*",
+    "@unicontext/adapter-rest": "workspace:*",
+    "@unicontext/adapter-browser": "workspace:*"
   }
 }

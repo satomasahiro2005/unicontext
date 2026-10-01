@@ -56,9 +56,6 @@
       "path": "./apps/cli"
     },
     {
-      "path": "./apps/web"
-    },
-    {
       "path": "./apps/mcp"
     },
     {

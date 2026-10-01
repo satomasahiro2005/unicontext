@@ -9,6 +9,36 @@
   "references": [
     {
       "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/canonical-model"
+    },
+    {
+      "path": "../../packages/auth"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/connector-sdk"
+    },
+    {
+      "path": "../../packages/sync-engine"
+    },
+    {
+      "path": "../../packages/context-engine"
+    },
+    {
+      "path": "../../packages/provenance"
+    },
+    {
+      "path": "../../packages/notifications"
+    },
+    {
+      "path": "../../apps/mcp"
+    },
+    {
+      "path": "../../packages/search"
     }
   ]
 }

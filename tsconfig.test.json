@@ -9,5 +9,5 @@
     "sourceMap": false,
     "rootDir": "."
   },
-  "include": ["packages/*/test/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": ["packages/*/test/**/*.ts", "apps/*/test/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
 }

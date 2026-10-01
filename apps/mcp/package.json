@@ -1,7 +1,7 @@
 {
   "name": "@unicontext/mcp",
   "version": "1.0.0",
-  "description": "UniContext MCP server (stub)",
+  "description": "UniContext MCP server (stdio and streamable HTTP, §39-40)",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -11,6 +11,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./proposals": {
+      "types": "./dist/proposals.d.ts",
+      "import": "./dist/proposals.js"
+    },
+    "./assignments": {
+      "types": "./dist/assignments.d.ts",
+      "import": "./dist/assignments.js"
+    },
+    "./courses": {
+      "types": "./dist/courses.d.ts",
+      "import": "./dist/courses.js"
     }
   },
   "files": [
@@ -20,6 +32,15 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/core": "workspace:*"
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/context-engine": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/database": "workspace:*",
+    "@unicontext/provenance": "workspace:*",
+    "@unicontext/search": "workspace:*",
+    "@unicontext/sync-engine": "workspace:*",
+    "@unicontext/task-engine": "workspace:*",
+    "zod": "^4.6.5"
   }
 }

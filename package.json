@@ -10,15 +10,17 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json",
+    "build": "tsc -b tsconfig.json && pnpm --filter @unicontext/web build",
     "clean": "tsc -b tsconfig.json --clean",
-    "typecheck": "tsc -b tsconfig.json && tsc -p tsconfig.test.json",
+    "typecheck": "tsc -b tsconfig.json && pnpm --filter @unicontext/web typecheck && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "pnpm build && tsc -p tsconfig.test.json && pnpm lint && pnpm test"
+    "check": "pnpm build && tsc -p tsconfig.test.json && pnpm lint && pnpm test",
+    "unicontext": "node apps/cli/dist/bin.js",
+    "unicontextd": "node apps/daemon/dist/bin.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

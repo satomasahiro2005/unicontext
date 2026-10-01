@@ -9,6 +9,27 @@
   "references": [
     {
       "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/canonical-model"
+    },
+    {
+      "path": "../../packages/provenance"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/sync-engine"
+    },
+    {
+      "path": "../../packages/task-engine"
+    },
+    {
+      "path": "../../packages/context-engine"
+    },
+    {
+      "path": "../../packages/search"
     }
   ]
 }

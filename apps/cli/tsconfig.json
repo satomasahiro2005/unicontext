@@ -9,6 +9,30 @@
   "references": [
     {
       "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/canonical-model"
+    },
+    {
+      "path": "../../packages/auth"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/connector-sdk"
+    },
+    {
+      "path": "../../packages/context-engine"
+    },
+    {
+      "path": "../../apps/daemon"
+    },
+    {
+      "path": "../../apps/mcp"
+    },
+    {
+      "path": "../../packages/notifications"
     }
   ]
 }

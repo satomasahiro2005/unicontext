@@ -1,0 +1,49 @@
+/*
+ * Wire types come from the daemon package, type-only: nothing from @unicontext/* may reach the
+ * browser bundle at runtime. Every file in src imports types through here.
+ */
+export type {
+  AdminContext,
+  AssignmentItem,
+  AssignmentsResponse,
+  ChangesContext,
+  Citation,
+  ClassItem,
+  ConflictItem,
+  ConflictsResponse,
+  CorrectBody,
+  CorrectResponse,
+  CourseContext,
+  CourseRef,
+  CourseSummary,
+  CoursesResponse,
+  DeadlineItem,
+  IdentityBody,
+  IdentityResponse,
+  LectureBundle,
+  Notification,
+  NotificationsResponse,
+  ProposalView,
+  ProposalsResponse,
+  ResolvedValue,
+  SearchResponse,
+  SessionResponse,
+  SettingsResponse,
+  SourceInfo,
+  SourceRefResponse,
+  SourcesResponse,
+  SyncResponse,
+  TodayContext,
+  WeekContext,
+} from '@unicontext/daemon/api-types';
+
+export type { IdentityLink } from '@unicontext/canonical-model';
+
+export type {
+  AnnouncementItem,
+  ChangeItem,
+  MaterialItem,
+  PreparationItem,
+  TaskItem,
+  ValueCandidate,
+} from '@unicontext/context-engine';

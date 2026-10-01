@@ -9,6 +9,18 @@
   "references": [
     {
       "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/canonical-model"
+    },
+    {
+      "path": "../../packages/provenance"
+    },
+    {
+      "path": "../../packages/sync-engine"
+    },
+    {
+      "path": "../../packages/context-engine"
     }
   ]
 }
