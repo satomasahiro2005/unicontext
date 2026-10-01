@@ -1,0 +1,184 @@
+<!--
+  LCU 履修登録 SC_07002B00_01 — 正規ルートで到達した状態（観測 2026-10-01、後期の一般登録期間中）
+  経路: 左メニュー「履修登録」 postSubmit('emptyForm','SC_07002B00_01/initStudent')
+        → 学生情報編集 SC_05002B00_04 → 「登録して履修登録へ進む」(POST SC_05002B00_04/update, 値は無変更)
+        → 302 → GET SC_07002B00_01（この HTML）
+  <main> の中身をほぼそのまま整形。トークン類は除去。修得済単位数は NN.N に置換。
+  この時点で本学期の登録は 0 件（グリッドは「＋」リンクだけ・li.select-btn なし）。
+  ※ 旧サンプル lcu-rishu-entry-SC_07002B00_01.html はゲートを通らずに直 GET した「未初期化」状態。
+-->
+<main class="c-container">
+ <div class="c-contents">
+  <div class="c-breadcrumbs">
+   <div class="c-heading-h1-container">
+    <div class="c-heading-contents -between"><h2 class="c-heading-h1">履修登録</h2></div>
+    <p class="c-heading-description"> 期間内に履修科目を設定してください。期間内であれば、何回でも変更ができます。 </p>
+   </div>
+
+   <!-- 履修登録期限: 期間中は日付+時刻、期間外は「登録期間外です」 -->
+   <section class="stady-sec01">
+    <div class="stady-sec01-box">
+     <ul>
+      <li>
+       <div class="left"><h3>履修登録期限</h3></div>
+       <div class="right">
+        <dl><dt>一般<br>時間割外</dt><dd><span class="big-txt">10月7日</span><span class="small-txt">23:55</span> まで </dd></dl>
+        <dl><dt>集中</dt><dd> 登録期間外です </dd></dl>
+        <dl><dt>抽選</dt><dd> 登録期間外です </dd></dl>
+       </div>
+      </li>
+      <li>
+       <div class="left"><h3>履修単位</h3></div>
+       <div class="right">
+        <dl>
+         <div class="r-list1">
+          <table class="unit-table">
+           <tbody>
+            <tr><td colspan="2"></td><td class="header">今学期</td><td class="header">年間</td></tr>
+            <tr>
+             <td colspan="2" class="header-unit border-double">総履修単位数 <span style="font-size: 1.2rem;">（登録単位の合計）</span></td>
+             <td class="unit-value border-double2"><span class="num value-indent"> 0.0 </span></td>
+             <td class="unit-value border-double2"><span class="num value-indent"> 24.0 </span></td>
+            </tr>
+            <tr>
+             <td class="header-unit indent">履修制限外科目</td><td class="sub-header">登録単位</td>
+             <td class="unit-value"><span class="num value-indent"> 0.0 </span></td>
+             <td class="unit-value"><span class="num value-indent"> 0.0 </span></td>
+            </tr>
+            <tr>
+             <td rowspan="2" class="header-unit indent">履修制限科目</td><td class="sub-header">登録単位</td>
+             <td class="unit-value"><span class="num value-indent"> 0.0 </span></td>
+             <td class="unit-value"><span class="num value-indent"> 24.0 </span></td>
+            </tr>
+            <tr>
+             <td class="sub-header">上限単位数</td>
+             <td class="limit-unit-value"><span class="num value-indent"> 24.0 </span></td>
+             <td class="limit-unit-value-hyphen"><span class="num">-</span></td>
+            </tr>
+           </tbody>
+          </table>
+         </div>
+         <div class="r-list2"><p>修得済単位はNN.N単位です。（要件外も含む）</p></div>
+        </dl>
+       </div>
+      </li>
+     </ul>
+    </div>
+   </section>
+
+   <section class="stady-sec02">
+    <div class="stady-sec02-header">
+     <div class="stady-sec02-header-in">
+      <!-- 年度・学期: 候補が 1 つだけのときは onclick なしの a.is-active だけ（change() を呼ぶ要素が無い） -->
+      <div class="left">
+       <p class="year"> 2026年度 </p>
+       <p class="c-half-btn"><a class="is-active">後期</a></p>
+      </div>
+      <div class="right">
+       <a href="./SC_07002B00_01#lecture1" class="c-link"><i class="c-icon-arrow-bottom c-color-base" aria-hidden="true"></i><span class="c-link-text">一般・抽選講義</span></a>
+       <a href="./SC_07002B00_01#lecture2" class="c-link"><i class="c-icon-arrow-bottom c-color-base" aria-hidden="true"></i><span class="c-link-text">時間割外講義</span></a>
+       <a href="./SC_07002B00_01#lecture3" class="c-link"><i class="c-icon-arrow-bottom c-color-base" aria-hidden="true"></i><span class="c-link-text">集中講義</span></a>
+      </div>
+     </div>
+    </div>
+
+    <div class="stady-sec02-contents" id="lecture1">
+     <p class=""> 一般講義の設定、抽選講義の申込みを行います。<br>「＋」ボタンや「履修科目を検索して追加」ボタンから科目を検索し、履修科目を設定できます。 </p>
+     <div class="ttl-area">
+      <div class="left">
+       <h3>一般・抽選講義</h3>
+       <ul class="c-heading-btn-items u-pc-only">
+        <li class="c-heading-btn-item"><p>
+         <!-- 曜限指定なしの検索追加 = add('', '') -->
+         <a href="javascript:add('', '')" class="c-btn c-btn-line c-btn-add-select"><span class="c-btn-link"><span class="c-icon-plus"></span> 履修科目を検索して追加 </span></a>
+        </p></li>
+       </ul>
+      </div>
+      <div class="right"><ul><li>凡例：</li><li class="compulsory">必修科目</li><li class="lottery">抽選科目</li><li class="confirm">確定済</li></ul></div>
+     </div>
+
+     <!-- スマホ表示用の曜日切替（表示だけ） -->
+     <p class="c-week-btn u-sp-only">
+      <a id="weekButton1" href="javascript:void(0)" onclick="changeDisplayWeek('1')" class="is-active">月</a>
+      <a id="weekButton2" href="javascript:void(0)" onclick="changeDisplayWeek('2')">火</a>
+      <a id="weekButton3" href="javascript:void(0)" onclick="changeDisplayWeek('3')">水</a>
+      <a id="weekButton4" href="javascript:void(0)" onclick="changeDisplayWeek('4')">木</a>
+      <a id="weekButton5" href="javascript:void(0)" onclick="changeDisplayWeek('5')">金</a>
+      <a id="weekButton6" href="javascript:void(0)" onclick="changeDisplayWeek('6')">土</a>
+      <a id="weekButton7" href="javascript:void(0)" onclick="changeDisplayWeek('7')">日</a>
+     </p>
+
+     <!-- 曜限グリッド: 7 行(時限コード 1..7 = 1・2限..13・14限) x 7 列(曜日コード 1..7 = 月..日)。
+          空セルは中身の無い <a href="javascript:add('<曜>', '<限>')"> だけ（CSS で「＋」を描く）。
+          引数は文字列。td の id は列ごとに同じ "weekN"（行をまたいで重複する）。 -->
+     <table class="schedule-table">
+      <tbody>
+       <tr class="week" id="weeksRow"><th id="week0"></th><th id="week1">月</th><th id="week2">火</th><th id="week3">水</th><th id="week4">木</th><th id="week5">金</th><th id="week6">土</th><th id="week7">日</th></tr>
+       <tr><th><p>1・2時限</p></th>
+        <td id="week1"><a href="javascript:add('1', '1')"></a></td>
+        <td id="week2"><a href="javascript:add('2', '1')"></a></td>
+        <td id="week3"><a href="javascript:add('3', '1')"></a></td>
+        <td id="week4"><a href="javascript:add('4', '1')"></a></td>
+        <td id="week5"><a href="javascript:add('5', '1')"></a></td>
+        <td id="week6"><a href="javascript:add('6', '1')"></a></td>
+        <td id="week7"><a href="javascript:add('7', '1')"></a></td>
+       </tr>
+       <tr><th><p>3・4時限</p></th><!-- add('1'..'7', '2') 同形 --></tr>
+       <tr><th><p>5・6時限</p></th><!-- add('1'..'7', '3') --></tr>
+       <tr><th><p>7・8時限</p></th><!-- add('1'..'7', '4') --></tr>
+       <tr><th><p>9・10時限</p></th><!-- add('1'..'7', '5') --></tr>
+       <tr><th><p>11・12時限</p></th><!-- add('1'..'7', '6') --></tr>
+       <tr><th><p>13・14時限</p></th><!-- add('1'..'7', '7') --></tr>
+      </tbody>
+     </table>
+
+     <p class="u-sp-only">
+      <a href="javascript:add('', '')" class="c-btn c-btn-line c-btn-add select-btn"><span class="c-btn-link"><span class="c-btn-text c-icon-blank"> 履修科目を検索して追加 </span></span></a>
+      <a href="javascript:lottery()" class="c-btn c-btn-line c-btn-add select-btn"><span class="c-btn-link"><span class="c-btn-text c-icon-blank"> 抽選志望状況の確認 </span></span></a>
+     </p>
+
+     <div class="stady-lecture-area">
+      <!-- 時間割外講義: 追加は add(8, '')（曜日コード 8 = 時間割外、数値で渡す） -->
+      <div class="left" id="lecture2">
+       <div class="lecture-ttl-area">
+        <h3>時間割外講義</h3>
+        <p class="u-pc-only"><button type="button" onclick="javascript:add(8, '');return false;" class="c-btn c-btn-line c-btn-detail"><span class="c-btn-link"><span class="c-btn-text ">追加</span><i class="c-icon-plus c-color-base" aria-hidden="true"></i></span></button></p>
+       </div>
+       <ul class="stady-lecture-list-items"></ul>
+       <p class="u-sp-only"><a href="javascript:add(8, '')" class="c-btn c-btn-line c-btn-detail"><span class="c-btn-link"><span class="c-btn-text">追加</span><span class="c-icon-plus"></span></span></a></p>
+      </div>
+      <!-- 集中講義: 期間外なので追加ボタン自体が無い -->
+      <div class="right" id="lecture3">
+       <div class="lecture-ttl-area"><h3>集中講義</h3></div>
+       <ul class="stady-lecture-list-items"><li class="stady-lecture-list-item-nodata">対象の科目はありません</li></ul>
+      </div>
+     </div>
+    </div>
+   </section>
+  </div>
+  <div class="c-page-back" style="bottom: 72px;">
+   <a href="#" class="c-page-back-link" onclick="submitFormLink('SC_07002B00_01_RegisterForm', '/lcu-web/SC_07002B00_01/back');return false;"><i class="c-icon-page-back" aria-hidden="true"></i></a>
+  </div>
+  <!-- このパスは 503 を返す（読み込み失敗。画面の動作には影響していない） -->
+  <script src="/lcu-web/WEB-INF/m_07002b00/stady.js"></script>
+ </div>
+</main>
+
+<!-- main の外にあるフォーム（トークンは除去。値は到達直後の状態＝全部空） -->
+<form id="SC_07002B00_01_RegisterForm" action="/lcu-web/SC_07002B00_01" method="post">
+ <!-- 各 input の id は SC_07002B00_01_RegisterForm_<name>（旧サンプル参照）。今回 add() の実物で確かめたのは buttomWeekCode / buttomHourCode の 2 つ -->
+ <input type="hidden" name="selectSemesterTermCode" value="">
+ <input type="hidden" id="SC_07002B00_01_RegisterForm_buttomWeekCode" name="buttomWeekCode" value="">
+ <input type="hidden" id="SC_07002B00_01_RegisterForm_buttomHourCode" name="buttomHourCode" value="">
+ <input type="hidden" name="selectLectureCode" value="">
+ <input type="hidden" name="selectedWeek" value="">
+ <input type="hidden" name="selectComaCode" value="">
+ <input type="hidden" name="rankIndex" value="">
+ <input type="hidden" name="syllabusSchoolYear" value="">
+ <input type="hidden" name="syllabusSubjectCode" value="">
+ <input type="hidden" name="syllabusClassCode" value="">
+ <input type="hidden" name="_TRANSACTION_TOKEN" value="REDACTED">
+ <input type="hidden" name="_csrf" value="REDACTED">
+</form>
+<!-- 他: home_systemCooperationLink(action=systemCooperationLink/init), emptyForm, SU_01003B00_13_View, BaseForm,
+     PU_01003B00_07_CurriculumMapForm(studentCode=空) — いずれもトークンだけ -->

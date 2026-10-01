@@ -1,0 +1,68 @@
+<!--
+  LCU 学生情報編集 SC_05002B00_04 — MANDATORY GATE shown FIRST when entering 履修登録
+  from the left menu (postSubmit('emptyForm','SC_07002B00_01/initStudent') -> this screen).
+  (観測 2026-10-01). ALL personal values removed; only the form STRUCTURE kept.
+  Student header on the real page reads "<学籍番号> 学生 太郎 (ガクセイ タロウ) 情報学部... N年".
+  Pressing 「登録して履修登録へ進む」 saves student info AND proceeds to SC_07002B00_01.
+-->
+<main class="c-container">
+ <h2 class="c-heading-h1">学生情報編集</h2>
+ <p>学生情報を入力して、「登録」ボタンを押してください。</p>
+ <p>S0000000　学生 太郎 (ガクセイ タロウ)</p>
+ <p>情報学部XX学科　N年</p>
+
+ <!-- 主フォーム: 学籍詳細情報(本人) items[0..11] + 保証人情報(items[12..33], disableFlag=true=読取専用) -->
+ <form id="SC_05002B00_04_Form" action="/lcu-web/SC_05002B00_04/update" method="post">
+  <!-- 郵便番号ウィジェット(adr1) -->
+  <input type="text"   name="postNumberInfomation[adr1].zipCodeUpperDigit" value="">
+  <input type="text"   name="postNumberInfomation[adr1].zipCodeLastDigit"  value="">
+  <input type="hidden" name="postNumberInfomation[adr1].postNo"            value="">
+  <input type="hidden" name="postNumberInfomation[adr1].seqNo"             value="">
+  <input type="hidden" name="postNumberInfomation[adr1].prefectureCode"    value="">
+  <input type="text"   name="postNumberInfomation[adr1].town"              value="">
+  <input type="text"   name="postNumberInfomation[adr1].streetName"        value="">
+  <button type="button" onclick="openPopupChildScreen_PU_01003B00_06_adr1();return false;">住所自動入力</button>
+
+  <!-- 一般項目: 各 items[n] は itemTypeCode(01=text/11=select/12=multi-checkbox/04=date/99=zip/-1=seq) ,
+       disableFlag, itemCode, itemValue (checkbox系は multiItemValue + hidden _multiItemValue) の組 -->
+  <!-- items[0]  itemCode=post_number            (99 郵便番号)        -->
+  <!-- items[1]  itemCode=post_number_seq        (-1)                 -->
+  <!-- items[2]  itemCode=prefecture_code        (11 都道府県 select) -->
+  <!-- items[3]  itemCode=address_1              (01 市区町村)        -->
+  <!-- items[4]  itemCode=address_2              (01 町名・番地)      -->
+  <!-- items[5]  itemCode=address_3              (01 建物名等)        -->
+  <!-- items[6]  itemCode=phone_number           (01 電話番号)        -->
+  <!-- items[7]  itemCode=mobile_phone_number    (01 携帯電話番号)    -->
+  <!-- items[8]  itemCode=email_address_1        (01 メールアドレス1) -->
+  <!-- items[9]  itemCode=home_type              (11 住居区分 select)  -->
+  <!-- items[10] itemCode=commute_way_code       (12 通学手段 checkbox)-->
+  <!-- items[11] itemCode=commute_time           (01 所要時間)        -->
+  <!-- items[12..33] guarantor_* (保証人/保証人勤務先) すべて disableFlag=true (hidden, 読取専用) -->
+  <input type="hidden" name="items[0].itemTypeCode" value=""><input type="hidden" name="items[0].disableFlag" value="">
+  <input type="hidden" name="items[0].itemCode" value=""><input type="hidden" name="items[0].itemValue" value="">
+  <!-- ... items[1..33] 同形 ... -->
+  <input type="hidden" name="_TRANSACTION_TOKEN" value="<REMOVED>">
+  <input type="hidden" name="_csrf" value="<REMOVED>">
+ </form>
+
+ <!-- CSRF-only / 連携 / ダミーフォーム群 (SC_05002B00_04_CSRF_Form, SC_05002B00_04_Form_dumy,
+      SU_01003B00_13_View, emptyForm, home_systemCooperationLink, BaseForm) are TRANSACTION_TOKEN+_csrf のみ -->
+
+ <!-- ボタン -->
+ <button type="button" onclick="submitUpdateEvent();return false;">登録して履修登録へ進む</button>
+</main>
+
+<!--
+ submitUpdateEvent():
+   const action = '/SC_05002B00_04/update'; submitConnectionForm(action);
+ submitConnectionForm(action):
+   builds a NEW <form action='/lcu-web'+action method=post>, clones every element of
+   SC_05002B00_04_Form, SC_05002B00_04_CSRF_Form, SC_05002B00_04_Form_registration_limit_infos,
+   SC_05002B00_04_Form_register_term_infos into it, appends to body, .submit(), then removes it.
+ => Effective request: POST /lcu-web/SC_05002B00_04/update  (application/x-www-form-urlencoded)
+    with all items[*].* + postNumberInfomation[adr1].* + _TRANSACTION_TOKEN + _csrf.
+ Other handlers on this screen:
+   submitUpdateContinuousEvent() -> POST /lcu-web/SC_05002B00_04/updateContinuous  (★write)
+   ...                           -> /SC_05002B00_04/delete?subCategoryId=..&personalItemCode=.. (★delete)
+   back link submitFormLink('BaseForm','/lcu-web/SC_05002B00_04/back')  (navigation)
+-->

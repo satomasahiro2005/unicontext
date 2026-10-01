@@ -1,0 +1,112 @@
+<!--
+  LCU 履修登録 entry screen SC_07002B00_01 (観測 2026-10-01, registration period CLOSED state)
+  Sanitized: no tokens, no student ID / name. Structure kept exact.
+  Reached by: GET /lcu-web/SC_07002B00_01 (direct). Normal menu route goes through the
+  SC_05002B00_04 student-info gate first (see lcu-rishu-gate-SC_05002B00_04.html).
+  All period rows show "登録期間外です" because 後期 general registration slot was not open
+  at capture time; the schedule-table <tbody> is therefore empty (no "+" add buttons rendered).
+
+  [訂正 2026-10-01 再調査] 上の「期間外だから」は誤り。この HTML はゲート SC_05002B00_04 を
+  通らずに直 GET したため画面が初期化されていない状態（学期セレクタも空）。同じ時刻に正規ルート
+  （ゲートの「登録して履修登録へ進む」経由）で入ると、一般/時間割外は「10月7日 23:55 まで」で
+  グリッドに add('曜','限') が 49 個並ぶ。正しい見本は lcu-rishu-entry-open-SC_07002B00_01.html。
+-->
+<main class="c-container">
+ <div class="c-contents">
+  <div class="c-heading-h1-container">
+   <h2 class="c-heading-h1">履修登録</h2>
+   <p class="c-heading-description">期間内に履修科目を設定してください。期間内であれば、何回でも変更ができます。</p>
+  </div>
+
+  <section class="stady-sec01">
+   <div class="stady-sec01-box"><ul>
+    <li>
+     <div class="left"><h3>履修登録期限</h3></div>
+     <div class="right">
+      <dl><dt>一般<br>時間割外</dt><dd>登録期間外です</dd></dl>
+      <dl><dt>集中</dt><dd>登録期間外です</dd></dl>
+      <dl><dt>抽選</dt><dd>登録期間外です</dd></dl>
+     </div>
+    </li>
+    <li>
+     <div class="left"><h3>履修単位</h3></div>
+     <div class="right"><dl><div class="r-list1">
+      <table class="unit-table"><tbody>
+       <tr><td colspan="2"></td><td class="header">今学期</td><td class="header">年間</td></tr>
+       <tr><td colspan="2" class="header-unit border-double">総履修単位数<span>（登録単位の合計）</span></td>
+           <td class="unit-value border-double2"><span class="num value-indent"></span></td>
+           <td class="unit-value border-double2"><span class="num value-indent"></span></td></tr>
+       <tr><td class="header-unit indent">履修制限外科目</td><td class="sub-header">登録単位</td>
+           <td class="unit-value"><span class="num value-indent">0</span></td>
+           <td class="unit-value"><span class="num value-indent">0</span></td></tr>
+       <tr><td rowspan="2" class="header-unit indent">履修制限科目</td><td class="sub-header">登録単位</td>
+           <td class="unit-value-hyphen"><span class="num">-</span></td>
+           <td class="unit-value-hyphen"><span class="num">-</span></td></tr>
+       <tr><td class="sub-header">上限単位数</td>
+           <td class="limit-unit-value-hyphen"><span class="num">-</span></td>
+           <td class="limit-unit-value-hyphen"><span class="num">-</span></td></tr>
+      </tbody></table>
+     </div><div class="r-list2"><p>修得済単位は単位です。（要件外も含む）</p></div></dl></div>
+    </li>
+   </ul></div>
+  </section>
+
+  <section class="stady-sec02">
+   <div class="stady-sec02-header"><div class="stady-sec02-header-in">
+    <div class="left"><p class="year">年度</p><p class="c-half-btn"></p></div>
+    <div class="right">
+     <a href="./SC_07002B00_01#lecture1" class="c-link"><span class="c-link-text">一般・抽選講義</span></a>
+     <a href="./SC_07002B00_01#lecture2" class="c-link"><span class="c-link-text">時間割外講義</span></a>
+     <a href="./SC_07002B00_01#lecture3" class="c-link"><span class="c-link-text">集中講義</span></a>
+    </div>
+   </div></div>
+
+   <div class="stady-sec02-contents" id="lecture1">
+    <p>一般講義の設定、抽選講義の申込みを行います。<br>「＋」ボタンや「履修科目を検索して追加」ボタンから科目を検索し、履修科目を設定できます。</p>
+    <div class="ttl-area">
+     <div class="left"><h3>一般・抽選講義</h3><ul class="c-heading-btn-items u-pc-only"></ul></div>
+     <div class="right"><ul>
+       <li>凡例：</li><li class="compulsory">必修科目</li>
+       <li class="lottery">抽選科目</li><li class="confirm">確定済</li>
+     </ul></div>
+    </div>
+    <p class="c-week-btn u-sp-only"></p>
+
+    <!-- 曜限グリッド: 行=時限, 列=曜日. 登録期間中は各セルに "＋" ボタン <a href="javascript:add(week,period)">
+         や登録済み科目の li.select-btn が入る。期間外のため tbody は空。 -->
+    <table class="schedule-table"><tbody></tbody></table>
+
+    <p class="u-sp-only">
+     <a href="javascript:lottery()" class="c-btn c-btn-line c-btn-add select-btn">
+      <span class="c-btn-link"><span class="c-btn-text c-icon-blank">抽選志望状況の確認</span></span></a>
+    </p>
+
+    <div class="stady-lecture-area">
+     <div class="left" id="lecture2"><div class="lecture-ttl-area"><h3>時間割外講義</h3></div>
+      <ul class="stady-lecture-list-items"><li class="stady-lecture-list-item-nodata">対象の科目はありません</li></ul></div>
+     <div class="right" id="lecture3"><div class="lecture-ttl-area"><h3>集中講義</h3></div>
+      <ul class="stady-lecture-list-items"><li class="stady-lecture-list-item-nodata">対象の科目はありません</li></ul></div>
+    </div>
+   </div>
+  </section>
+ </div>
+
+ <!-- 戻る -->
+ <div class="c-page-back"><a href="#" onclick="submitFormLink('SC_07002B00_01_RegisterForm','/lcu-web/SC_07002B00_01/back');return false;"></a></div>
+</main>
+
+<!-- hidden driver form (values removed) -->
+<form id="SC_07002B00_01_RegisterForm" action="/lcu-web/SC_07002B00_01" method="post">
+ <input type="hidden" name="selectSemesterTermCode" id="SC_07002B00_01_RegisterForm_selectSemesterTermCode" value="">
+ <input type="hidden" name="buttomWeekCode"       id="SC_07002B00_01_RegisterForm_buttomWeekCode"       value="">
+ <input type="hidden" name="buttomHourCode"       id="SC_07002B00_01_RegisterForm_buttomHourCode"       value="">
+ <input type="hidden" name="selectLectureCode"    id="SC_07002B00_01_RegisterForm_selectLectureCode"    value="">
+ <input type="hidden" name="selectedWeek"         id="SC_07002B00_01_RegisterForm_selectedWeek"         value="">
+ <input type="hidden" name="selectComaCode"       id="SC_07002B00_01_RegisterForm_selectComaCode"       value="">
+ <input type="hidden" name="rankIndex"            id="SC_07002B00_01_RegisterForm_rankIndex"            value="">
+ <input type="hidden" name="syllabusSchoolYear"   id="SC_07002B00_01_RegisterForm_syllabusSchoolYear"   value="">
+ <input type="hidden" name="syllabusSubjectCode"  id="SC_07002B00_01_RegisterForm_syllabusSubjectCode"  value="">
+ <input type="hidden" name="syllabusClassCode"    id="SC_07002B00_01_RegisterForm_syllabusClassCode"    value="">
+ <input type="hidden" name="_TRANSACTION_TOKEN"   value="<REMOVED>">
+ <input type="hidden" name="_csrf"                value="<REMOVED>">
+</form>

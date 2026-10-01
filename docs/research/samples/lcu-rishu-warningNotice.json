@@ -1,0 +1,32 @@
+// GET /lcu-web/SC_01002B00_01/warningNoticeInformation  (観測 2026-10-01)
+// Home dashboard "履修登録期限" card source. No PII; deadline only. Array; first element shown.
+[
+  {
+    "warningNoticeSize": "L",
+    "warningNoticeId": "2",
+    "warningNoticeName": "履修登録期限",
+    "warningNoticeRequestPath": "registrationEntryLimitLink",
+    "warningNoticeDateExistence": "1",
+    "warningNoticeCountExistence": "0",
+    "warningNoticeStatusExistence": "1",
+    "warningNoticeContent": "1",
+    "warningNoticeContentMonth": "10",
+    "warningNoticeContentDay": "7",
+    "warningNoticeStatusId": "0",
+    "warningNoticeStatusName": "",
+    "warningNoticeInformationDateList": [
+      {
+        "warningNoticeContentDateTitle": "一般",
+        "warningNoticeContentMonth": "10",
+        "warningNoticeContentMonthText": "月",
+        "warningNoticeContentHalfSizeSlashText": "/",
+        "warningNoticeContentDay": "7",
+        "warningNoticeContentDayText": "日",
+        "warningNoticeStatusId": "0"
+      }
+    ]
+  }
+]
+// NOTE: the home "履修登録期限" card links via setImportant... / postSubmit to
+// SC_01002B00_01/registrationEntryLimitLink (= warningNoticeRequestPath), which lands on
+// SC_07002B00_01 (履修登録) through the student-info gate.
