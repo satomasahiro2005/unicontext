@@ -45,6 +45,8 @@ import {
 import { factId, FactStore } from '@unicontext/provenance';
 import { buildChangeEvent } from './change-events.js';
 import {
+  type BusChangeEvent,
+  type ChangeOrigin,
   createSyncEventBus,
   type NormalizeReport,
   type SyncEventBus,
@@ -304,7 +306,10 @@ export class SyncEngine {
         mode,
         fullSync: mode !== 'incremental',
       });
-      const normalized = await this.normalizePending(sourceId, { emitCreates: hadPreviousSync });
+      const normalized = await this.normalizePending(sourceId, {
+        emitCreates: hadPreviousSync,
+        origin: hadPreviousSync && mode !== 'initial' ? 'sync' : 'initial',
+      });
       this.stores.raw.touchSourceSync(sourceId, this.clock.now().toISOString());
       const health = await this.recordSuccess(source, version);
       const report: SyncRunReport = {
@@ -389,7 +394,10 @@ export class SyncEngine {
           result.complete.sourceTypes,
           seen,
         ).length;
-      const normalized = await this.normalizePending(sourceId, { emitCreates: true });
+      const normalized = await this.normalizePending(sourceId, {
+        emitCreates: true,
+        origin: 'ingest',
+      });
       return { raw, normalized };
     });
   }
@@ -404,7 +412,11 @@ export class SyncEngine {
       // Reset inside the source's lock so a running sync is not normalizing the same items.
       const r = await this.withSourceLock(id, () => {
         this.stores.raw.resetNormalization(id);
-        return this.normalizePending(id, { emitCreates: true, runPostProcessors: false });
+        return this.normalizePending(id, {
+          emitCreates: true,
+          runPostProcessors: false,
+          origin: 'reprocess',
+        });
       });
       mergeReport(total, r);
     }
@@ -415,8 +427,14 @@ export class SyncEngine {
   /** Normalize raw items that are new, changed or deleted since their last normalization. */
   async normalizePending(
     sourceId: string,
-    options: { emitCreates?: boolean; runPostProcessors?: boolean } = {},
+    options: {
+      emitCreates?: boolean;
+      runPostProcessors?: boolean;
+      /** What the events of this pass are tagged with (default 'sync'). */
+      origin?: ChangeOrigin;
+    } = {},
   ): Promise<NormalizeReport> {
+    const passOrigin = options.origin ?? 'sync';
     const source = this.getSource(sourceId);
     const report = emptyNormalize();
     // A new normalizer version re-normalizes what the previous one produced (no refetch needed).
@@ -426,7 +444,7 @@ export class SyncEngine {
       normalizerVersion: source.normalizer.version,
     });
     // Events of this call only, committed per raw item once its transaction succeeded.
-    const pendingEvents: ChangeEvent[] = [];
+    const pendingEvents: BusChangeEvent[] = [];
     for (const item of pending) {
       report.items++;
       const itemEvents: ChangeEvent[] = [];
@@ -474,7 +492,13 @@ export class SyncEngine {
             this.logger.warn('normalizer warning', { sourceId, rawItemId: item.id, warning: w });
         }
         this.stores.raw.markNormalized(item.id, { version: source.normalizer.version });
-        pendingEvents.push(...itemEvents);
+        // Items last normalized by another normalizer version are being reclassified, not observed.
+        const origin: ChangeOrigin =
+          item.normalizerVersion !== undefined &&
+          item.normalizerVersion !== source.normalizer.version
+            ? 'reprocess'
+            : passOrigin;
+        pendingEvents.push(...itemEvents.map((ev) => ({ ...ev, origin })));
       } catch (e) {
         report.failed++;
         this.logger.error('normalize failed', {
@@ -490,6 +514,11 @@ export class SyncEngine {
       }
     }
     for (const ev of pendingEvents) await this.bus.emit('change', ev);
+    await this.bus.emit('changes:settled', {
+      sourceId,
+      origin: passOrigin,
+      count: pendingEvents.length,
+    });
     if (options.runPostProcessors !== false)
       await this.runPostProcessors(sourceId, report.changedEntityIds);
     return report;

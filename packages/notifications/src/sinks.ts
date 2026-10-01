@@ -88,41 +88,43 @@ export async function createDesktopSink(
     return undefined;
   }
   const target = notifier;
+  const toast = (title: string, message: string, sound: boolean): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        settled = true;
+        resolve();
+      }, DESKTOP_GRACE_MS);
+      timer.unref?.();
+      try {
+        target.notify({ title, message, sound, wait: false }, (err) => {
+          clearTimeout(timer);
+          if (settled) {
+            if (err) logger.warn('desktop notification failed', { error: errorMessage(err) });
+            return;
+          }
+          settled = true;
+          if (err) reject(err);
+          else resolve();
+        });
+      } catch (e) {
+        clearTimeout(timer);
+        reject(e);
+      }
+    });
   return {
     id: 'desktop',
+    shows: (n) => meetsPriority(n.priority, minPriority),
     send(n) {
       if (!meetsPriority(n.priority, minPriority)) return;
-      return new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const timer = setTimeout(() => {
-          settled = true;
-          resolve();
-        }, DESKTOP_GRACE_MS);
-        timer.unref?.();
-        try {
-          target.notify(
-            {
-              title: `[${PRIORITY_LABELS_JA[n.priority]}] ${oneLine(n.title)}`,
-              message: oneLine(n.body),
-              sound: n.priority === 'critical',
-              wait: false,
-            },
-            (err) => {
-              clearTimeout(timer);
-              if (settled) {
-                if (err) logger.warn('desktop notification failed', { error: errorMessage(err) });
-                return;
-              }
-              settled = true;
-              if (err) reject(err);
-              else resolve();
-            },
-          );
-        } catch (e) {
-          clearTimeout(timer);
-          reject(e);
-        }
-      });
+      return toast(
+        `[${PRIORITY_LABELS_JA[n.priority]}] ${oneLine(n.title)}`,
+        oneLine(n.body),
+        n.priority === 'critical',
+      );
+    },
+    sendSummary(shown) {
+      return toast('UniContext', `変更が${shown.length}件あります`, false);
     },
   };
 }

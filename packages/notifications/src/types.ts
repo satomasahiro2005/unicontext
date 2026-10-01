@@ -62,7 +62,18 @@ export interface Notification {
 export interface NotificationSink {
   readonly id: string;
   send(n: Notification): Promise<void> | void;
+  /** Whether this sink would interrupt the user with the notification (default: every notification). */
+  shows?(n: Notification): boolean;
+  /**
+   * Replaces send() when one batch (one sync run) holds more than FLOOD_LIMIT notifications this
+   * sink would show: the sink tells the user once that there are that many changes. The
+   * notifications themselves stay in the log. Sinks without it get every notification.
+   */
+  sendSummary?(shown: Notification[]): Promise<void> | void;
 }
+
+/** More desktop toasts than this from one sync run collapse into a single summary toast. */
+export const FLOOD_LIMIT = 3;
 
 /** The slice of UniContext the notification service needs. */
 export type NotificationHost = Pick<

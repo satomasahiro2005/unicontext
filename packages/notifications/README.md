@@ -39,7 +39,13 @@ notifications.markRead(id);
 | `conflict`               | `change` of type `conflict_detected`, `conflict` event `opened`                  | high                                                          |
 | `schema_drift`           | `drift`                                                                          | low                                                           |
 
-Other change events are ignored. Class sessions that are already over are ignored. Titles and
+Other change events are ignored. Course-scoped kinds (everything above except the sync, auth and
+drift kinds) fire only for offerings the student is enrolled in (an active enrollment from a source
+with the `enrollments` capability, or entered by the user) in the current or an upcoming term, and
+only while the class session, due date or exam is not over. Syllabus-catalog offerings never
+notify. Change events tagged by the sync engine with `origin` `initial` (first sync) or
+`reprocess` are dropped; only `sync` and `ingest` count as new observations. A course-offering
+room that has no earlier value is not a change. Titles and
 bodies are Japanese and include `citations` (from `context.citationsFor`). Source error text is
 passed through the core redactor.
 
@@ -52,7 +58,7 @@ check runs on `uc.clock` every 5 minutes (and once at `start()`).
 
 ## Dedupe and the log
 
-Every notification has a `dedupeKey`. Keys are checked against the persisted log, so a restart
+Every notification has a `dedupeKey`; room changes and cancellations are keyed by course title (not offering id), value and day, so sibling offerings of one subject fire once. Keys are checked against the persisted log, so a restart
 does not repeat anything. `auth_expired`, `sync_failure` and `conflict` may repeat: they are
 suppressed for `dedupeWindowMs` (default 6 hours) and are forgotten when the source reports
 `healthy`. `NotificationLog` is an append-only JSONL file (notification, read-state and key-reset
@@ -61,6 +67,10 @@ and falls back to in-memory if no `logFile` is given. Notifications below `minPr
 before they are logged or sent.
 
 ## Sinks
+
+Change events of one sync run are published together. A sink with `sendSummary` that would show more
+than `FLOOD_LIMIT` (3) of them gets one summary instead (the desktop sink: 「UniContext」/
+「変更が12件あります」); the details stay in the log and go to the other sinks one by one.
 
 - `createConsoleSink()` writes `[重要] title — body` to stderr (stdout is reserved for MCP stdio).
 - `createDesktopSink()` uses the optional `node-notifier` module and resolves to `undefined` when

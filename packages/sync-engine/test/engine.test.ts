@@ -191,6 +191,43 @@ describe('SyncEngine', () => {
     );
   });
 
+  it('tags change events with their origin and announces when a pass has settled', async () => {
+    const origins: (string | undefined)[] = [];
+    const settled: [string, string, number][] = [];
+    engine.bus.on('change', (e) => {
+      origins.push(e.origin);
+    });
+    engine.bus.on('changes:settled', (e) => {
+      settled.push([e.sourceId, e.origin, e.count]);
+    });
+    await engine.sync('lms');
+    fake.adapter.dataset.assignments = [
+      {
+        id: 'a1',
+        courseId: 'c1',
+        title: '課題1',
+        due: '2026-10-10T23:59:00+09:00',
+        updatedAt: '2026-10-01T00:00:00Z',
+      },
+      {
+        id: 'a2',
+        courseId: 'c1',
+        title: '課題2',
+        due: '2026-10-15T23:59:00+09:00',
+        updatedAt: '2026-09-25T00:00:00Z',
+      },
+    ];
+    clock.set('2026-10-01T10:00:00Z');
+    await engine.sync('lms');
+    await engine.reprocess('lms');
+    expect(origins).toEqual(['sync']);
+    expect(settled).toEqual([
+      ['lms', 'initial', 0],
+      ['lms', 'sync', 1],
+      ['lms', 'reprocess', 0],
+    ]);
+  });
+
   it('a new normalizer version re-normalizes unchanged raw items on the next sync, silently', async () => {
     await engine.sync('lms');
     const before = engine.stores.changes.list({}).length;

@@ -20,9 +20,10 @@ import {
   zonedDateString,
 } from '@unicontext/core';
 import type { Citation } from '@unicontext/provenance';
-import type { SyncEngineEvents } from '@unicontext/sync-engine';
+import type { BusChangeEvent, ChangeOrigin, SyncEngineEvents } from '@unicontext/sync-engine';
 import { NotificationLog, type NotificationListOptions } from './log.js';
 import {
+  FLOOD_LIMIT,
   meetsPriority,
   type Notification,
   type NotificationHost,
@@ -42,6 +43,11 @@ const WINDOWED_KINDS: ReadonlySet<NotificationKind> = new Set([
   'sync_failure',
   'conflict',
 ]);
+/**
+ * Change origins that are genuine new observations. A first ingest, a reprocess or a
+ * reclassification only repopulates state the user has already seen (or never needed to).
+ */
+const GENUINE_ORIGINS: ReadonlySet<ChangeOrigin> = new Set(['sync', 'ingest']);
 const DONE_TASK_STATUSES: ReadonlySet<string> = new Set(['submitted', 'completed', 'cancelled']);
 
 const PREDICATE_LABELS_JA: Record<string, string> = {
@@ -90,6 +96,8 @@ export class NotificationService {
   private readonly leads: Lead[];
   private readonly intervalMs: number;
   private readonly windowMs: number;
+  /** Drafts of the sync run in progress, by source: published together when it settles. */
+  private readonly batches = new Map<string, Draft[]>();
   private offs: (() => void)[] = [];
   private timer: TimerHandle | undefined;
   private running = false;
@@ -115,6 +123,9 @@ export class NotificationService {
     const bus = this.uc.bus;
     this.offs = [
       bus.on('change', (ev) => this.guard('change', () => this.handleChange(ev))),
+      bus.on('changes:settled', (ev) =>
+        this.guard('changes:settled', () => this.handleSettled(ev)),
+      ),
       bus.on('conflict', (ev) => this.guard('conflict', () => this.handleConflict(ev))),
       bus.on('health', (ev) => this.guard('health', () => this.handleHealth(ev))),
       bus.on('sync:failed', (ev) => this.guard('sync:failed', () => this.handleSyncFailed(ev))),
@@ -127,6 +138,7 @@ export class NotificationService {
     this.running = false;
     for (const off of this.offs) off();
     this.offs = [];
+    this.batches.clear();
     if (this.timer) this.uc.clock.clearTimeout(this.timer);
     this.timer = undefined;
   }
@@ -156,9 +168,27 @@ export class NotificationService {
 
   // ---- bus handlers -------------------------------------------------------------------
 
-  async handleChange(ev: ChangeEvent): Promise<Notification[]> {
+  /**
+   * Events the sync engine tags with an origin are collected per source and published when the
+   * pass settles, so one run's notifications can be summarized (flood guard). Untagged events
+   * (conflicts found by the pipeline, direct callers) are published at once.
+   */
+  async handleChange(ev: BusChangeEvent): Promise<Notification[]> {
+    if (ev.origin !== undefined && !GENUINE_ORIGINS.has(ev.origin)) return [];
     const draft = this.draftFromChange(ev);
-    return draft ? this.publish([draft]) : [];
+    if (!draft) return [];
+    if (ev.origin === undefined) return this.publish([draft]);
+    const key = ev.source.sourceId ?? '';
+    const batch = this.batches.get(key);
+    if (batch) batch.push(draft);
+    else this.batches.set(key, [draft]);
+    return [];
+  }
+
+  async handleSettled(ev: SyncEngineEvents['changes:settled']): Promise<Notification[]> {
+    const drafts = this.batches.get(ev.sourceId);
+    this.batches.delete(ev.sourceId);
+    return drafts && drafts.length > 0 ? this.publish(drafts) : [];
   }
 
   async handleConflict(ev: SyncEngineEvents['conflict']): Promise<Notification[]> {
@@ -308,6 +338,43 @@ export class NotificationService {
     return drafts;
   }
 
+  // ---- scope: only courses the student takes ----------------------------------------------
+
+  /**
+   * Course-scoped notifications are for offerings the student is enrolled in (per an
+   * enrollment-authoritative source, or entered by the user) in the current or an upcoming term.
+   * Syllabus-catalog offerings and other classes of the same subject never qualify.
+   */
+  private inScope(courseId: string | undefined): boolean {
+    if (courseId === undefined) return true; // not course-scoped
+    const scope = this.uc.context.enrollmentOf(courseId);
+    if (!scope.enrolled) return false;
+    if (!scope.sourceIds.some((id) => this.isEnrollmentAuthority(id))) return false;
+    const today = zonedDateString(this.uc.clock.now(), this.uc.timezone);
+    return !scope.term || scope.term.end >= today;
+  }
+
+  private isEnrollmentAuthority(sourceId: string | undefined): boolean {
+    if (sourceId === undefined) return true; // entered by the user
+    try {
+      return this.uc.sync.getSource(sourceId).metadata.capabilities.includes('enrollments');
+    } catch {
+      return false;
+    }
+  }
+
+  private isPast(iso: string | undefined): boolean {
+    if (!iso) return false;
+    const t = Date.parse(iso);
+    return Number.isFinite(t) && t < this.uc.clock.now().getTime();
+  }
+
+  /** The same course can exist as several offerings: dedupe by title, not by id. */
+  private courseKeyOf(course: { id: string; title: string } | undefined, fallback: string): string {
+    const title = course?.title.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+    return title || course?.id || fallback;
+  }
+
   // ---- rules: change events ---------------------------------------------------------------
 
   private draftFromChange(ev: ChangeEvent): Draft | undefined {
@@ -329,12 +396,16 @@ export class NotificationService {
         const name = course?.title ?? ev.summary ?? ev.entityId;
         const to = str(after.room);
         const from = str(before.room);
+        // No earlier room: the room was just learned (a syllabus detail), nothing changed.
+        if (!from) return undefined;
+        if (!this.inScope(course?.id ?? ev.entityId)) return undefined;
+        const today = zonedDateString(this.uc.clock.now(), tz);
         return {
           kind: 'room_change',
           priority: 'high',
           title: `教室変更: ${name}`,
           body: this.roomSentence(`${name}の教室`, from, to),
-          dedupeKey: `room_change:${course?.id ?? ev.entityId}:course:${to ?? ''}`,
+          dedupeKey: `room_change:${this.courseKeyOf(course, ev.entityId)}:course:${today}:${to ?? ''}`,
           entityId: ev.entityId,
           courseOfferingId: course?.id ?? ev.entityId,
           citations: this.uc.context.citationsFor([ev.entityId]),
@@ -343,9 +414,11 @@ export class NotificationService {
       case 'assignment': {
         const title = str(after.title) ?? this.entityTitle(ev.entityId) ?? '課題';
         const course = this.courseOf(ev);
+        if (!this.inScope(course?.id)) return undefined;
         const where = course ? `${course.title}に` : '';
         if (ev.type === 'created') {
           const due = str(after.dueAt);
+          if (this.isPast(due)) return undefined; // already over
           return {
             kind: 'new_assignment',
             priority: 'normal',
@@ -360,6 +433,7 @@ export class NotificationService {
         if (ev.type === 'updated' && ev.changedFields.includes('dueAt')) {
           const from = str(before.dueAt);
           const to = str(after.dueAt);
+          if (this.isPast(to)) return undefined; // moved to a time that has passed
           const now = this.uc.clock.now().getTime();
           const left = to ? new Date(to).getTime() - now : undefined;
           const urgent = left !== undefined && left > 0 && left < 24 * HOUR_MS;
@@ -384,7 +458,9 @@ export class NotificationService {
         if (ev.type !== 'created') return undefined;
         const title = str(after.title) ?? this.entityTitle(ev.entityId) ?? '試験';
         const course = this.courseOf(ev);
+        if (!this.inScope(course?.id)) return undefined;
         const when = str(after.startsAt);
+        if (this.isPast(str(after.endsAt) ?? when)) return undefined; // already over
         const room = str(after.room);
         const parts = [
           `${course ? `${course.title}の` : ''}試験「${title}」が発表されました。`,
@@ -410,6 +486,7 @@ export class NotificationService {
         if (!important && scope !== 'university') return undefined;
         const title = str(after.title) ?? this.entityTitle(ev.entityId) ?? 'お知らせ';
         const course = this.courseOf(ev);
+        if (!this.inScope(course?.id)) return undefined;
         const text = str(after.body);
         const lead = course ? `${course.title}: ` : scope === 'university' ? '大学から: ' : '';
         return {
@@ -437,7 +514,9 @@ export class NotificationService {
     const tz = this.uc.timezone;
     const session = this.sessionOf(ev.entityId);
     const course = this.courseOf(ev, session?.courseOfferingId);
-    const name = course?.title ?? ev.summary ?? ev.entityId;
+    // A class session always belongs to a course; one the student does not take is not news.
+    if (!course || !this.inScope(course.id)) return undefined;
+    const name = course.title;
     let proximity: 'soon' | 'later' = 'later';
     let when = '';
     if (session) {
@@ -448,7 +527,7 @@ export class NotificationService {
       if (session.date === today || session.date === tomorrow) proximity = 'soon';
       when = `${formatDateJa(parseZonedDate(session.date, tz), tz)}${session.period ? `${session.period}限` : ''}`;
     }
-    const courseKey = course?.id ?? ev.entityId;
+    const courseKey = this.courseKeyOf(course, ev.entityId);
     const dateKey = session?.date ?? ev.entityId;
     const citations = this.uc.context.citationsFor([ev.entityId]);
     const common = {
@@ -478,9 +557,10 @@ export class NotificationService {
     };
   }
 
-  private conflictDraft(ev: ChangeEvent): Draft {
+  private conflictDraft(ev: ChangeEvent): Draft | undefined {
     const predicate = ev.changedFields[0] ?? 'unknown';
     const course = this.courseOf(ev);
+    if (!this.inScope(course?.id)) return undefined;
     const label = course?.title ?? this.entityTitle(ev.entityId) ?? ev.entityId;
     const values = str(ev.after?.[predicate]);
     return {
@@ -590,21 +670,41 @@ export class NotificationService {
       this.log.add(n);
       created.push(n);
     }
-    for (const n of created) await this.deliver(n);
+    await this.deliver(created);
     return created;
   }
 
-  private async deliver(n: Notification): Promise<void> {
+  /**
+   * Fans one batch out to the sinks. A sink that has a summary form and would show more than
+   * FLOOD_LIMIT of the batch gets one summary instead (the details stay in the log).
+   */
+  private async deliver(batch: Notification[]): Promise<void> {
+    if (batch.length === 0) return;
     await Promise.all(
       this.sinks.map(async (sink) => {
-        try {
-          await sink.send(n);
-        } catch (e) {
-          this.logger.warn('notification sink failed', {
-            sink: sink.id,
-            kind: n.kind,
-            error: errorMessage(e),
-          });
+        const shown = sink.shows ? batch.filter((n) => sink.shows?.(n)) : batch;
+        if (sink.sendSummary && shown.length > FLOOD_LIMIT) {
+          try {
+            await sink.sendSummary(shown);
+          } catch (e) {
+            this.logger.warn('notification sink failed', {
+              sink: sink.id,
+              kind: 'summary',
+              error: errorMessage(e),
+            });
+          }
+          return;
+        }
+        for (const n of batch) {
+          try {
+            await sink.send(n);
+          } catch (e) {
+            this.logger.warn('notification sink failed', {
+              sink: sink.id,
+              kind: n.kind,
+              error: errorMessage(e),
+            });
+          }
         }
       }),
     );

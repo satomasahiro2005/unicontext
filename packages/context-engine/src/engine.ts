@@ -5,6 +5,7 @@ import {
   type ClassSession,
   type Conflict,
   type CourseOffering,
+  type Enrollment,
   entityLabel,
   type Exam,
   type JsonValue,
@@ -95,6 +96,20 @@ export interface ContextEngineOptions {
   clock?: Clock;
   timezone?: string;
   profile?: UniversityProfile;
+  /**
+   * True for sources that only describe offerings (a public syllabus catalog). Their offerings stay
+   * out of the today / week / changes views unless the student is enrolled in them.
+   */
+  isReferenceSource?: (sourceId: string) => boolean;
+}
+
+/** Whether the student is enrolled in a course offering (§14: any linked offering counts). */
+export interface EnrollmentScope {
+  enrolled: boolean;
+  /** Source of each matching active enrollment (undefined = entered by the user). */
+  sourceIds: (string | undefined)[];
+  /** Academic term of the offering when the profile's calendar knows it. */
+  term: { id: string; name: string; start: string; end: string } | undefined;
 }
 
 const OPEN_STATUSES: Task['status'][] = ['pending', 'in_progress', 'unknown'];
@@ -125,8 +140,10 @@ export class ContextEngine {
   private readonly identity: IdentityResolver;
   private readonly tasks: TaskEngine;
   private readonly search: SearchService | undefined;
+  private readonly isReferenceSource: (sourceId: string) => boolean;
 
   constructor(options: ContextEngineOptions) {
+    this.isReferenceSource = options.isReferenceSource ?? (() => false);
     this.db = options.db;
     this.clock = options.clock ?? systemClock;
     this.timezone =
@@ -177,6 +194,89 @@ export class ContextEngine {
     const offering = ref ? this.entities.getOfKind('courseOffering', ref.id) : undefined;
     if (!ref || !offering) throw new NotFoundError(`course offering ${id}`);
     return { ...ref, offering };
+  }
+
+  private selfEnrollments(): Enrollment[] {
+    const self = new Set(
+      this.entities
+        .list('person')
+        .filter((p) => p.isSelf)
+        .map((p) => p.id),
+    );
+    return this.entities
+      .list('enrollment')
+      .filter(
+        (e) =>
+          e.status === 'active' &&
+          e.role === 'student' &&
+          (self.size === 0 || self.has(e.personId)),
+      );
+  }
+
+  private linkedIdsOf(id: string): string[] {
+    return [...new Set([id, ...this.identity.expand(id)])];
+  }
+
+  /** Every offering id (with its identity-linked ids) the student is enrolled in. */
+  private enrolledIdSet(): Set<string> {
+    const out = new Set<string>();
+    for (const e of this.selfEnrollments())
+      for (const id of this.linkedIdsOf(e.courseOfferingId)) out.add(id);
+    return out;
+  }
+
+  /**
+   * The student's enrollment in an offering: whether any linked offering has an active student
+   * enrollment, which sources reported it, and the offering's academic term. Notifications use it
+   * to stay silent about courses the student does not take.
+   */
+  enrollmentOf(courseOfferingId: string | undefined): EnrollmentScope {
+    const none: EnrollmentScope = { enrolled: false, sourceIds: [], term: undefined };
+    if (!courseOfferingId) return none;
+    const linked = new Set(this.linkedIdsOf(courseOfferingId));
+    const sourceIds: (string | undefined)[] = [];
+    for (const e of this.selfEnrollments()) {
+      if (!this.linkedIdsOf(e.courseOfferingId).some((id) => linked.has(id))) continue;
+      sourceIds.push(this.entities.meta(e.id)?.sourceId);
+    }
+    if (sourceIds.length === 0) return none;
+    const schedule = this.tasks.schedule;
+    let term: EnrollmentScope['term'];
+    for (const id of linked) {
+      const offering = this.entities.getOfKind('courseOffering', id);
+      const t = offering ? schedule.termOf(offering) : undefined;
+      if (t) {
+        term = { id: t.id, name: t.name, start: t.start, end: t.end };
+        break;
+      }
+    }
+    return { enrolled: true, sourceIds, term };
+  }
+
+  /** An offering known only from reference sources (a syllabus catalog) that the student does not take. */
+  private isCatalogOnly(courseId: string | undefined, enrolled: ReadonlySet<string>): boolean {
+    if (!courseId) return false;
+    const linked = this.linkedIdsOf(courseId);
+    if (linked.some((id) => enrolled.has(id))) return false;
+    const sources = linked
+      .map((id) => this.entities.meta(id)?.sourceId)
+      .filter((x): x is string => x !== undefined);
+    return sources.length > 0 && sources.every((x) => this.isReferenceSource(x));
+  }
+
+  /** Drops changes that only describe catalog (syllabus-only) offerings the student does not take. */
+  private visibleChanges(list: ChangeEvent[]): ChangeEvent[] {
+    if (list.length === 0) return list;
+    const enrolled = this.enrolledIdSet();
+    return list.filter((c) => {
+      const course =
+        c.courseOfferingId ?? (c.entityKind === 'courseOffering' ? c.entityId : undefined);
+      const mine = course !== undefined && this.linkedIdsOf(course).some((id) => enrolled.has(id));
+      if (mine) return true;
+      const sourceId = c.source.sourceId;
+      if (sourceId !== undefined && this.isReferenceSource(sourceId)) return false;
+      return !this.isCatalogOnly(course, enrolled);
+    });
   }
 
   private resolvedValue<T extends JsonValue>(res: Resolution, fallback?: T): ResolvedValue<T> {
@@ -266,7 +366,10 @@ export class ContextEngine {
    * sessions merged over the ones generated from the timetable and the academic calendar.
    */
   sessionsOn(date: string): ClassSession[] {
-    return this.tasks.schedule.sessionsOn(date);
+    const sessions = this.tasks.schedule.sessionsOn(date);
+    if (sessions.length === 0) return sessions;
+    const enrolled = this.enrolledIdSet();
+    return sessions.filter((s) => !this.isCatalogOnly(s.courseOfferingId, enrolled));
   }
 
   private taskCitations(t: Task): Citation[] {
@@ -489,8 +592,7 @@ export class ContextEngine {
     const date = zonedDateString(dayStart, this.timezone);
     const classes = this.sessionsOn(date).map((s) => this.classItem(s));
     const since = addZonedDays(startOfZonedDay(now, this.timezone), -1, this.timezone);
-    const changes = this.changes
-      .list({ since: since.toISOString() })
+    const changes = this.visibleChanges(this.changes.list({ since: since.toISOString() }))
       .reverse()
       .map((c) => this.changeItem(c));
     const horizon = addZonedDays(dayStart, 15, this.timezone);
@@ -666,8 +768,9 @@ export class ContextEngine {
       days,
       deadlines: all.filter((d) => d.kind !== 'exam_preparation'),
       exams: all.filter((d) => d.kind === 'exam_preparation'),
-      changes: this.changes
-        .list({ since: new Date(now.getTime() - 7 * DAY).toISOString() })
+      changes: this.visibleChanges(
+        this.changes.list({ since: new Date(now.getTime() - 7 * DAY).toISOString() }),
+      )
         .reverse()
         .map((c) => this.changeItem(c)),
       conflicts: this.openConflicts(),
@@ -775,8 +878,9 @@ export class ContextEngine {
     return {
       ...this.base('changes'),
       since,
-      changes: this.changes
-        .list({ since, ...(ids ? { courseOfferingIds: ids } : {}) })
+      changes: this.visibleChanges(
+        this.changes.list({ since, ...(ids ? { courseOfferingIds: ids } : {}) }),
+      )
         .reverse()
         .map((c) => this.changeItem(c)),
       conflicts: this.openConflicts(ids),

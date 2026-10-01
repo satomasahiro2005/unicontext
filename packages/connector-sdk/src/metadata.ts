@@ -31,6 +31,12 @@ export const ConnectorMetadataSchema = z
     /** Raw item types this connector emits. */
     rawTypes: z.array(z.string()).default([]),
     homepage: z.string().optional(),
+    /**
+     * Reference data only (e.g. a public syllabus catalog): what it describes is not the student's
+     * own. Its offerings stay out of today / week / changes unless the student is enrolled in them
+     * and never raise notifications.
+     */
+    referenceOnly: z.boolean().default(false),
   })
   .superRefine((m, ctx) => {
     if (m.apiStability === 'unofficial') {

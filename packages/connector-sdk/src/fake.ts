@@ -38,6 +38,8 @@ export const FakePayloadSchemas = {
     teacher: z.string().optional(),
     department: z.string().optional(),
     room: z.string().optional(),
+    /** The student is enrolled (adds an enrollment of the self person). */
+    enrolled: z.boolean().optional(),
     schedule: z
       .array(z.object({ day: z.number(), period: z.number(), room: z.string().optional() }))
       .optional(),
@@ -168,6 +170,8 @@ export interface FakeConnectorOptions {
   productVersion?: string;
   testedVersion?: string;
   apiStability?: 'official' | 'unofficial' | 'experimental';
+  /** Reference data only, like a syllabus catalog (connector metadata `referenceOnly`). */
+  referenceOnly?: boolean;
   dataset?: FakeDataset;
 }
 
@@ -363,6 +367,18 @@ export function createFakeNormalizer(
             })),
             ...((p.room ?? p.schedule?.[0]?.room) ? { room: p.room ?? p.schedule?.[0]?.room } : {}),
           });
+          if (p.enrolled) {
+            const self = ctx.id('person', 'self');
+            push({ id: self, kind: 'person', name: '本人', roles: ['student'], isSelf: true });
+            push({
+              id: ctx.id('enrollment', p.id),
+              kind: 'enrollment',
+              personId: self,
+              courseOfferingId: ctx.id('courseOffering', p.id),
+              role: 'student',
+              status: 'active',
+            });
+          }
           break;
         }
         case 'fake.session': {
@@ -645,6 +661,7 @@ export function createFakeConnector(options: FakeConnectorOptions): FakeConnecto
     ...(options.sourceLabel ? { sourceLabel: options.sourceLabel } : {}),
     rawTypes: DATASET_KEYS.map(([, t]) => t),
     defaultSchedule: '15m',
+    ...(options.referenceOnly ? { referenceOnly: true } : {}),
   });
   const adapter = new FakeSourceAdapter(options);
   const normalizer = createFakeNormalizer(options);

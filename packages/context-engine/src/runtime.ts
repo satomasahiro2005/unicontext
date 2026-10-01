@@ -149,6 +149,13 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
     identity,
     tasks,
     search,
+    isReferenceSource: (sourceId) => {
+      try {
+        return sync.getSource(sourceId).metadata.referenceOnly === true;
+      } catch {
+        return false;
+      }
+    },
     ...(profile ? { profile } : {}),
   });
   const entities = new EntityStore(database, { clock });

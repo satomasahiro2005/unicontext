@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
-import { Writable } from 'node:stream';
 import { createSecretStore, MemorySecretStore } from '@unicontext/auth';
 import type { DataPaths, SecretStore } from '@unicontext/core';
 import {

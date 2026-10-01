@@ -3,6 +3,25 @@ import { EventBus } from '@unicontext/core';
 import type { DriftRecord, HealthRecord } from '@unicontext/database';
 import type { SyncMode } from '@unicontext/connector-sdk';
 
+/**
+ * Where a change event came from. Only 'sync' (an incremental or full refresh of a source that
+ * had synced before) and 'ingest' (a watcher or manual import) are genuine new observations; the
+ * rest repopulate state and must never raise notifications:
+ * - initial: the first sync of a source
+ * - reprocess: raw items normalized again (reprocess(), or a new normalizer version)
+ */
+export type ChangeOrigin = 'initial' | 'sync' | 'ingest' | 'reprocess';
+
+/** A change event as published on the bus; the sync engine sets `origin`. */
+export type BusChangeEvent = ChangeEvent & { origin?: ChangeOrigin };
+
+/** The engine finished publishing the change events of one normalization pass of a source. */
+export interface ChangesSettledEvent {
+  sourceId: string;
+  origin: ChangeOrigin;
+  count: number;
+}
+
 export interface SyncStartedEvent {
   sourceId: string;
   mode: SyncMode;
@@ -62,14 +81,16 @@ export interface DriftEvent {
 
 /**
  * Everything the notifications lane (§46) can subscribe to. Payloads are plain data.
- * - change: every ChangeEvent appended to the event log (§13)
+ * - change: every ChangeEvent appended to the event log (§13), tagged with its origin
+ * - changes:settled: the change events of one normalization pass have all been published
  * - conflict: a conflict opened/resolved (§12)
  * - health: connector health state changed, incl. auth expiry (§38)
  * - sync:*: run lifecycle; sync:failed carries the classified health state
  * - drift: first sighting of schema drift (§73)
  */
 export interface SyncEngineEvents {
-  change: ChangeEvent;
+  change: BusChangeEvent;
+  'changes:settled': ChangesSettledEvent;
   conflict: ConflictEvent;
   health: HealthChangedEvent;
   'sync:started': SyncStartedEvent;

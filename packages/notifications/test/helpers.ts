@@ -25,6 +25,11 @@ export function createSeedHarness(): SeedHarness {
   const uc = createUniContext({ profile: 'shizuoka-university', clock });
   const adapters: Record<string, FakeSourceAdapter> = {};
   for (const s of createShizuokaSeed()) {
+    // The academic system is the enrollment authority: the student takes every seed course.
+    if (s.sourceId === 'lcu') {
+      s.options.capabilities = [...(s.options.capabilities ?? []), 'enrollments'];
+      for (const c of s.options.dataset?.courses ?? []) c.enrolled = true;
+    }
     const fake = createFakeConnector(s.options);
     adapters[s.sourceId] = fake.adapter;
     uc.sync.register({

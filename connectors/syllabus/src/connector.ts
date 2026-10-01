@@ -20,6 +20,7 @@ export const metadata = defineMetadata({
   sourceLabel: 'シラバス',
   defaultSchedule: '1d',
   rawTypes: [SYLLABUS_ENTRY],
+  referenceOnly: true,
 });
 
 /**
