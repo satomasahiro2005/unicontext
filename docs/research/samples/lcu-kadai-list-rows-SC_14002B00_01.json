@@ -1,0 +1,9 @@
+{
+  "_fixture": "課題・アンケートリスト SC_14002B00_01, logged in, 2026-10-01. Server cell HTML per row as returned by DataTables $('#dataTable01').DataTable().rows().data() (= the server-rendered <td> innerHTML, including hidden columns). Column ids (th#id): submissionTypeName, submissionSeq(hidden), subjectName, title, statusName, statusCode(hidden), submittalTerm, submittalStatusName. Each <tr class=\"is-unread\" _index=\"N\">; td attrs: class=\"content is-source \" id=\"content\" data-label=\"<visible label>\". Search: POST SC_14002B00_01/search with submitKbn (1 受付中のみ/2 未提出のみ/3 締切/4 結果公開中, checkboxes; default 1), submissionType (0 小テスト/1 レポート/2 授業アンケート/3 学内アンケート/4 授業評価アンケート), title, subjectInfomationSearch.startYear/startSemester/classSubject. Detail: datatablesSubmitLinkForm('dataTable01','TableForm','SC_14002B00_01/rowselect',_index,true) -> SC_14002B00_02 (課題・アンケート詳細) or SC_14002B00_03 (提出画面). 62 rows for 2026 with all status filters off. statusCode observed: 3=受付中, 4=締切.",
+  "rows": [
+    {"_index": "0", "cells": ["レポート", "95133", "コンピュータネットワーク(1クラス)<br>前期後半/月1・2, 前期前半/月1・2", "01", "締切", "4", "2026/04/13 00:00 ～ 2026/04/20 00:00", "<span class=\"c-status-yet\"> 未提出 </span>"]},
+    {"_index": "20", "cells": ["小テスト", "96930", "オートマトンと言語理論(1クラス)<br>前期後半/水5・6, 前期前半/水5・6", "第1回 小テスト", "締切", "4", "2026/05/08 21:50 ～ 2026/05/19 23:55", "<span class=\"c-status-done\"> 提出済 </span>"]},
+    {"_index": "19", "cells": ["授業アンケート", "95912", "情報学方法論(1クラス)<br>前期後半/木5・6, 前期前半/木5・6", "学士・修士一貫教育特別コース 仮申請（仮登録）アンケート", "締切", "4", "2026/04/16 17:00 ～ 2026/04/30 23:55", "<span class=\"c-status-done\"> 提出済 </span>"]},
+    {"_index": "0", "_note": "row from the default search (受付中のみ)", "cells": ["学内アンケート", "2045", "\n", "2026年度　学びの実態調査（3年）", "受付中", "3", "2026/10/01 00:00 ～ 2026/11/15 23:55", "<span class=\"c-status-done\">提出済</span>"]}
+  ]
+}

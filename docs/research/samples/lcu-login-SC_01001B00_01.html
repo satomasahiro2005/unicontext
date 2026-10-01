@@ -1,0 +1,1025 @@
+<!-- UniContext fixture. Source: GET https://gakujo.shizuoka.ac.jp/lcu-web/. Captured 2026-10-01 (unauthenticated, public page). Login page; SSO button posts form to /lcu-web/shibbolethLogin/sso?lang=ja. _csrf and person names sanitized. -->
+
+
+
+
+
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html class="no-js" lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+<meta http-equiv="Content-Language" content="ja">
+<meta name="viewport" content="width=device-width,user-scalable=no">
+<link rel="icon" href="/lcu-web/img/common/favicon.svg" type="image/svg+xml">
+<title>ログイン</title>
+<link rel="stylesheet" type="text/css" href="/lcu-web/plugin/datatables/v1.10.20/datatables.min.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/plugin/modaal/v0.4.4/css/modaal.min.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/plugin/jquery/jquery-ui/v1.12.1/jquery-ui.min.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/plugin/toastr/vX.X.X/toastr.min.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/plugin/dropzone/lcu_dropzone.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/css/ress.min.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/css/common.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/css/p-index.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/css/blue.css">
+
+<script src="/lcu-web/plugin/desvg/vX.X.X/desvg.js"></script>
+<script src="/lcu-web/plugin/jquery/v3.5.1/jquery-3.5.1.min.js"></script>
+<script src="/lcu-web/plugin/jquery/jquery-ui/v1.12.1/jquery-ui.min.js"></script>
+<script src="/lcu-web/plugin/smooth-scroll/v16.1.2/smooth-scroll.polyfills.min.js"></script>
+<script src="/lcu-web/plugin/tablesorter/vX.X.X/jquery.tablesorter.min.js"></script>
+<script src="/lcu-web/plugin/jquery/jquery.ui.datepicker-ja/v1.10.4/jquery.ui.datepicker-ja.min.js"></script>
+<script src="/lcu-web/plugin/datatables/v1.10.20/datatables.min.js"></script>
+<script src="/lcu-web/plugin/modaal/v0.4.4/js/modaal.min.js"></script>
+<script src="/lcu-web/plugin/jquery/jquery.matchHeight/v0.7.2/jquery.matchHeight-min.js"></script>
+<script src="/lcu-web/plugin/object-fit-images/v3.2.3/ofi.min.js"></script>
+<script src="/lcu-web/plugin/jquery/jquery.inview/vX.X.X/inview.js"></script>
+<script src="/lcu-web/plugin/jquery/jquery.stickybits/v3.7.3/jquery.stickybits.min.js"></script>   
+<script src="/lcu-web/plugin/toastr/vX.X.X/toastr.min.js" ></script>
+<script src="/lcu-web/plugin/dropzone/v5.7.0/dropzone.min.js"></script>
+<script src="/lcu-web/js/viewport.js"></script>
+<script src="/lcu-web/js/common.js"></script>
+<script src="/lcu-web/js/fileupload.js"></script>
+</head>
+
+<script language="javascript">
+
+    _isExcelSubmit = false;
+
+	$(function() {
+		$(document).on("keypress", "input:not(.allow_submit)", function(event) {
+			return event.which !== 13;
+		});
+		
+		$(document).on('click','.ui-dialog-titlebar-close',function(){
+			isSubmit = false;
+		});
+		
+		
+	    $('.dataist_js').on('click', function () {
+	    	
+	    	let options = $(this).attr('list_data').split(',');
+	    	
+	    	$(this).autocomplete({
+	    			source: options,
+	    			minLength: 0, 
+	    			delay : 1,
+	    			autoFocus: false,
+	    			scroll:true,
+	  	            position:{ my : "right top", at: "right bottom", collision: "flip" }
+	    	});
+	    	$(this).autocomplete("search", "");
+	    });
+	});
+	
+    
+    function submitFormButton($button, requestPath, dialogTitle, dialogMessage) {
+    
+    	var formId = $button.attr('formId');
+    	var loading = $button.attr('loading');
+    	var dialogType = $button.attr('dialogType');
+    	
+        var submitStatus = dbClick();
+        if (!submitStatus) {
+            return false;
+        }
+        
+        saveScrollPosition();
+    	
+    	if (dialogType == undefined || dialogType == '') {
+    		if (loading != 'false') {
+    			showLoading();
+    		}
+    		
+    		_isBeforeUnload = false;
+    		
+    		$('#' + formId).attr('action', requestPath);
+    		$('#' + formId).submit();
+    
+    	} else if (dialogType == 'confirm') {
+    		openConfirmDialog(dialogTitle, dialogMessage, function() {
+    			if (loading) {
+    				showLoading();
+    			}
+    	        _isBeforeUnload = false;
+    			$('#' + formId).attr('action', requestPath);
+    			$('#' + formId).submit();
+    		}, function() {
+    			isSubmit = false;
+    		});
+    
+    	} else if (dialogType == 'message') {
+    		openMessageDialog(dialogTitle, dialogMessage, function() {
+    			if (loading != 'false') {
+    				showLoading();
+    			}
+    	        _isBeforeUnload = false;
+    			$('#' + formId).attr('action', requestPath);
+    			$('#' + formId).submit();
+    		});
+    	}
+    }
+    
+    
+    function submitFormLink(formId, requestPath, keyValue) {
+
+        var submitStatus = dbClick();
+        if (!submitStatus) {
+            return false;
+        }
+    	
+        saveScrollPosition();
+
+    	showLoading();
+    	
+    	$('#' + formId).attr('action', requestPath);
+    	if (keyValue) {
+    		$('#' + formId + '_selectedItem').val(keyValue);
+    	}
+    	$('#' + formId).submit();
+    }
+    
+    
+    function submitFormRadio($button, requestPath) {
+    
+    	var formId = $button.attr('formId');
+    	var loading = $button.attr('loading');
+
+        var submitStatus = dbClick();
+        if (!submitStatus) {
+            return false;
+        }
+
+    	if (loading != 'false') {
+    		showLoading();
+    	}
+    	
+    	_isBeforeUnload = false;
+    	saveScrollPosition();
+    	
+    	$('#' + formId).attr('action', requestPath);
+    	$('#' + formId).submit();
+    }
+    
+    
+    function submitFormSelect($button, requestPath) {
+    
+    	var formId = $button.attr('formId');
+    	var loading = $button.attr('loading');
+    	
+        var submitStatus = dbClick();
+        if (!submitStatus) {
+            return false;
+        }
+
+    	if (loading != 'false') {
+    		showLoading();
+    	}
+    	
+    	_isBeforeUnload = false;
+    	saveScrollPosition();
+    	
+    	$('#' + formId).attr('action', requestPath);
+    	$('#' + formId).submit();
+    }
+    
+    
+     function submitFormButtonForReport($button, requestPath) {
+         
+         var formId = $button.attr('formId');
+         var reportOutputConfirm = $button.attr('reportOutputConfirm');
+         
+         let existsWindowCloseAlertMsgOffFunction = typeof windowCloseAlertMsgOff == 'function';
+        
+         if (arguments.length === 0) {
+             if (_isExcelSubmit) {
+                openConfirmDialog('',
+                                  '',
+                                  function() {
+                                	  _isExcelSubmit = true;
+                                	  if (existsWindowCloseAlertMsgOffFunction) {
+                                          windowCloseAlertMsgOff();
+                                	  }
+                                      $('#' + formId).attr('action', requestPath);
+                                      $('#' + formId).submit();
+                                  },
+                                  function() { return false; });
+                
+             } else {
+                 _isExcelSubmit = true;
+                 if (existsWindowCloseAlertMsgOffFunction) {
+                     windowCloseAlertMsgOff();
+                 }
+                 $('#' + formId).attr('action', requestPath);
+                 $('#' + formId).submit();
+             }
+         } else {
+             var clickKey = arguments[1];
+             if (!!isExcelSubmitMap[clickKey] && (reportOutputConfirm != 'false')) {
+                 openConfirmDialog('',
+                                   '',
+                                   function() {
+                                	   if (existsWindowCloseAlertMsgOffFunction) {
+                                	       windowCloseAlertMsgOff();
+                                	   }
+                                	   $('#' + formId).attr('action', requestPath);
+                                       $('#' + formId).submit();
+                                   },
+                                   function() {});
+             } else {
+                 isExcelSubmitMap[clickKey] = true;
+                 if (existsWindowCloseAlertMsgOffFunction) {
+                     windowCloseAlertMsgOff();
+                 }
+                 $('#' + formId).attr('action', requestPath);
+                 $('#' + formId).submit();
+             }
+         }
+        
+     }
+    
+    
+    function openPopUp(requestPath, windowName) {
+
+    	var submitStatus = dbClick();
+        if (!submitStatus) {
+            return false;
+        }
+    	
+    	var ret = window
+    			.open(
+    					"common/blank.html",
+    					windowName,
+    					"width=1100,height=768,status=yes,scrollbars=yes,toolbar=no,location=yes,menubar=no,resizable=yes");
+    	ret.focus();
+    
+    	$('#PopupForm').attr('action', requestPath);
+    	$('#PopupForm').attr('target', windowName);
+    
+    	$('#PopupForm').submit();
+    }
+    
+    
+    function showSuccessToast(message) {
+    
+    	if (!message) {
+    		return;
+    	}
+    	
+    	
+    	delScrollPosition();
+    	
+    	toastr.options = {
+    		"closeButton" : true,
+    		"debug" : false,
+    		"newestOnTop" : false,
+    		"progressBar" : true,
+    		"positionClass" : "toast-top-center",
+    		"preventDuplicates" : false,
+    		"onclick" : null,
+    		"showDuration" : "300",
+    		"hideDuration" : "1000",
+    		"timeOut" : "5000",
+    		"extendedTimeOut" : "1000",
+    		"showEasing" : "swing",
+    		"hideEasing" : "linear",
+    		"showMethod" : "fadeIn",
+    		"hideMethod" : "fadeOut"
+    	};
+    
+    	toastr['success'](message);
+    }
+
+    
+    function _showErrorToast(message) {
+    
+    	if (!message) {
+    		return;
+    	}
+    	
+    	
+    	delScrollPosition();
+    	
+    	toastr.options = {
+    		"closeButton" : true,
+    		"debug" : false,
+    		"newestOnTop" : false,
+    		"progressBar" : true,
+    		"positionClass" : "toast-top-center",
+    		"preventDuplicates" : false,
+    		"onclick" : null,
+    		"showDuration" : "300",
+    		"hideDuration" : "1000",
+    		"timeOut" : "0",
+    		"extendedTimeOut" : "0",
+    		"showEasing" : "swing",
+    		"hideEasing" : "linear",
+    		"showMethod" : "fadeIn",
+    		"hideMethod" : "fadeOut"
+    	};
+
+    	toastr['error'](message);
+    }
+    
+    
+    function showLoading() {
+    
+    	var div = $('<div id="loadingDialog" />').css("position", "fixed").css("top", "0").css("left",
+    			"0").css("right", "0").css("bottom", "0").css("background",
+    			"rgba(0, 0, 0, 0.1)").css('z-index', '10000');
+    
+    	var msg = "" + "<div class='c-loading'>"
+    			+ "	<div class='c-loading-container'>"
+    			+ "		<div class='c-loading-icon-container'>"
+    			+ "			<div class='c-loading-icon'>" + "			</div>" + "		</div>"
+    			+ "		<div class='c-loading-text'>" + "			<p>LOADING</p>"
+    			+ "		</div>" + "	</div>" + "</div>";
+    
+    	div.append(msg);
+    
+    	$('body').append(div);
+    }
+
+    function closeLoading() {
+        
+    	$('#loadingDialog').remove();
+
+    }
+
+    
+    
+    
+    function exPostPopup(formidx, displayName, actionPath, openParam) {
+    	postPopup(formidx, displayName, actionPath, openParam);
+    }
+    
+    
+    
+    var popupWinList = new Array();
+    var popupOpening = false;
+    function postPopup(formidx, displayName, actionPath, openParam) {
+    	try {
+    		if (!popupOpening) {
+    			var targetWin = popupWinList[displayName];
+    			if (!targetWin || targetWin.closed) {
+    				popupOpening = true;
+    				targetWin = window.open('common/blank.html', displayName, openParam);
+    				popupWinList[displayName] = targetWin;
+    				popupOpening = false;
+    
+    				document.forms[formidx].target = displayName;
+    				document.forms[formidx].method = 'post';
+    				document.forms[formidx].action = actionPath;
+    				_isBeforeUnload = false;
+    				document.forms[formidx].submit();
+    				_isBeforeUnload = true;
+    			} else {
+    				targetWin.focus();
+    			}
+    		}
+    	} catch (e) {
+    		popupWinList = new Array();
+    		popupOpening = false;
+    	}
+    }
+    
+    function coopePostPopup(formidx, displayName, actionPath, openParam) {
+        try {
+            if (!popupOpening) {
+                var targetWin = popupWinList[displayName];
+                if (!targetWin || targetWin.closed) {
+                    popupOpening = true;
+                    targetWin = window.open('common/blank.html', displayName, openParam);
+                    popupWinList[displayName] = targetWin;
+                    popupOpening = false;
+                    document.forms[formidx].target = displayName;
+                    document.forms[formidx].method = 'post';
+                    document.forms[formidx].action = actionPath;
+                    _isBeforeUnload = false;
+                    document.forms[formidx].submit();
+                    _isBeforeUnload = true;
+                }
+                else {
+                	if ('' == '1') {
+                	    var dialogTitle = "";
+                	    var dialogMessage = "";
+                	    openConfirmDialog(dialogTitle, dialogMessage, function() {
+                            document.forms[formidx].target = displayName;
+                            document.forms[formidx].method = 'post';
+                            document.forms[formidx].action = actionPath;
+                            _isBeforeUnload = false;
+                            document.forms[formidx].submit();
+                            _isBeforeUnload = true;
+                        });
+                	}
+                	else {
+                		document.forms[formidx].target = displayName;
+                        document.forms[formidx].method = 'post';
+                        document.forms[formidx].action = actionPath;
+                        _isBeforeUnload = false;
+                        document.forms[formidx].submit();
+                        _isBeforeUnload = true;
+                	}
+                }
+            }
+        } catch (e) {
+            popupWinList = new Array();
+            popupOpening = false;
+        }
+    }
+    
+    
+    
+    
+    function exPostSubmit(formidx, actionPath) {
+    	return postSubmit(formidx, actionPath);
+    }
+    
+    
+    function setComboBox($select, itemList) {
+    	 $select.children(":gt(0)").remove();
+    	 for(let item of itemList) {
+    		 $select.append($("<option>").val(item.value).text(item.label))
+    	 }
+    }
+    
+    function openWin(url, windowName, preloginPath) {
+
+        if (preloginPath) {
+            jQuery.ajax({
+                type: 'POST',
+                url: preloginPath,
+                data: '',
+                async: false,
+                success: function (nodata) {},
+                dataType: 'text'
+            });
+        }
+
+        coopePostPopup('home_systemCooperationLink',
+                windowName,
+                url,
+                'location=no, directories=no, resizable=yes, status=no, toolbar=no, menubar=no, width=1000, height=650,left=0, top=0, scrollbars=yes');
+    }
+    
+  
+  function saveScrollPosition() {
+      if ('' == '1') {
+          sessionStorage.setItem('' + '_scrollPosition', $(window).scrollTop());
+      }
+  }
+
+  
+  function delScrollPosition() {
+	  var positionlength = sessionStorage.length;
+      var n = 0;
+      var scrollCnt = 0;
+      const regex = RegExp('^(?=.*)(?=.*scrollPosition).*$');
+      while (n < (positionlength - scrollCnt)) {
+    	  var key = sessionStorage.key(n);
+    	  if (regex.test(sessionStorage.key(n))) {
+    		  sessionStorage.removeItem(key);
+    		  scrollCnt++;
+    	  }
+    	  else {
+    		  n++;
+    	  }
+      }
+  }
+  
+  
+  function ClearStorage() {
+	  sessionStorage.clear();
+  }
+
+</script>
+
+<script language="javascript">
+	
+	
+	isSubmit = false;
+	isFileSubmit = false;
+	isCsvSubmit = false;
+	isExcelSubmit = false;
+	isPdfSubmit = false;
+	isChildOpen = false;
+	isCsvSubmitMap = new Array();
+	isExcelSubmitMap = new Array();
+	
+	function dbClick() {
+	    
+	    if (isSubmit) {
+	        return false;
+	    }
+	    isSubmit = true;
+	    return true;
+	}
+	
+	function dbLinkClick(arg) {
+	    if (!isSubmit) {
+	        isSubmit = true;
+	        document.location.href = arg;
+	    }
+	}
+	
+	function dbSubmitClick(arg, form) {
+	  if (!isSubmit) {
+	    isSubmit = true;
+	    form.action = arg;
+	    form.submit();
+	  }
+	}
+	
+	function dbFileClick() {
+	    
+	    if (isFileSubmit) {
+	        
+	        if (confirm('<lc:message key="sc.0000.i2020"/>')) {
+	            return true;
+	        } else {
+	            return false;
+	        }
+	    } else {
+	        isFileSubmit = true;
+	        return true;
+	    }
+	}
+	
+	function dbCsvClick() {
+	    if (arguments.length === 0) {
+	        
+	        if (isCsvSubmit) {
+	            
+	            if (confirm('<lc:message key="sc.0000.i2021"/>')) {
+	                return true;
+	            } else {
+	                return false;
+	            }
+	        } else {
+	            isCsvSubmit = true;
+	            return true;
+	        }
+	    } else {
+	        
+	        var clickKey = arguments[0];
+	        
+	        if (!!isCsvSubmitMap[clickKey]) {
+	            
+	            if (confirm('<lc:message key="sc.0000.i2021"/>')) {
+	                return true;
+	            } else {
+	                return false;
+	            }
+	        } else {
+	            isCsvSubmitMap[clickKey] = true;
+	            return true;
+	        }
+	    }
+	}
+	
+	function dbExcelClick() {
+	    if (arguments.length === 0) {
+	        
+	        if (isExcelSubmit) {
+	            
+	            if (confirm('<lc:message key="sc.0000.i2022"/>')) {
+	                return true;
+	            } else {
+	                return false;
+	            }
+	        } else {
+	            isExcelSubmit = true;
+	            return true;
+	        }
+	    } else {
+	        
+	        var clickKey = arguments[0];
+	        
+	        if (!!isExcelSubmitMap[clickKey]) {
+	            
+	            if (confirm('<lc:message key="sc.0000.i2022"/>')) {
+	                return true;
+	            } else {
+	                return false;
+	            }
+	        } else {
+	            isExcelSubmitMap[clickKey] = true;
+	            return true;
+	        }
+	    }
+	}
+	
+	function dbPrintClick() {
+	    
+	    if (isPdfSubmit) {
+	        alert("現在印刷処理中です。しばらくお待ちください。");
+	        return false;
+	    } else {
+	        isPdfSubmit = true;
+	        return true;
+	    }
+	}
+	
+	function dbChildOpen(url, width, height) {
+	    if (!isChildOpen) {
+	        isChildOpen = true;
+	        childWindow = window.open(url, 'subWindow', 'width=' + width + ',height=' + height + ', scrollbars=yes, resizable=yes, status=yes');
+	        childWindow.focus();
+	    } else {
+	        
+	        if(navigator.userAgent.indexOf('Safari/85') != -1){
+	            
+	            childWindow = window.open(url, 'subWindow', 'width=' + width + ',height=' + height + ', scrollbars=yes, resizable=yes');
+	            childWindow.focus();
+	        
+	        } else {
+	            if (childWindow.closed) {
+	                childWindow = window.open(url, 'subWindow', 'width=' + width + ',height=' + height + ', scrollbars=yes, resizable=yes');
+	                childWindow.focus();
+	            } else {
+	                alert("子ウィンドウが既に開いています。");
+	            }
+	        }
+	    }
+	}
+	
+	function dbDemoChildOpen(url) {
+	    var width = window.innerWidth;
+	    var height = window.innerHeight;
+	    var topLeft = "";
+	
+	    if (typeof width == 'undefined' || typeof height == 'undefined') {
+	        
+	        if (document.getElementById && (document.compatMode=='CSS1Compat')) {
+	            width = document.documentElement.clientWidth;
+	            height = document.documentElement.clientHeight;
+	            var top = document.documentElement.scrollTop;
+	            var left = document.documentElement.scrollLeft;
+	            topLeft = ",top=" + top + ",left=" + left;
+	
+	        
+	        } else if (document.all) {
+	            width = document.body.clientWidth;
+	            height = document.body.clientHeight;
+	            var top = window.screenTop;
+	            var left = window.screenLeft;
+	            topLeft = ",top=" + top + ",left=" + left;
+	        }
+	    }
+	
+	    var option = "width=" + width + ",height=" + height + topLeft
+	        + ",menubar=yes,toolbar=yes,location=yes,status=yes,resizable=yes,scrollbars=yes";
+	
+	    if (!isChildOpen) {
+	        isChildOpen = true;
+	        childWindow = window.open(url, 'subWindow', option);
+	        childWindow.focus();
+	
+	    } else {
+	        
+	        if (navigator.userAgent.indexOf('Safari/85') != -1) {
+	            
+	            childWindow = window.open(url, 'subWindow', option);
+	            childWindow.focus();
+	        
+	        } else {
+	            if (childWindow.closed) {
+	                childWindow = window.open(url, 'subWindow', option);
+	                childWindow.focus();
+	            } else {
+	                alert("子ウィンドウが既に開いています。");
+	            }
+	        }
+	    }
+	}
+
+</script>
+
+
+<body class="is-preload">
+    <div class="container">
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script>
+	$(document).ready(function() {
+		
+		
+		$('#selectLocale').parent().addClass('u-w100per');
+		
+		if ("" !== "true") {
+			$('#account').focus();
+			$('#btnLocale').hide();
+			var $element = $('.input-error').find();
+		}
+		
+		document.querySelector('#password').onkeypress = function(e) {
+			if (e.keyCode == 13) {
+				document.querySelector('#btnWebLogin').click();
+			}
+		}
+		
+		<!-- お知らせ内のファイルの背景色を変更 -->
+		var objlist = $(document).find('.dz-preview');
+	      for(let item of objlist) {
+	    	  item.classList.remove("dz-preview");
+              item.classList.add("dz-preview-login");
+	      }
+	});
+
+	$(function($) {
+	    $('#selectLocale').change(function() {
+	    	$('#btnLocale').trigger('click');
+	    });
+	    
+	    $('#i-eyecon').on("click", function() {
+	    	let eyecss = $('#i-eyecon').attr("class");
+	    	if (eyecss === "eyecon") {
+	    		$('#i-eyecon').attr("src", "./img/ico_eye.png");
+	    		$('#i-eyecon').attr("class", "eyecon on");
+	    		$('#password').attr("type", "text");
+	    	} else {
+	    		$('#i-eyecon').attr("src", "./img/ico_eye-off.png");
+	    		$('#i-eyecon').attr("class", "eyecon");
+	    		$('#password').attr("type", "password");
+	    	}
+	    });
+	});
+
+	function loadCsrf($button, prefix) {
+
+		$.ajax({
+            url: '/lcu-web/csrf',
+            type: 'GET'
+        })
+        .done(function(token) {
+        	$('input[name="_csrf"]').val(token);
+            if (prefix != null) {
+                submitFormButton($button, '/lcu-web/' + prefix + '/webLogin', '', '');
+            } else {
+                submitFormButton($button, '/lcu-web/webLogin', '', '');
+            }
+        });
+
+	}
+</script>
+<style>
+.c-news-body {
+	height: 300px;
+	overflow: auto;
+}
+.c-news-item:nth-child(n+2) {
+	margin-top: 25px;
+}
+
+.c-news-heading {
+	margin-bottom: 10px;
+}
+
+.c-news-heading-title {
+	font-weight: bold;
+}
+
+.c-link-font {
+	font-size:1.7rem;
+}
+.dz-preview-login {
+    margin: 5px 0;
+    padding: 10px;
+    float: left;
+    background-color: #ffffff;
+    border-radius: 5px;
+    clear: both;
+}
+
+</style>
+<!-- SC_01001B00_01 -->
+<div id="functionId" style="display:none;">01001</div>
+<div id="screenId" style="display:none;">SC_01001B00_01</div>
+
+
+
+
+
+
+
+<div class="c-wrapper loginform">
+	<form id="SC_01001B00_01_Login_Form" class="h-adr" action="/lcu-web/" method="post">
+		<span class="p-country-name" style="display: none;">Japan</span>
+		<main class="c-container">
+			<div class="c-contents">
+				<div class="c-expands">
+					
+						<div id="loginLogoPanel" class="c-inner-logo">
+							<img src="./img/common/logo.svg" alt="">
+							<img src="../img/common/logo.svg" alt="">
+						</div>
+						<div id="loginErrorMessagePanel">
+							
+							
+							<div>&nbsp;</div>
+						</div>
+					
+					<div class="c-contents-cols -x3">
+						
+							<div id="loginFormPanel" class="c-contents-col">
+								<div class="c-expands">
+									<div class="c-expand">
+										
+										<div class="c-box-shadow c-sp-toggle-wrap">
+											<div class="c-heading-container -all-over">
+												<div class="c-heading-contents">
+													<h1 class="c-heading-h3">ログイン</h1>
+												</div>
+											</div>
+											<div class="c-contents-body -small">
+												<div class="c-expands">
+													
+													<div class="c-expand -medium">
+														<ul class="c-search-list-table-items">
+															<li class="c-search-list-table-item" style="display:none">
+																<div class="c-search-list-table-item-container">
+																	<div class="c-search-list-table-title-container">
+																		<p class="c-search-list-table-title">アカウント</p>
+																	</div>
+																	<div class="c-search-list-table-body">
+																		<div class="c-form-box">
+																			<input id="account" name="account" class="input-text u-w100per u-w100per-sp" type="text" value="" autocomplete="off"/>
+																		</div>
+																		
+																	</div>
+																</div>
+															</li>
+															<li class="c-search-list-table-item" style="display:none">
+																<div class="c-search-list-table-item-container">
+																	<div class="c-search-list-table-title-container">
+																		<p class="c-search-list-table-title">パスワード</p>
+																	</div>
+																	<div class="c-search-list-table-body">
+																		<div class="c-form-box">
+																			<input id="password" name="password" class="input-text u-w100per u-w100per-sp allow_submit" type="password" value="" autocomplete="off"/>
+																			
+																		</div>
+																		
+																	</div>
+																</div>
+															</li>
+															<li class="c-search-list-table-item">
+																<div class="c-search-list-table-item-container">
+																	<div class="c-search-list-table-title-container">
+																		<p class="c-search-list-table-title">言語選択</p>
+																	</div>
+																	<div class="c-search-list-table-body">
+																		<div class="c-form-box">
+																			<div class="select_wrapper u-w100per-sp"><select id="selectLocale" name="locale" class="select u-w100per u-w100per-sp js-select"><option value="ja" selected="selected">日本語</option><option value="en">English</option></select></div>
+																		</div>
+																	</div>
+																</div>
+															</li>
+														</ul>
+													</div>
+													<div class="c-expand -medium">
+														
+															
+																<div class="c-search-btn">
+																	<button type="button" onclick="submitFormButton($(this), '/lcu-web/shibbolethLogin/sso?lang=ja', '', '');return false;"formId="SC_01001B00_01_Login_Form" id="btnSsoStart" class="c-btn c-btn-search-large" ><span class="c-btn-link"><span class="c-btn-text ">ログイン</span></span></button>
+
+																</div>
+																
+																<button type="button" onclick="submitFormButton($(this), '/lcu-web/changeLocale', '', '');return false;"formId="SC_01001B00_01_Login_Form" id="btnLocale" class="c-btn c-btn-search-large" ><span class="c-btn-link"><span class="c-btn-text ">ログイン</span></span></button>
+
+															
+															
+														
+													</div>
+												</div>
+											</div>
+										</div>
+									</div>
+								</div>
+							</div>
+						
+						
+						
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<style>
+
+ol {
+    list-style-type: decimal;
+    padding-inline-start: 20px;
+
+}
+
+ul {
+padding-inline-start: 20px;
+
+}
+
+.c-news-text-body {
+    margin-bottom: 25px;
+}
+
+</style>
+
+<div class="c-contents-col -x2">
+	<div class="c-expands">
+		<div class="c-expand">
+			<div class="c-box-shadow c-sp-toggle-wrap">
+				<div class="c-heading-container -all-over">
+					<div class="c-heading-contents">
+						<h2 class="c-heading-h3">
+							お知らせ
+						</h2>
+					</div>
+				</div>
+				<div class="c-contents-body -small">
+					<div class="c-news-body">
+						
+							
+								<span class="c-news-item">
+									<p class="c-news-heading">
+										<span class="c-news-heading-title"> 学生教務ポータルについて </span>
+										<span>&emsp;</span> <span class="c-news-heading-date"> 2026/02/05 18:41 </span>
+									</p>
+									<div class="c-news-text-body">
+										<p class="c-news-text-inner"> <html>
+ <head></head>
+ <body>
+  メンテナンス情報・学部からの各種お知らせ・時間割情報等は
+  <span style="color: #236fa1;"><a style="color: #236fa1;" href="https://wwp.shizuoka.ac.jp/acad-affairs-portal/">学生教務ポータル</a></span>でご確認ください。
+  <br>
+  <br>
+  <strong><span style="color: #3598db;"><a style="color: #3598db;" href="https://wwp.shizuoka.ac.jp/acad-affairs-portal/#maintenance">◆学生教務ポータル（メンテナンス情報）</a></span></strong>
+  <br>
+  <strong><span style="color: #3598db;"><a style="color: #3598db;" href="https://wwp.shizuoka.ac.jp/acad-affairs-portal/student_e">◆学生教務ポータル（学生向け共通情報）</a><br></span></strong>
+  <strong><span style="color: #3598db;"><a style="color: #3598db;" href="https://wwp.shizuoka.ac.jp/acad-affairs-portal/#an">◆学生教務ポータル（各学部・研究科からのお知らせ（時間割・試験情報）</a><br></span></strong>
+  <span style="color: #000000;">　　※各部局のアイコンをクリックしてください。</span>
+ </body>
+</html></p>
+										
+										
+										
+										
+										
+                                        
+									</div>
+								</span>
+							
+						
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+					</div>
+				</div>
+			</div>
+		</main>
+	<div>
+<input type="hidden" name="_csrf" value="REDACTED" />
+</div></form>
+</div>
+
+    </div>
+</body>
+</html>

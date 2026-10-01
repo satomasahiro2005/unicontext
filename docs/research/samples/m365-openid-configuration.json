@@ -1,0 +1,12 @@
+{
+  "_fixture": "GET https://login.microsoftonline.com/shizuoka.ac.jp/v2.0/.well-known/openid-configuration (public, 2026-10-01)",
+  "response": {
+    "issuer": "https://login.microsoftonline.com/e0d7dc00-4621-4fe0-90b1-df7b1b40b351/v2.0",
+    "authorization_endpoint": "https://login.microsoftonline.com/e0d7dc00-4621-4fe0-90b1-df7b1b40b351/oauth2/v2.0/authorize",
+    "token_endpoint": "https://login.microsoftonline.com/e0d7dc00-4621-4fe0-90b1-df7b1b40b351/oauth2/v2.0/token",
+    "device_authorization_endpoint": "https://login.microsoftonline.com/e0d7dc00-4621-4fe0-90b1-df7b1b40b351/oauth2/v2.0/devicecode",
+    "tenant_region_scope": "AS",
+    "cloud_instance_name": "microsoftonline.com",
+    "msgraph_host": "graph.microsoft.com"
+  }
+}

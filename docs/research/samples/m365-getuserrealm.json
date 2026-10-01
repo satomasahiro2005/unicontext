@@ -1,0 +1,13 @@
+{
+  "_fixture": "GET https://login.microsoftonline.com/getuserrealm.srf?login=<any>@shizuoka.ac.jp&json=1 (public, unauthenticated, 2026-10-01)",
+  "response": {
+    "State": 4,
+    "UserState": 1,
+    "Login": "student@shizuoka.ac.jp",
+    "NameSpaceType": "Managed",
+    "DomainName": "shizuoka.ac.jp",
+    "FederationBrandName": "Shizuoka University",
+    "CloudInstanceName": "microsoftonline.com",
+    "CloudInstanceIssuerUri": "urn:federation:MicrosoftOnline"
+  }
+}
