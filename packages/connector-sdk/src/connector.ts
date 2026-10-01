@@ -111,3 +111,42 @@ export function instantiateConnector<TConfig>(
     context,
   };
 }
+
+/** What a host passes to a connector factory (config-driven packages such as adapter-mcp). */
+export interface ConnectorFactoryInput {
+  sourceId: string;
+  /** Raw source config (validated later by the returned module's configSchema). */
+  config: unknown;
+  profile?: UniversityProfile | undefined;
+}
+
+/**
+ * Alternative package entry: an async factory that picks/builds the ConnectorModule for one source
+ * (e.g. from its `mapping:` or `module:` config). Packages export either a ConnectorModule or a
+ * ConnectorFactory as `default` and/or named `connector`.
+ */
+export type ConnectorFactory<TConfig = Record<string, unknown>> = (
+  input: ConnectorFactoryInput,
+) => Promise<ConnectorModule<TConfig>>;
+
+export function isConnectorModule(value: unknown): value is ConnectorModule<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as Partial<ConnectorModule>).createAdapter === 'function' &&
+    typeof (value as Partial<ConnectorModule>).createNormalizer === 'function'
+  );
+}
+
+/** Resolve a package entry export (module or factory) to the module for one source. */
+export async function resolveConnectorExport(
+  entry: unknown,
+  input: ConnectorFactoryInput,
+): Promise<ConnectorModule<unknown>> {
+  if (isConnectorModule(entry)) return entry;
+  if (typeof entry === 'function') {
+    const mod: unknown = await (entry as ConnectorFactory<unknown>)(input);
+    if (isConnectorModule(mod)) return mod;
+  }
+  throw new ConfigError(`Source ${input.sourceId}: package export is not a connector module`);
+}

@@ -1,0 +1,72 @@
+{
+  "value": [
+    {
+      "@odata.etag": "W/\"etag-EVT-DB-1005\"",
+      "id": "EVT-DB-1005",
+      "createdDateTime": "2026-09-20T03:00:00.0000000Z",
+      "lastModifiedDateTime": "2026-10-01T05:00:00.0000000Z",
+      "changeKey": "ck-EVT-DB-1005",
+      "categories": [],
+      "originalStartTimeZone": "Tokyo Standard Time",
+      "originalEndTimeZone": "Tokyo Standard Time",
+      "iCalUId": "uid-EVT-DB-1005",
+      "reminderMinutesBeforeStart": 15,
+      "isReminderOn": true,
+      "hasAttachments": false,
+      "subject": "データベースシステム論",
+      "bodyPreview": "教室が変更になりました。",
+      "importance": "normal",
+      "sensitivity": "normal",
+      "isAllDay": false,
+      "isCancelled": false,
+      "isOrganizer": false,
+      "responseRequested": true,
+      "seriesMasterId": null,
+      "showAs": "busy",
+      "type": "singleInstance",
+      "webLink": "https://outlook.office365.com/owa/?itemid=EVT-DB-1005&exvsurl=1&path=/calendar/item",
+      "onlineMeetingUrl": null,
+      "isOnlineMeeting": false,
+      "onlineMeetingProvider": "unknown",
+      "allowNewTimeProposals": true,
+      "recurrence": null,
+      "responseStatus": {
+        "response": "accepted",
+        "time": "2026-09-20T03:00:00Z"
+      },
+      "body": {
+        "contentType": "text",
+        "content": ""
+      },
+      "start": {
+        "dateTime": "2026-10-05T01:20:00.0000000",
+        "timeZone": "UTC"
+      },
+      "end": {
+        "dateTime": "2026-10-05T02:50:00.0000000",
+        "timeZone": "UTC"
+      },
+      "location": {
+        "displayName": "21教室",
+        "locationType": "default",
+        "uniqueIdType": "unknown",
+        "address": {},
+        "coordinates": {}
+      },
+      "locations": [],
+      "attendees": [],
+      "organizer": {
+        "emailAddress": {
+          "name": "講義 太郎",
+          "address": "lecturer.taro@example.ac.jp"
+        }
+      }
+    },
+    {
+      "id": "EVT-HOLIDAY-1012",
+      "@removed": {
+        "reason": "deleted"
+      }
+    }
+  ]
+}

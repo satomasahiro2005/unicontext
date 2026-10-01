@@ -1,10 +1,9 @@
 {
   "name": "@unicontext/livecampusu",
   "version": "1.0.0",
-  "description": "LiveCampusU connector (stub)",
+  "description": "LiveCampusU / LCU-Web connector (unofficial API)",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -20,6 +19,12 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/connector-sdk": "workspace:*"
+    "@unicontext/adapter-browser": "workspace:*",
+    "@unicontext/auth": "workspace:*",
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "cheerio": "^1.2.0",
+    "zod": "^4.6.5"
   }
 }

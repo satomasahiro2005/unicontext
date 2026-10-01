@@ -95,3 +95,54 @@ export interface VersionAwareAdapter extends SourceAdapter {
 export function isVersionAware(adapter: SourceAdapter): adapter is VersionAwareAdapter {
   return typeof (adapter as Partial<VersionAwareAdapter>).detectProductVersion === 'function';
 }
+
+/** Options for an interactive login started by a human (CLI `login <source>`, Web UI). */
+export interface InteractiveLoginOptions {
+  signal?: AbortSignal;
+  /** Account hint (e.g. UPN) passed to the identity provider. */
+  loginHint?: string;
+  /** Override how URLs are opened (default: the system browser). */
+  openBrowser?: (url: string) => Promise<void> | void;
+  /** Max time to wait for the human, in ms. */
+  timeoutMs?: number;
+}
+
+/**
+ * Optional extension: adapters whose authentication needs a human (OAuth consent, SSO + MFA in a
+ * browser). `authenticate()` must stay non-interactive and return `auth_required`; the host calls
+ * `login()` only on an explicit user action.
+ */
+export interface InteractiveAuthAdapter extends SourceAdapter {
+  login(options?: InteractiveLoginOptions): Promise<AuthResult>;
+  /** Forget stored credentials/sessions for this source. */
+  logout?(): Promise<void>;
+}
+
+export function supportsInteractiveLogin(
+  adapter: SourceAdapter,
+): adapter is InteractiveAuthAdapter {
+  return typeof (adapter as Partial<InteractiveAuthAdapter>).login === 'function';
+}
+
+/** Listener for pushed changes (filesystem events, watched import folders). */
+export interface WatchListener {
+  /** Hand the result to SyncEngine.ingest(sourceId, result). */
+  onResult(result: SyncResult): void | Promise<void>;
+  onError?(error: unknown): void;
+}
+
+export interface WatchHandle {
+  close(): Promise<void>;
+}
+
+/**
+ * Optional extension: event-driven sources (§23, §22). The daemon calls `watch()` once and feeds
+ * every result into `SyncEngine.ingest`. Scheduled/explicit `sync()` must still work without it.
+ */
+export interface WatchableAdapter extends SourceAdapter {
+  watch(listener: WatchListener): Promise<WatchHandle>;
+}
+
+export function isWatchable(adapter: SourceAdapter): adapter is WatchableAdapter {
+  return typeof (adapter as Partial<WatchableAdapter>).watch === 'function';
+}

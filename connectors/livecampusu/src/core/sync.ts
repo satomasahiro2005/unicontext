@@ -1,0 +1,785 @@
+import type { RawItem, SyncInput, SyncResult } from '@unicontext/connector-sdk';
+import {
+  AuthRequiredError,
+  type Clock,
+  contentHash,
+  type Logger,
+  OfflineError,
+  PolicyViolationError,
+  RateLimitedError,
+  sha256,
+  zonedParts,
+} from '@unicontext/core';
+import type { ContactKind, LcuDeploymentProfile } from './deployment.js';
+import { parseAssignmentList } from './parsers/assignments.js';
+import { parseCalendarEvents } from './parsers/calendar.js';
+import { type NoticeListRow, parseNoticeDetail, parseNoticeList } from './parsers/notices.js';
+import {
+  type AttendanceRow,
+  type ExamRow,
+  type GradeRow,
+  parseAttendance,
+  parseExamTimetable,
+  parseGrades,
+} from './parsers/records.js';
+import { parseTimetable, type TimetableEntry } from './parsers/timetable.js';
+import {
+  type ClassSubject,
+  type CoursePayload,
+  type ImportantNotice,
+  type NoticeDetailPayload,
+  type NoticePayload,
+  RAW_TYPES,
+} from './schemas.js';
+import { type LcuPage, type LcuSession, SessionRestartedError } from './session.js';
+import { parseSubjectText, splitTitleClass, titleKey } from './text.js';
+import {
+  composeVersion,
+  pluginFingerprint,
+  type ScriptFingerprint,
+  scriptFingerprint,
+  scriptMatches,
+  VERSION_PRODUCT,
+} from './version.js';
+
+export interface LcuSyncOptions {
+  academicYear: number;
+  /** Semester codes to read (timetable, exams, class subject lists). */
+  semesters: string[];
+  grades: boolean;
+  attendance: boolean;
+  noticeDetails: boolean;
+  maxNoticeDetailsPerRun: number;
+}
+
+export interface NoticeCacheEntry {
+  /** Hash of the list row (without row index / read state). */
+  rowHash: string;
+  detail?: NoticeDetailPayload;
+}
+
+export interface VersionState {
+  plugins: string;
+  script?: ScriptFingerprint;
+  version: string;
+}
+
+/** Persisted in SyncCursor.extra. */
+export interface LcuCursorExtra {
+  notices?: Record<string, NoticeCacheEntry>;
+  version?: VersionState;
+}
+
+export interface LcuSyncContext {
+  session: LcuSession;
+  deployment: LcuDeploymentProfile;
+  options: LcuSyncOptions;
+  clock: Clock;
+  timezone: string;
+  logger: Logger;
+  /** Product name reported in SyncResult.productVersion. */
+  product: string;
+  /** Adapter-owned caches (seeded from the cursor). */
+  noticeCache: Map<string, NoticeCacheEntry>;
+  version: VersionState | undefined;
+}
+
+export interface LcuSyncOutcome {
+  result: SyncResult;
+  version: VersionState | undefined;
+  stats: { noticeDetailsFetched: number; steps: Record<string, 'ok' | 'failed' | 'skipped'> };
+}
+
+const MAX_DETAIL_BODY = 20_000;
+
+function shortHash(...parts: string[]): string {
+  return sha256(parts.join('\u0000')).slice(0, 16);
+}
+
+export function noticeKey(contactDateTime: string, typeCode: string, title: string): string {
+  return `n-${shortHash(contactDateTime.replace(/\s+/g, ' ').trim(), typeCode, titleKey(title))}`;
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function isFatal(e: unknown): boolean {
+  return (
+    e instanceof AuthRequiredError ||
+    e instanceof PolicyViolationError ||
+    e instanceof RateLimitedError ||
+    e instanceof OfflineError ||
+    (e instanceof Error && e.name === 'AbortError')
+  );
+}
+
+interface OfferingRec {
+  key: string;
+  year: number;
+  subjectCode: string;
+  classCode: string;
+  title: string;
+  className?: string;
+  semesterCode?: string;
+  subjectList?: ClassSubject;
+  entries: TimetableEntry[];
+}
+
+/** Title → offering resolution inside this source (deterministic, best effort). */
+class OfferingIndex {
+  private readonly byTitle = new Map<string, OfferingRec[]>();
+  constructor(readonly recs: OfferingRec[]) {
+    for (const r of recs) {
+      const k = titleKey(r.title);
+      this.byTitle.set(k, [...(this.byTitle.get(k) ?? []), r]);
+    }
+  }
+
+  resolve(title: string | undefined, className?: string): OfferingRec | undefined {
+    if (!title) return undefined;
+    const list = this.byTitle.get(titleKey(title)) ?? [];
+    if (list.length === 1) return list[0];
+    if (list.length > 1 && className) {
+      const hits = list.filter((r) => r.className && titleKey(r.className) === titleKey(className));
+      if (hits.length === 1) return hits[0];
+    }
+    return undefined;
+  }
+
+  /** Resolve 「科目名(クラス)\n学期/曜日・時限…」. */
+  resolveSubjectText(text: string | undefined): OfferingRec | undefined {
+    const s = text ? parseSubjectText(text) : undefined;
+    return s ? this.resolve(s.title, s.className) : undefined;
+  }
+
+  bySubjectCode(code: string): OfferingRec | undefined {
+    const hits = this.recs.filter((r) => r.subjectCode === code);
+    return hits.length === 1 ? hits[0] : undefined;
+  }
+}
+
+/**
+ * One sync run over LCU-Web: JSON endpoints first, then the HTML screens, all through the single
+ * serial session. Each step restarts once after a mid-step re-authentication; a step that fails
+ * otherwise is reported as a warning and its types are not marked complete (no false deletions).
+ */
+export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise<LcuSyncOutcome> {
+  const { session, deployment: d, options: o } = ctx;
+  const items = new Map<string, RawItem>();
+  const warnings: string[] = [];
+  const steps: Record<string, 'ok' | 'failed' | 'skipped'> = {};
+  const add = (item: RawItem): void => {
+    items.set(`${item.sourceType}\u0000${item.externalId}`, item);
+  };
+
+  const step = async <T>(name: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const v = await fn();
+        steps[name] = 'ok';
+        return v;
+      } catch (e) {
+        if (e instanceof SessionRestartedError && attempt === 0) continue;
+        if (isFatal(e)) throw e;
+        steps[name] = 'failed';
+        warnings.push(`${name}: ${errorMessage(e)}`);
+        ctx.logger.warn('LiveCampusU step failed', { step: name, error: errorMessage(e) });
+        return undefined;
+      }
+    }
+  };
+
+  session.beginRun(input.signal);
+
+  // 0. Landing page: tokens + product version (§72).
+  const landing = await session.bootstrap();
+  const version = await detectVersion(ctx, landing, warnings);
+
+  const now = ctx.clock.now();
+  const zp = zonedParts(now, ctx.timezone);
+
+  // 1. JSON endpoints (research §1.7).
+  const important =
+    (await step('importantNotice', async () => {
+      const v = await session.getJson(d.endpoints.importantNotice);
+      if (!Array.isArray(v)) throw new Error('importantNotice did not return an array');
+      return v as unknown[];
+    })) ?? undefined;
+
+  const submissionInfo = await step('submissionInformation', async () => {
+    const v = await session.getJson(d.endpoints.submissionInformation);
+    if (!Array.isArray(v)) throw new Error('submissionInformation did not return an array');
+    return v as unknown[];
+  });
+  if (submissionInfo) {
+    for (const raw of submissionInfo) {
+      const rec = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const seq = rec.submissionSeq;
+      const title = typeof rec.title === 'string' ? rec.title : undefined;
+      const deadline = [rec.submittalEndDate, rec.deadline, rec.submittalTerm].find(
+        (x): x is string => typeof x === 'string',
+      );
+      const externalId =
+        typeof seq === 'string' || typeof seq === 'number'
+          ? String(seq)
+          : `h-${contentHash(raw).slice(0, 16)}`;
+      add({
+        sourceType: RAW_TYPES.submissionInfo,
+        externalId,
+        payload: {
+          item: raw,
+          extracted: {
+            ...(seq !== undefined ? { submissionSeq: String(seq) } : {}),
+            ...(title ? { title } : {}),
+            ...(deadline ? { deadline } : {}),
+          },
+          source: {
+            screen: d.screens.home,
+            selector: `submissionInformation[submissionSeq=${externalId}]`,
+          },
+        },
+      });
+    }
+  }
+
+  const warningNotices = await step('warningNoticeInformation', async () => {
+    const v = await session.getJson(d.endpoints.warningNotice);
+    if (!Array.isArray(v)) throw new Error('warningNoticeInformation did not return an array');
+    return v as unknown[];
+  });
+  if (warningNotices) {
+    for (const raw of warningNotices) {
+      if (!raw || typeof raw !== 'object') continue;
+      // warningNoticeRequestPath is an opaque, session-bound request path: never stored.
+      const { warningNoticeRequestPath: _drop, ...item } = raw as Record<string, unknown>;
+      const id =
+        typeof item.warningNoticeId === 'string' && item.warningNoticeId
+          ? item.warningNoticeId
+          : `h-${contentHash(item.warningNoticeName ?? item).slice(0, 16)}`;
+      const months = Array.isArray(item.warningNoticeInformationDateList)
+        ? (item.warningNoticeInformationDateList as Record<string, unknown>[])
+            .map((e) => Number(e.warningNoticeContentMonth))
+            .filter((m) => m >= 1 && m <= 12)
+        : [];
+      add({
+        sourceType: RAW_TYPES.warningNotice,
+        externalId: id,
+        payload: {
+          item,
+          year: inferYear(months[0] ?? zp.month, zp.year, zp.month),
+          source: {
+            screen: d.screens.home,
+            selector: `warningNoticeInformation[warningNoticeId=${id}]`,
+          },
+        },
+      });
+    }
+  }
+
+  // 2. スケジュール → 時間割 (both semesters) → 試験時間割.
+  const calendar: Record<string, unknown>[] = [];
+  const timetable = new Map<string, TimetableEntry[]>();
+  const exams = new Map<string, ExamRow[]>();
+  let examsOk = false;
+  await step('timetable', async () => {
+    calendar.length = 0;
+    timetable.clear();
+    exams.clear();
+    examsOk = false;
+    const sched = await session.open(d.screens.scheduler);
+    const cal = parseCalendarEvents(sched.html);
+    if (cal.error) warnings.push(`calendar events: ${cal.error}`);
+    calendar.push(...(cal.events as Record<string, unknown>[]));
+    await session.post(d.actions.schedulerToTimetable);
+    for (const sem of o.semesters) {
+      const page = await session.post(d.actions.timetableChangeSemester, [
+        [d.actions.semesterField, sem],
+      ]);
+      timetable.set(sem, parseTimetable(page.html));
+    }
+    try {
+      await session.post(d.actions.timetableToExams);
+      for (const sem of o.semesters) {
+        const page = await session.post(d.actions.examChangeSemester, [
+          [d.actions.semesterField, sem],
+        ]);
+        exams.set(sem, parseExamTimetable(page.html));
+      }
+      examsOk = true;
+    } catch (e) {
+      if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+      warnings.push(`examTimetable: ${errorMessage(e)}`);
+    }
+  });
+  const timetableOk = steps.timetable === 'ok';
+
+  // 3. 課題・アンケートリスト (full list) + getClassSubjectList (JSON, X-CSRF-TOKEN).
+  let assignmentRows: ReturnType<typeof parseAssignmentList> = [];
+  const subjectLists = new Map<string, ClassSubject[]>();
+  let subjectListsOk = false;
+  await step('assignments', async () => {
+    subjectLists.clear();
+    subjectListsOk = false;
+    const listPage = await session.open(d.screens.assignmentList);
+    const fields = d.forms.assignmentSearch.map(
+      ([k, v]) => [k, v.replaceAll('{year}', String(o.academicYear))] as const,
+    );
+    const page = fields.length ? await session.post(d.actions.assignmentSearch, fields) : listPage;
+    assignmentRows = parseAssignmentList(page.html);
+    const f = d.forms.classSubjectList;
+    for (const sem of o.semesters) {
+      const v = await session.postJson(d.endpoints.classSubjectList, {
+        ...f.extra,
+        [f.yearField]: String(o.academicYear),
+        [f.semesterField]: sem,
+      });
+      if (!Array.isArray(v)) throw new Error('getClassSubjectList did not return an array');
+      subjectLists.set(
+        sem,
+        v.filter(
+          (x): x is ClassSubject =>
+            !!x && typeof x === 'object' && typeof (x as ClassSubject).value === 'string',
+        ),
+      );
+    }
+    subjectListsOk = true;
+  });
+  const assignmentsOk = steps.assignments === 'ok';
+
+  // Courses: union of timetable cells and enrolled class subjects.
+  const offerings = buildOfferings(o, timetable, subjectLists);
+  const index = new OfferingIndex([...offerings.values()]);
+  const semesterName = (code: string | undefined): string | undefined =>
+    d.semesters.find((s) => s.code === code)?.name;
+  for (const rec of offerings.values()) {
+    add({
+      sourceType: RAW_TYPES.course,
+      externalId: rec.key,
+      payload: coursePayload(d, rec, semesterName(rec.semesterCode)),
+    });
+  }
+
+  for (const r of assignmentRows) {
+    const off = index.resolveSubjectText(r.subjectText);
+    add({
+      sourceType: RAW_TYPES.assignment,
+      externalId: r.submissionSeq,
+      payload: {
+        submissionSeq: r.submissionSeq,
+        year: o.academicYear,
+        submissionType: r.submissionType,
+        subjectText: r.subjectText,
+        title: r.title,
+        statusName: r.statusName,
+        statusCode: r.statusCode,
+        submittalTerm: r.submittalTerm,
+        submittalStatus: r.submittalStatus,
+        context: off ? { offeringKey: off.key, offeringTitle: off.title } : {},
+        source: {
+          screen: d.screens.assignmentList,
+          selector: `tr[submissionSeq=${r.submissionSeq}]`,
+        },
+      },
+    });
+  }
+
+  for (const ev of calendar) {
+    const title = String(ev.title);
+    const start = String(ev.start);
+    const listType = typeof ev.listType === 'string' ? ev.listType : undefined;
+    const externalId = `c-${shortHash(listType ?? '', start, title)}`;
+    add({
+      sourceType: RAW_TYPES.calendarEvent,
+      externalId,
+      payload: {
+        title,
+        start,
+        ...(typeof ev.end === 'string' ? { end: ev.end } : {}),
+        ...(typeof ev.allDay === 'boolean' ? { allDay: ev.allDay } : {}),
+        ...(listType ? { listType } : {}),
+        event: ev,
+        source: { screen: d.screens.scheduler, selector: `events[start=${start}]` },
+      },
+    });
+  }
+
+  for (const [sem, rows] of exams) {
+    for (const r of rows) add(examItem(d, o.academicYear, sem, r, index));
+  }
+
+  // 4. 出欠 (counts per course).
+  let attendanceOk = false;
+  if (o.attendance) {
+    const rows = await step('attendance', async () => {
+      const page = await session.open(d.screens.attendance);
+      return parseAttendance(page.html);
+    });
+    if (rows) {
+      attendanceOk = true;
+      for (const r of rows) add(attendanceItem(d, r, index));
+    }
+  } else steps.attendance = 'skipped';
+
+  // 5. 連絡: importantNotice JSON + 連絡一覧 HTML, details only for READ rows that changed.
+  const noticeOutcome = await syncNotices(
+    ctx,
+    important as ImportantNotice[] | undefined,
+    index,
+    step,
+    warnings,
+  );
+  for (const it of noticeOutcome.items) add(it);
+
+  // 6. 成績 (opt-in).
+  let gradesOk = false;
+  if (o.grades) {
+    const rows = await step('grades', async () => {
+      await session.open(d.screens.gradeDashboard);
+      const page = await session.post(d.actions.gradesFromDashboard);
+      return parseGrades(page.html);
+    });
+    if (rows) {
+      gradesOk = true;
+      for (const r of rows) add(gradeItem(d, r, index));
+    }
+  } else steps.grades = 'skipped';
+
+  try {
+    await session.persistCookies();
+  } catch (e) {
+    warnings.push(`could not persist rotated session cookies: ${errorMessage(e)}`);
+  }
+
+  const complete: string[] = [];
+  if (timetableOk && assignmentsOk && subjectListsOk) complete.push(RAW_TYPES.course);
+  if (assignmentsOk) complete.push(RAW_TYPES.assignment);
+  if (timetableOk && examsOk) complete.push(RAW_TYPES.exam);
+  if (submissionInfo) complete.push(RAW_TYPES.submissionInfo);
+  if (warningNotices) complete.push(RAW_TYPES.warningNotice);
+  if (noticeOutcome.listOk) complete.push(RAW_TYPES.notice);
+  // Disabled opt-in types are complete with zero items: previously synced rows are removed.
+  if (attendanceOk || !o.attendance) complete.push(RAW_TYPES.attendance);
+  if (gradesOk || !o.grades) complete.push(RAW_TYPES.grade);
+
+  const notices: Record<string, NoticeCacheEntry> = {};
+  for (const [k, v] of ctx.noticeCache) notices[k] = v;
+  const extra: LcuCursorExtra = { notices, ...(version ? { version } : {}) };
+
+  return {
+    result: {
+      items: [...items.values()],
+      cursor: { lastModified: now.toISOString(), extra: extra as Record<string, unknown> },
+      hasMore: false,
+      ...(complete.length ? { complete: { sourceTypes: complete } } : {}),
+      ...(version ? { productVersion: { product: ctx.product, version: version.version } } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    },
+    version,
+    stats: { noticeDetailsFetched: noticeOutcome.detailsFetched, steps },
+  };
+}
+
+/** Year for a month/day without a year: the one closest to now. */
+export function inferYear(month: number, nowYear: number, nowMonth: number): number {
+  if (month - nowMonth > 6) return nowYear - 1;
+  if (nowMonth - month > 6) return nowYear + 1;
+  return nowYear;
+}
+
+async function detectVersion(
+  ctx: LcuSyncContext,
+  landing: LcuPage,
+  warnings: string[],
+): Promise<VersionState | undefined> {
+  const plugins = pluginFingerprint(landing.html);
+  if (!plugins) return ctx.version;
+  const prev = ctx.version;
+  if (prev && prev.plugins === plugins && prev.script) return prev;
+  // Fingerprint missing or changed: check the static script once (an extra GET).
+  const path = ctx.deployment.endpoints.commonScript;
+  const known = ctx.deployment.version.scripts.find((s) => s.path === path);
+  let script: ScriptFingerprint | undefined;
+  try {
+    script = scriptFingerprint(path, await ctx.session.getBytes(path));
+  } catch (e) {
+    // A static file; a failure (or a session restart) only skips the extra check.
+    if (isFatal(e)) throw e;
+    warnings.push(`version check (${path}): ${errorMessage(e)}`);
+  }
+  const state: VersionState = {
+    plugins,
+    ...(script ? { script } : {}),
+    version: composeVersion(plugins, script, script ? scriptMatches(script, known) : true),
+  };
+  return state;
+}
+
+function buildOfferings(
+  o: LcuSyncOptions,
+  timetable: Map<string, TimetableEntry[]>,
+  subjectLists: Map<string, ClassSubject[]>,
+): Map<string, OfferingRec> {
+  const out = new Map<string, OfferingRec>();
+  const get = (year: number, code: string, cls: string, title: string): OfferingRec => {
+    const key = `${year}-${code}-${cls}`;
+    let rec = out.get(key);
+    if (!rec) {
+      rec = { key, year, subjectCode: code, classCode: cls, title, entries: [] };
+      out.set(key, rec);
+    }
+    return rec;
+  };
+  for (const [sem, entries] of timetable) {
+    for (const e of entries) {
+      const rec = get(e.year ?? o.academicYear, e.subjectCode, e.classCode, e.title);
+      rec.semesterCode ??= sem;
+      if (!rec.entries.some((x) => x.week === e.week && x.period === e.period)) rec.entries.push(e);
+    }
+  }
+  for (const [sem, list] of subjectLists) {
+    for (const s of list) {
+      const [code, cls] = s.value.split('_');
+      if (!code || !/^\w+$/.test(code)) continue;
+      const tc = splitTitleClass(s.label);
+      const rec = get(o.academicYear, code, cls ?? '', tc.title);
+      rec.subjectList = s;
+      rec.semesterCode ??= sem;
+      if (tc.className) rec.className = tc.className;
+    }
+  }
+  for (const rec of out.values())
+    rec.entries.sort((a, b) => a.week - b.week || a.period - b.period);
+  return out;
+}
+
+function coursePayload(
+  d: LcuDeploymentProfile,
+  rec: OfferingRec,
+  termName: string | undefined,
+): CoursePayload {
+  const first = rec.entries[0];
+  const rooms = [...new Set(rec.entries.map((e) => e.room).filter((r): r is string => !!r))];
+  return {
+    key: rec.key,
+    year: rec.year,
+    ...(rec.semesterCode ? { semesterCode: rec.semesterCode } : {}),
+    ...(termName ? { termName } : {}),
+    subjectCode: rec.subjectCode,
+    classCode: rec.classCode,
+    title: rec.title,
+    ...(rec.className ? { className: rec.className } : {}),
+    ...(rec.subjectList ? { subjectList: rec.subjectList } : {}),
+    ...(first
+      ? {
+          timetable: {
+            ...(first.teacher ? { teacher: first.teacher } : {}),
+            ...(first.credits !== undefined ? { credits: first.credits } : {}),
+            ...(first.numbering ? { numbering: first.numbering } : {}),
+            ...(first.campus ? { campus: first.campus } : {}),
+            ...(rooms.length === 1 && rooms[0] ? { room: rooms[0] } : {}),
+            flags: first.flags,
+            slots: rec.entries.map((e) => ({
+              week: e.week,
+              period: e.period,
+              ...(e.room ? { room: e.room } : {}),
+              ...(e.campus ? { campus: e.campus } : {}),
+              selector: e.selector,
+            })),
+          },
+        }
+      : {}),
+    source: first
+      ? { screen: d.screens.timetable, selector: first.selector }
+      : {
+          screen: d.screens.assignmentList,
+          selector: `getClassSubjectList[value=${rec.subjectCode}_${rec.classCode}]`,
+        },
+  };
+}
+
+function examItem(
+  d: LcuDeploymentProfile,
+  year: number,
+  sem: string,
+  r: ExamRow,
+  index: OfferingIndex,
+): RawItem {
+  const tc = splitTitleClass(r.subject);
+  const off = index.resolve(tc.title, tc.className);
+  return {
+    sourceType: RAW_TYPES.exam,
+    externalId: `x-${shortHash(sem, r.subject, r.date ?? '', r.period ?? '', r.time ?? '')}`,
+    payload: {
+      year,
+      semesterCode: sem,
+      subject: r.subject,
+      ...(r.date ? { date: r.date } : {}),
+      ...(r.period ? { period: r.period } : {}),
+      ...(r.time ? { time: r.time } : {}),
+      ...(r.room ? { room: r.room } : {}),
+      ...(r.teacher ? { teacher: r.teacher } : {}),
+      cells: r.cells,
+      context: off ? { offeringKey: off.key, offeringTitle: off.title } : {},
+      source: { screen: d.screens.examTimetable, selector: `tr[subject="${r.subject}"]` },
+    },
+  };
+}
+
+function attendanceItem(d: LcuDeploymentProfile, r: AttendanceRow, index: OfferingIndex): RawItem {
+  const tc = splitTitleClass(r.subject);
+  const off = index.resolve(tc.title, tc.className);
+  return {
+    sourceType: RAW_TYPES.attendance,
+    externalId: `a-${shortHash(r.subject, r.schedule)}`,
+    payload: {
+      subject: r.subject,
+      schedule: r.schedule,
+      ...(r.published ? { published: r.published } : {}),
+      counts: r.counts,
+      context: off ? { offeringKey: off.key, offeringTitle: off.title } : {},
+      source: { screen: d.screens.attendance, selector: `tr[講義名="${r.subject}"]` },
+    },
+  };
+}
+
+function gradeItem(d: LcuDeploymentProfile, r: GradeRow, index: OfferingIndex): RawItem {
+  const off = index.bySubjectCode(r.subjectCode);
+  return {
+    sourceType: RAW_TYPES.grade,
+    externalId: `g-${shortHash(r.subjectCode, r.reportTerm ?? '', r.examType ?? '')}`,
+    payload: {
+      ...r,
+      context: off ? { offeringKey: off.key, offeringTitle: off.title } : {},
+      source: { screen: d.screens.grades, selector: `tr[subjectCode=${r.subjectCode}]` },
+    },
+  };
+}
+
+function rowHash(row: NoticeListRow): string {
+  const { rowIndex: _i, unread: _u, ...rest } = row;
+  return contentHash(rest);
+}
+
+async function syncNotices(
+  ctx: LcuSyncContext,
+  important: ImportantNotice[] | undefined,
+  index: OfferingIndex,
+  step: <T>(name: string, fn: () => Promise<T>) => Promise<T | undefined>,
+  warnings: string[],
+): Promise<{ items: RawItem[]; listOk: boolean; detailsFetched: number }> {
+  const { session, deployment: d, options: o } = ctx;
+  let detailsFetched = 0;
+  const rows = await step('noticeList', async () => {
+    let list = await session.open(d.screens.noticeList);
+    const parsed = parseNoticeList(list.html);
+    if (!o.noticeDetails || o.maxNoticeDetailsPerRun <= 0) return parsed;
+    // Details only for rows that are READ (opening an unread notice marks it read) and whose
+    // row content changed since the detail was last fetched (incremental).
+    const wanted = parsed
+      .filter((r) => !r.unread)
+      .map((r) => ({
+        r,
+        key: noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title),
+        hash: rowHash(r),
+      }))
+      .filter(({ key, hash }) => {
+        const c = ctx.noticeCache.get(key);
+        return !c?.detail || c.rowHash !== hash;
+      })
+      .sort((a, b) => (b.r.contactDateTime ?? '').localeCompare(a.r.contactDateTime ?? ''))
+      .slice(0, o.maxNoticeDetailsPerRun);
+    for (const { key, hash } of wanted) {
+      // Row indexes belong to the list page we are on; find the row again on the current list.
+      const current = parseNoticeList(list.html).find(
+        (r) => noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title) === key,
+      );
+      if (!current || current.unread || list.noticeListVersion === undefined) continue;
+      try {
+        const detailPage = await session.openNoticeDetail({
+          rowIndex: current.rowIndex,
+          unread: current.unread,
+          listVersion: list.noticeListVersion,
+        });
+        const detail = parseNoticeDetail(detailPage.html);
+        if (detail) {
+          ctx.noticeCache.set(key, {
+            rowHash: hash,
+            detail: { ...detail, body: detail.body.slice(0, MAX_DETAIL_BODY) },
+          });
+          detailsFetched++;
+        }
+      } catch (e) {
+        if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+        warnings.push(`notice detail: ${errorMessage(e)}`);
+      }
+      list = await session.post(d.actions.noticeDetailBack);
+      if (list.screenId !== d.screens.noticeList) list = await session.open(d.screens.noticeList);
+    }
+    return parsed;
+  });
+
+  const byKey = new Map<string, { important?: ImportantNotice; row?: NoticeListRow }>();
+  for (const n of important ?? []) {
+    if (!n || typeof n !== 'object' || typeof n.title !== 'string') continue;
+    const key = noticeKey(
+      `${n.contactDate ?? ''} ${n.contactTime ?? ''}`,
+      n.contactTypeCode ?? '',
+      n.title,
+    );
+    byKey.set(key, { ...byKey.get(key), important: n });
+  }
+  for (const r of rows ?? []) {
+    const key = noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title);
+    byKey.set(key, { ...byKey.get(key), row: r });
+  }
+
+  const items: RawItem[] = [];
+  for (const [key, { important: imp, row }] of byKey) {
+    const typeCode = imp?.contactTypeCode || row?.typeCode || '';
+    const type = d.contactTypes[typeCode];
+    const kind: ContactKind = type?.kind ?? 'notice';
+    let offeringKey: string | undefined;
+    let offeringTitle: string | undefined;
+    if (row?.subjectKey) {
+      offeringKey = `${row.subjectKey.year}-${row.subjectKey.subjectCode}-${row.subjectKey.classCode}`;
+      offeringTitle = parseSubjectText(row.subjectText)?.title;
+    } else {
+      const off = index.resolveSubjectText(imp?.subjectClassSemesterWeekHour || row?.subjectText);
+      offeringKey = off?.key;
+      offeringTitle = off?.title;
+    }
+    const cached = ctx.noticeCache.get(key);
+    if (row && cached && cached.rowHash !== rowHash(row) && !cached.detail)
+      ctx.noticeCache.delete(key);
+    const { rowIndex: _ri, ...listRow } = row ?? ({} as NoticeListRow);
+    const dt = row?.contactDateTime ?? `${imp?.contactDate ?? ''} ${imp?.contactTime ?? ''}`.trim();
+    const payload: NoticePayload = {
+      key,
+      kind,
+      ...(type?.title ? { typeTitle: type.title } : {}),
+      ...(imp ? { important: imp } : {}),
+      ...(row ? { listRow } : {}),
+      ...(cached?.detail ? { detail: cached.detail } : {}),
+      context: {
+        ...(offeringKey ? { offeringKey } : {}),
+        ...(offeringTitle ? { offeringTitle } : {}),
+      },
+      source: row
+        ? { screen: d.screens.noticeList, selector: `tr[contactDateTime="${dt}"]` }
+        : {
+            screen: d.screens.landing,
+            selector: `importantNotice[contactSeq=${imp?.contactSeq ?? ''}]`,
+          },
+    };
+    items.push({ sourceType: RAW_TYPES.notice, externalId: key, payload });
+  }
+
+  // Prune cache entries of notices that disappeared from a complete listing.
+  if (rows)
+    for (const k of [...ctx.noticeCache.keys()]) if (!byKey.has(k)) ctx.noticeCache.delete(k);
+
+  return { items, listOk: rows !== undefined, detailsFetched };
+}
+
+export { VERSION_PRODUCT };

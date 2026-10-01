@@ -1,0 +1,43 @@
+{
+  "value": [
+    {
+      "id": "MSG-0001",
+      "@removed": {
+        "reason": "deleted"
+      }
+    },
+    {
+      "@odata.etag": "W/\"mail-etag-MSG-0004\"",
+      "id": "MSG-0004",
+      "subject": "休講のお知らせ",
+      "from": {
+        "emailAddress": {
+          "name": "教務係",
+          "address": "kyomu@example.ac.jp"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "試験 花子",
+            "address": "test.hanako@example.ac.jp"
+          }
+        }
+      ],
+      "receivedDateTime": "2026-10-01T01:00:00Z",
+      "sentDateTime": "2026-10-01T01:00:00Z",
+      "lastModifiedDateTime": "2026-10-01T01:00:00Z",
+      "bodyPreview": "10月12日は創立記念日のため休講です。",
+      "body": {
+        "contentType": "text",
+        "content": "10月12日は創立記念日のため休講です。"
+      },
+      "conversationId": "CONV-HOLIDAY",
+      "webLink": "https://outlook.office365.com/owa/?ItemID=MSG-0004&exvsurl=1&viewmodel=ReadMessageItem",
+      "isRead": false,
+      "isDraft": false,
+      "importance": "normal",
+      "hasAttachments": false
+    }
+  ]
+}

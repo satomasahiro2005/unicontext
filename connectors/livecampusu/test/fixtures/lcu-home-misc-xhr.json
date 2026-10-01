@@ -1,0 +1,58 @@
+{
+  "_fixture": "Other home-screen XHRs (logged in, 2026-10-01). All GET, application/json.",
+  "GET /lcu-web/SC_01002B00_01/submissionInformation": {
+    "_note": "未提出課題 widget. Was empty at capture time; item shape not observed.",
+    "response": []
+  },
+  "GET /lcu-web/SC_01002B00_00/userInformation": {
+    "_note": "Shape only; values replaced. bookmarkImage is a large base64 string.",
+    "response": {
+      "bookmarkImage": "<base64 image removed>",
+      "bookmarkImageExtension": "png",
+      "bookmarkImageKey": null,
+      "lastUpdateTime": "2026/10/01 11:00",
+      "userName": "学生 太郎"
+    }
+  },
+  "GET /lcu-web/SC_01002B00_01/warningNoticeInformation": {
+    "_note": "Deadline badges on home. warningNoticeRequestPath was base64-like and is removed.",
+    "response": [
+      {
+        "chartShortenedDisplayCount": null,
+        "studyResultShortenedDisplayCount": null,
+        "warningDisplayExamType": null,
+        "warningNoticeContent": "1",
+        "warningNoticeContentCount": "",
+        "warningNoticeContentCountText": "",
+        "warningNoticeContentDay": "7",
+        "warningNoticeContentDayText": "",
+        "warningNoticeContentHalfSizeSlash": null,
+        "warningNoticeContentHalfSizeSlashText": null,
+        "warningNoticeContentMonth": "10",
+        "warningNoticeContentMonthText": "",
+        "warningNoticeCountExistence": "0",
+        "warningNoticeDateExistence": "1",
+        "warningNoticeId": "2",
+        "warningNoticeInformationDateList": [
+          {
+            "warningNoticeContentDateTitle": "一般",
+            "warningNoticeContentDay": "7",
+            "warningNoticeContentDayText": "日",
+            "warningNoticeContentHalfSizeSlash": null,
+            "warningNoticeContentHalfSizeSlashText": "/",
+            "warningNoticeContentMonth": "10",
+            "warningNoticeContentMonthText": "月",
+            "warningNoticeStatusId": "0",
+            "warningNoticeStatusName": "未"
+          }
+        ],
+        "warningNoticeName": "履修登録期限",
+        "warningNoticeRequestPath": "<removed>",
+        "warningNoticeSize": "L",
+        "warningNoticeStatusExistence": "1",
+        "warningNoticeStatusId": "0",
+        "warningNoticeStatusName": ""
+      }
+    ]
+  }
+}

@@ -1,0 +1,168 @@
+# EdStem (Ed Discussion) through a command line tool that prints JSON (UniContext adapter-cli,
+# spec §29). There is no official EdStem CLI; this mapping describes the output shape of a thin
+# wrapper around the Ed API (for example a script you keep next to your config).
+#
+# ASSUMPTIONS ABOUT THE TOOL (adapt `call.args` / `select` to what yours prints):
+#   edstem courses --json                 -> JSON array: [{id, code, name, year, session}]
+#   edstem threads <course_id> --json     -> JSON array of threads: {id, course_id, title, document,
+#                                            content, type ("post" | "question" | "announcement"),
+#                                            category, pinned, created_at, updated_at, comment_count,
+#                                            answer_count, user: {name, role}}
+#   edstem thread <thread_id> --json      -> one JSON object: the thread with `answers` and
+#                                            `comments` arrays (each with id, document/content,
+#                                            created_at, user: {name, role})
+# Use `format: jsonl` in a call when the tool prints one JSON value per line. The tool must exit
+# with code 0 on success; credentials are given through `envSecrets` in the source config, never
+# on the command line.
+#
+# Example source config:
+#   sources:
+#     edstem:
+#       adapter: cli
+#       command: edstem
+#       envSecrets: [{ name: ED_API_TOKEN, secret: edstem-token }]
+#       healthArgs: [--version]
+#       mapping: edstem-cli
+#
+# Authorities: discussion posts are `discussion`; announcement posts and everything written by
+# course staff/admins are instructor statements and use `instructor-announcement` (§12).
+id: edstem
+product: edstem
+sourceLabel: Ed Discussion
+description: EdStem discussion boards via a JSON-printing CLI (courses, threads, answers, comments)
+defaultAuthority: discussion
+capabilities: [courses, announcements, messages]
+
+resources:
+  - name: courses
+    call: { args: [courses, --json], format: json }
+    select: '$'
+    sourceType: edstem.course
+    externalId: '$string(id)'
+    complete: true
+    capability: courses
+
+  - name: threads
+    forEach: { resource: courses, as: course }
+    call: { args: [threads, '{{course.id}}', --json, --limit, '100'], format: json }
+    select: '$'
+    sourceType: edstem.thread
+    externalId: '$string(id)'
+    updatedAt: 'updated_at ? updated_at : created_at'
+    attach: { courseId: 'course.id' }
+    capability: messages
+
+  # Answers and comments need one extra invocation per thread that has replies.
+  - name: thread_details
+    forEach:
+      resource: threads
+      as: thread
+      where: 'comment_count > 0 or answer_count > 0'
+    call: { args: [thread, '{{thread.id}}', --json], format: json }
+    select: '$'
+    sourceType: edstem.thread_detail
+    externalId: '$string(id)'
+    updatedAt: 'updated_at ? updated_at : created_at'
+    optional: true
+    capability: messages
+
+entities:
+  edstem.course:
+    - kind: courseOffering
+      key: '$string(id)'
+      fields:
+        title: name
+        courseCode: code
+        academicYear: 'year ? $number(year)'
+        term: session
+        url: '"https://edstem.org/us/courses/" & id'
+      ref: { url: '"https://edstem.org/us/courses/" & id' }
+
+  edstem.thread:
+    # Announcements category -> announcement entities, authored by staff.
+    - kind: announcement
+      when: 'type = "announcement"'
+      key: '$string(id)'
+      fields:
+        title: title
+        body: 'document ? document : $replace(content, /<[^>]+>/, " ")'
+        publishedAt: created_at
+        authorName: user.name
+        category: category
+        importance: 'pinned = true ? "high" : "normal"'
+        scope: { const: course }
+        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
+        courseOfferingId: { ref: courseOffering, key: '$string(course_id)' }
+      ref:
+        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
+        authority: instructor-announcement
+        location: { messageId: '$string(id)' }
+    # Everything else -> a thread plus its opening post as a message.
+    - kind: thread
+      when: '$not(type = "announcement")'
+      key: '$string(id)'
+      fields:
+        title: title
+        platform: { const: edstem }
+        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
+        courseOfferingId: { ref: courseOffering, key: '$string(course_id)' }
+      ref:
+        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
+    - kind: message
+      when: '$not(type = "announcement")'
+      key: '"t" & $string(id)'
+      fields:
+        body: 'document ? document : $replace(content, /<[^>]+>/, " ")'
+        authorName: user.name
+        authorRole: 'user.role = "admin" ? "instructor" : user.role in ["staff", "tutor"] ? "ta" : "student"'
+        sentAt: created_at
+        isQuestion: 'type = "question"'
+        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
+        threadId: { ref: thread, key: '$string(id)' }
+        courseOfferingId: { ref: courseOffering, key: '$string(course_id)' }
+      ref:
+        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
+        authority:
+          { expr: 'user.role in ["admin", "staff"] ? "instructor-announcement" : "discussion"' }
+        location: { messageId: '$string(id)' }
+
+  edstem.thread_detail:
+    # Staff answers: the most reliable statements on a board (authority instructor-announcement).
+    - kind: message
+      forEach: answers
+      key: '"c" & $string(id)'
+      fields:
+        body: 'document ? document : $replace(content, /<[^>]+>/, " ")'
+        authorName: user.name
+        authorRole: 'user.role = "admin" ? "instructor" : user.role in ["staff", "tutor"] ? "ta" : "student"'
+        sentAt: created_at
+        isQuestion: { const: false }
+        threadId: { ref: thread, key: '$string($root.id)' }
+        courseOfferingId: { ref: courseOffering, key: '$string($root.course_id)' }
+        url: '"https://edstem.org/us/courses/" & $root.course_id & "/discussion/" & $root.id'
+      ref:
+        authority:
+          { expr: 'user.role in ["admin", "staff"] ? "instructor-announcement" : "discussion"' }
+        location: { messageId: '$string(id)' }
+    - kind: message
+      forEach: comments
+      key: '"c" & $string(id)'
+      fields:
+        body: 'document ? document : $replace(content, /<[^>]+>/, " ")'
+        authorName: user.name
+        authorRole: 'user.role = "admin" ? "instructor" : user.role in ["staff", "tutor"] ? "ta" : "student"'
+        sentAt: created_at
+        isQuestion: { const: false }
+        threadId: { ref: thread, key: '$string($root.id)' }
+        courseOfferingId: { ref: courseOffering, key: '$string($root.course_id)' }
+        url: '"https://edstem.org/us/courses/" & $root.course_id & "/discussion/" & $root.id'
+      ref:
+        authority:
+          { expr: 'user.role in ["admin", "staff"] ? "instructor-announcement" : "discussion"' }
+        location: { messageId: '$string(id)' }
+
+drift:
+  edstem.course: { id: number, name: string, 'code?': 'string|null' }
+  edstem.thread:
+    { id: number, course_id: number, title: string, 'type?': string, 'created_at?': 'string|null' }
+  edstem.thread_detail: { id: number, course_id: number }

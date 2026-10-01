@@ -1,0 +1,135 @@
+{
+  "value": [
+    {
+      "id": "FOLDER-ROOT",
+      "name": "root",
+      "root": {},
+      "folder": {
+        "childCount": 2
+      },
+      "parentReference": {
+        "driveId": "b!drive0001",
+        "driveType": "business"
+      },
+      "webUrl": "https://example-my.sharepoint.com/personal/test/Documents",
+      "size": 0
+    },
+    {
+      "@odata.etag": "\"{ITEM-FOLDER-DB},1\"",
+      "@microsoft.graph.downloadUrl": "https://example-my.sharepoint.com/personal/test/_layouts/15/download.aspx?UniqueId=ITEM-FOLDER-DB&tempauth=SECRET-TEMP-AUTH",
+      "id": "ITEM-FOLDER-DB",
+      "name": "データベース",
+      "size": 0,
+      "webUrl": "https://example-my.sharepoint.com/personal/test/Documents/データベース",
+      "createdDateTime": "2026-09-01T00:00:00Z",
+      "lastModifiedDateTime": "2026-09-30T00:00:00Z",
+      "eTag": "\"{ITEM-FOLDER-DB},1\"",
+      "cTag": "\"c:{ITEM-FOLDER-DB},1\"",
+      "parentReference": {
+        "driveId": "b!drive0001",
+        "driveType": "business",
+        "id": "PARENT-1",
+        "name": "授業",
+        "path": "/drive/root:/授業",
+        "siteId": "site-0001"
+      },
+      "fileSystemInfo": {
+        "createdDateTime": "2026-09-01T00:00:00Z",
+        "lastModifiedDateTime": "2026-09-30T00:00:00Z"
+      },
+      "folder": {
+        "childCount": 2
+      }
+    },
+    {
+      "@odata.etag": "\"{ITEM-PPTX},1\"",
+      "@microsoft.graph.downloadUrl": "https://example-my.sharepoint.com/personal/test/_layouts/15/download.aspx?UniqueId=ITEM-PPTX&tempauth=SECRET-TEMP-AUTH",
+      "id": "ITEM-PPTX",
+      "name": "第1回_ガイダンス.pptx",
+      "size": 123456,
+      "webUrl": "https://example-my.sharepoint.com/personal/test/Documents/第1回_ガイダンス.pptx",
+      "createdDateTime": "2026-09-01T00:00:00Z",
+      "lastModifiedDateTime": "2026-09-30T00:00:00Z",
+      "eTag": "\"{ITEM-PPTX},1\"",
+      "cTag": "\"c:{ITEM-PPTX},1\"",
+      "parentReference": {
+        "driveId": "b!drive0001",
+        "driveType": "business",
+        "id": "PARENT-1",
+        "name": "データベース",
+        "path": "/drive/root:/授業/データベース",
+        "siteId": "site-0001"
+      },
+      "fileSystemInfo": {
+        "createdDateTime": "2026-09-01T00:00:00Z",
+        "lastModifiedDateTime": "2026-09-30T00:00:00Z"
+      },
+      "file": {
+        "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "hashes": {
+          "quickXorHash": "QXH-PPTX"
+        }
+      }
+    },
+    {
+      "@odata.etag": "\"{ITEM-PDF},1\"",
+      "@microsoft.graph.downloadUrl": "https://example-my.sharepoint.com/personal/test/_layouts/15/download.aspx?UniqueId=ITEM-PDF&tempauth=SECRET-TEMP-AUTH",
+      "id": "ITEM-PDF",
+      "name": "配布資料.pdf",
+      "size": 2048,
+      "webUrl": "https://example-my.sharepoint.com/personal/test/Documents/配布資料.pdf",
+      "createdDateTime": "2026-09-01T00:00:00Z",
+      "lastModifiedDateTime": "2026-09-30T00:00:00Z",
+      "eTag": "\"{ITEM-PDF},1\"",
+      "cTag": "\"c:{ITEM-PDF},1\"",
+      "parentReference": {
+        "driveId": "b!drive0001",
+        "driveType": "business",
+        "id": "PARENT-1",
+        "name": "データベース",
+        "path": "/drive/root:/授業/データベース",
+        "siteId": "site-0001"
+      },
+      "fileSystemInfo": {
+        "createdDateTime": "2026-09-01T00:00:00Z",
+        "lastModifiedDateTime": "2026-09-30T00:00:00Z"
+      },
+      "file": {
+        "mimeType": "application/pdf",
+        "hashes": {
+          "quickXorHash": "QXH-PDF"
+        }
+      }
+    },
+    {
+      "@odata.etag": "\"{ITEM-DOCX},1\"",
+      "@microsoft.graph.downloadUrl": "https://example-my.sharepoint.com/personal/test/_layouts/15/download.aspx?UniqueId=ITEM-DOCX&tempauth=SECRET-TEMP-AUTH",
+      "id": "ITEM-DOCX",
+      "name": "メモ.docx",
+      "size": 123456,
+      "webUrl": "https://example-my.sharepoint.com/personal/test/Documents/メモ.docx",
+      "createdDateTime": "2026-09-01T00:00:00Z",
+      "lastModifiedDateTime": "2026-09-30T00:00:00Z",
+      "eTag": "\"{ITEM-DOCX},1\"",
+      "cTag": "\"c:{ITEM-DOCX},1\"",
+      "parentReference": {
+        "driveId": "b!drive0001",
+        "driveType": "business",
+        "id": "PARENT-1",
+        "name": "root",
+        "path": "/drive/root:",
+        "siteId": "site-0001"
+      },
+      "fileSystemInfo": {
+        "createdDateTime": "2026-09-01T00:00:00Z",
+        "lastModifiedDateTime": "2026-09-30T00:00:00Z"
+      },
+      "file": {
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "hashes": {
+          "quickXorHash": "QXH-DOCX"
+        }
+      }
+    }
+  ]
+}

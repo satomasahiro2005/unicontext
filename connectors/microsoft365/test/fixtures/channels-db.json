@@ -1,0 +1,28 @@
+{
+  "value": [
+    {
+      "id": "19:db0001generalabcdef@thread.tacv2",
+      "createdDateTime": "2026-03-20T00:00:00Z",
+      "displayName": "General",
+      "description": null,
+      "isFavoriteByDefault": null,
+      "email": "",
+      "tenantId": "e0d7dc00-4621-4fe0-90b1-df7b1b40b351",
+      "webUrl": "https://teams.microsoft.com/l/channel/19%3adb0001generalabcdef@thread.tacv2/General?groupId=11111111-aaaa-4bbb-8ccc-000000000001&tenantId=e0d7dc00-4621-4fe0-90b1-df7b1b40b351",
+      "membershipType": "standard",
+      "isArchived": false
+    },
+    {
+      "id": "19:db0002qaabcdef@thread.tacv2",
+      "createdDateTime": "2026-03-20T00:00:00Z",
+      "displayName": "質問",
+      "description": null,
+      "isFavoriteByDefault": null,
+      "email": "",
+      "tenantId": "e0d7dc00-4621-4fe0-90b1-df7b1b40b351",
+      "webUrl": "https://teams.microsoft.com/l/channel/19%3adb0002qaabcdef@thread.tacv2/質問?groupId=11111111-aaaa-4bbb-8ccc-000000000001&tenantId=e0d7dc00-4621-4fe0-90b1-df7b1b40b351",
+      "membershipType": "standard",
+      "isArchived": false
+    }
+  ]
+}

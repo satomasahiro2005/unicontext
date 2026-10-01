@@ -1,0 +1,78 @@
+id: canvas
+product: canvas
+sourceLabel: Canvas
+defaultAuthority: lms
+capabilities: [courses, assignments, announcements]
+resources:
+  - name: courses
+    call: { tool: list_courses, args: { enrollment_state: active } }
+    select: '$'
+    sourceType: canvas.course
+    externalId: '$string(id)'
+    updatedAt: updated_at
+    complete: true
+  - name: assignments
+    forEach: { resource: courses, as: course }
+    call: { tool: list_assignments, args: { course_id: '{{course.id}}' } }
+    select: '$'
+    sourceType: canvas.assignment
+    externalId: '$string(id)'
+    updatedAt: updated_at
+    attach: { courseId: 'course.id' }
+    complete: true
+    capability: assignments
+  - name: announcements
+    call: { tool: list_announcements, args: { limit: 50 } }
+    select: items
+    sourceType: canvas.announcement
+    externalId: '$string(id)'
+    capability: announcements
+entities:
+  canvas.course:
+    - kind: courseOffering
+      key: '$string(id)'
+      fields:
+        title: name
+        courseCode: course_code
+        academicYear: '$number($substring(term.name,0,4))'
+      ref: { url: html_url }
+  canvas.assignment:
+    - kind: assignment
+      key: '$string(id)'
+      fields:
+        title: name
+        description: description
+        dueAt: due_at
+        url: html_url
+        courseOfferingId: { ref: courseOffering, key: '$string(_parent.courseId)' }
+      ref: { url: html_url, authority: submission-system }
+  canvas.announcement:
+    - kind: announcement
+      key: '$string(id)'
+      fields:
+        title: title
+        body: message
+        publishedAt: posted_at
+        authorName: author.display_name
+        url: html_url
+        courseOfferingId: { ref: courseOffering, key: '$string(course_id)' }
+      ref:
+        url: html_url
+        location: { messageId: '$string(id)' }
+facts:
+  - sourceType: canvas.announcement
+    when: '$contains(message, /\d+教室/)'
+    subject: { ref: courseOffering, key: '$string(course_id)' }
+    predicate: room
+    value: '$match(message, /(\d+)教室/)[0].groups[0] & "教室"'
+    origin: extracted
+    confidence: 0.8
+    evidence: message
+    observedAt: posted_at
+    ref: { authority: instructor-announcement, url: html_url }
+drift:
+  canvas.course:
+    id: number
+    name: string
+    'course_code?': string
+    'term?': { name: string }

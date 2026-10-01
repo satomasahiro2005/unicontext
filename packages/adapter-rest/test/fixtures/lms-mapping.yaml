@@ -1,0 +1,38 @@
+id: lms
+product: fakelms
+sourceLabel: Fake LMS
+defaultAuthority: lms
+capabilities: [courses, assignments]
+resources:
+  - name: courses
+    call:
+      operation: listCourses
+      params: { state: [active, invited], page_size: 2 }
+      paginate: { type: link-header }
+    select: '$'
+    sourceType: lms.course
+    externalId: '$string(id)'
+    complete: true
+  - name: assignments
+    forEach: { resource: courses, as: course }
+    call:
+      operation: listAssignments
+      params: { courseId: '{{course.id}}' }
+      paginate: { type: cursor, param: cursor, next: next_cursor }
+    select: items
+    sourceType: lms.assignment
+    externalId: '$string(id)'
+    attach: { courseId: course.id }
+    complete: true
+entities:
+  lms.course:
+    - kind: courseOffering
+      fields:
+        title: name
+        courseCode: code
+  lms.assignment:
+    - kind: assignment
+      fields:
+        title: title
+        dueAt: due
+        courseOfferingId: { ref: courseOffering, key: '$string(_parent.courseId)' }

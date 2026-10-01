@@ -1,10 +1,9 @@
 {
   "name": "@unicontext/adapter-cli",
   "version": "1.0.0",
-  "description": "External CLI adapter (stub)",
+  "description": "External CLI adapter (spawn, JSON parse, declarative mappings)",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -14,12 +13,18 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "mappings"
   ],
   "scripts": {
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/connector-sdk": "workspace:*"
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/mapping": "workspace:*",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
   }
 }

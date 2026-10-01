@@ -1,0 +1,192 @@
+{
+  "value": [
+    {
+      "@odata.etag": "W/\"etag-EVT-DB-1005\"",
+      "id": "EVT-DB-1005",
+      "createdDateTime": "2026-09-20T03:00:00.0000000Z",
+      "lastModifiedDateTime": "2026-09-28T03:00:00.0000000Z",
+      "changeKey": "ck-EVT-DB-1005",
+      "categories": [
+        "授業"
+      ],
+      "originalStartTimeZone": "Tokyo Standard Time",
+      "originalEndTimeZone": "Tokyo Standard Time",
+      "iCalUId": "uid-EVT-DB-1005",
+      "reminderMinutesBeforeStart": 15,
+      "isReminderOn": true,
+      "hasAttachments": false,
+      "subject": "データベースシステム論",
+      "bodyPreview": "第1回 ガイダンス。教科書を持参してください。",
+      "importance": "normal",
+      "sensitivity": "normal",
+      "isAllDay": false,
+      "isCancelled": false,
+      "isOrganizer": false,
+      "responseRequested": true,
+      "seriesMasterId": null,
+      "showAs": "busy",
+      "type": "singleInstance",
+      "webLink": "https://outlook.office365.com/owa/?itemid=EVT-DB-1005&exvsurl=1&path=/calendar/item",
+      "onlineMeetingUrl": null,
+      "isOnlineMeeting": false,
+      "onlineMeetingProvider": "unknown",
+      "allowNewTimeProposals": true,
+      "recurrence": null,
+      "responseStatus": {
+        "response": "accepted",
+        "time": "2026-09-20T03:00:00Z"
+      },
+      "body": {
+        "contentType": "text",
+        "content": ""
+      },
+      "start": {
+        "dateTime": "2026-10-05T01:20:00.0000000",
+        "timeZone": "UTC"
+      },
+      "end": {
+        "dateTime": "2026-10-05T02:50:00.0000000",
+        "timeZone": "UTC"
+      },
+      "location": {
+        "displayName": "11教室",
+        "locationType": "default",
+        "uniqueIdType": "unknown",
+        "address": {},
+        "coordinates": {}
+      },
+      "locations": [],
+      "attendees": [],
+      "organizer": {
+        "emailAddress": {
+          "name": "講義 太郎",
+          "address": "lecturer.taro@example.ac.jp"
+        }
+      }
+    },
+    {
+      "@odata.etag": "W/\"etag-EVT-HOLIDAY-1012\"",
+      "id": "EVT-HOLIDAY-1012",
+      "createdDateTime": "2026-09-20T03:00:00.0000000Z",
+      "lastModifiedDateTime": "2026-09-28T03:00:00.0000000Z",
+      "changeKey": "ck-EVT-HOLIDAY-1012",
+      "categories": [],
+      "originalStartTimeZone": "Tokyo Standard Time",
+      "originalEndTimeZone": "Tokyo Standard Time",
+      "iCalUId": "uid-EVT-HOLIDAY-1012",
+      "reminderMinutesBeforeStart": 15,
+      "isReminderOn": true,
+      "hasAttachments": false,
+      "subject": "創立記念日（休講）",
+      "bodyPreview": "",
+      "importance": "normal",
+      "sensitivity": "normal",
+      "isAllDay": true,
+      "isCancelled": false,
+      "isOrganizer": false,
+      "responseRequested": true,
+      "seriesMasterId": null,
+      "showAs": "busy",
+      "type": "singleInstance",
+      "webLink": "https://outlook.office365.com/owa/?itemid=EVT-HOLIDAY-1012&exvsurl=1&path=/calendar/item",
+      "onlineMeetingUrl": null,
+      "isOnlineMeeting": false,
+      "onlineMeetingProvider": "unknown",
+      "allowNewTimeProposals": true,
+      "recurrence": null,
+      "responseStatus": {
+        "response": "accepted",
+        "time": "2026-09-20T03:00:00Z"
+      },
+      "body": {
+        "contentType": "text",
+        "content": ""
+      },
+      "start": {
+        "dateTime": "2026-10-12T00:00:00.0000000",
+        "timeZone": "UTC"
+      },
+      "end": {
+        "dateTime": "2026-10-13T00:00:00.0000000",
+        "timeZone": "UTC"
+      },
+      "location": {
+        "displayName": "",
+        "locationType": "default",
+        "uniqueIdType": "unknown",
+        "address": {},
+        "coordinates": {}
+      },
+      "locations": [],
+      "attendees": [],
+      "organizer": {
+        "emailAddress": {
+          "name": "講義 太郎",
+          "address": "lecturer.taro@example.ac.jp"
+        }
+      }
+    },
+    {
+      "@odata.etag": "W/\"etag-EVT-CANCELLED-1019\"",
+      "id": "EVT-CANCELLED-1019",
+      "createdDateTime": "2026-09-20T03:00:00.0000000Z",
+      "lastModifiedDateTime": "2026-09-28T03:00:00.0000000Z",
+      "changeKey": "ck-EVT-CANCELLED-1019",
+      "categories": [],
+      "originalStartTimeZone": "Tokyo Standard Time",
+      "originalEndTimeZone": "Tokyo Standard Time",
+      "iCalUId": "uid-EVT-CANCELLED-1019",
+      "reminderMinutesBeforeStart": 15,
+      "isReminderOn": true,
+      "hasAttachments": false,
+      "subject": "ゼミ（中止）",
+      "bodyPreview": "",
+      "importance": "normal",
+      "sensitivity": "normal",
+      "isAllDay": false,
+      "isCancelled": true,
+      "isOrganizer": false,
+      "responseRequested": true,
+      "seriesMasterId": null,
+      "showAs": "busy",
+      "type": "singleInstance",
+      "webLink": "https://outlook.office365.com/owa/?itemid=EVT-CANCELLED-1019&exvsurl=1&path=/calendar/item",
+      "onlineMeetingUrl": null,
+      "isOnlineMeeting": false,
+      "onlineMeetingProvider": "unknown",
+      "allowNewTimeProposals": true,
+      "recurrence": null,
+      "responseStatus": {
+        "response": "accepted",
+        "time": "2026-09-20T03:00:00Z"
+      },
+      "body": {
+        "contentType": "text",
+        "content": ""
+      },
+      "start": {
+        "dateTime": "2026-10-19T05:00:00.0000000",
+        "timeZone": "UTC"
+      },
+      "end": {
+        "dateTime": "2026-10-19T06:00:00.0000000",
+        "timeZone": "UTC"
+      },
+      "location": {
+        "displayName": "",
+        "locationType": "default",
+        "uniqueIdType": "unknown",
+        "address": {},
+        "coordinates": {}
+      },
+      "locations": [],
+      "attendees": [],
+      "organizer": {
+        "emailAddress": {
+          "name": "講義 太郎",
+          "address": "lecturer.taro@example.ac.jp"
+        }
+      }
+    }
+  ]
+}

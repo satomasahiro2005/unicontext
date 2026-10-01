@@ -1,0 +1,29 @@
+{
+  "name": "@unicontext/mapping",
+  "version": "1.0.0",
+  "description": "Declarative YAML mapping of external tool/CLI/REST results to canonical raw items and entities",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "jsonata": "^2.2.2",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  }
+}

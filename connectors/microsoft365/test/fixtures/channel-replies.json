@@ -1,0 +1,43 @@
+{
+  "value": [
+    {
+      "id": "1759300000003",
+      "replyToId": "1759300000002",
+      "etag": "1759300000003",
+      "messageType": "message",
+      "createdDateTime": "2026-09-30T09:30:00Z",
+      "lastModifiedDateTime": "2026-09-30T09:30:00Z",
+      "lastEditedDateTime": null,
+      "deletedDateTime": null,
+      "subject": null,
+      "summary": null,
+      "chatId": null,
+      "importance": "normal",
+      "locale": "ja-jp",
+      "webUrl": "https://teams.microsoft.com/l/message/19:db0001generalabcdef@thread.tacv2/1759300000003?groupId=11111111-aaaa-4bbb-8ccc-000000000001",
+      "policyViolation": null,
+      "eventDetail": null,
+      "from": {
+        "application": null,
+        "device": null,
+        "user": {
+          "id": "bbbbbbbb-0000-4000-8000-0000000000bb",
+          "displayName": "講義 太郎",
+          "userIdentityType": "aadUser",
+          "tenantId": "e0d7dc00-4621-4fe0-90b1-df7b1b40b351"
+        }
+      },
+      "body": {
+        "contentType": "html",
+        "content": "<p>締切後は減点になります。</p>"
+      },
+      "channelIdentity": {
+        "teamId": "11111111-aaaa-4bbb-8ccc-000000000001",
+        "channelId": "19:db0001generalabcdef@thread.tacv2"
+      },
+      "attachments": [],
+      "mentions": [],
+      "reactions": []
+    }
+  ]
+}

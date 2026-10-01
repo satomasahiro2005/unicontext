@@ -1,10 +1,9 @@
 {
   "name": "@unicontext/adapter-browser",
   "version": "1.0.0",
-  "description": "Browser (Playwright) adapter (stub)",
+  "description": "Browser (Playwright) adapter: persistent human-login sessions, cookie export, interstitial handlers",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -20,6 +19,11 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/connector-sdk": "workspace:*"
+    "@unicontext/auth": "workspace:*",
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "playwright-core": "^1.63.0",
+    "zod": "^4.6.5"
   }
 }

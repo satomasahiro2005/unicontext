@@ -1,10 +1,9 @@
 {
   "name": "@unicontext/syllabus",
   "version": "1.0.0",
-  "description": "Syllabus connector (stub)",
+  "description": "Syllabus connector (generic, with a LiveCampusU public syllabus strategy) and public cancellation notices",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -20,6 +19,11 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/connector-sdk": "workspace:*"
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/identity": "workspace:*",
+    "cheerio": "^1.2.0",
+    "zod": "^4.6.5"
   }
 }

@@ -1,0 +1,103 @@
+{
+  "value": [
+    {
+      "@odata.etag": "W/\"mail-etag-MSG-0001\"",
+      "id": "MSG-0001",
+      "subject": "【重要】前期試験の日程について",
+      "from": {
+        "emailAddress": {
+          "name": "教務係",
+          "address": "kyomu@example.ac.jp"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "試験 花子",
+            "address": "test.hanako@example.ac.jp"
+          }
+        }
+      ],
+      "receivedDateTime": "2026-09-29T00:30:00Z",
+      "sentDateTime": "2026-09-29T00:30:00Z",
+      "lastModifiedDateTime": "2026-09-29T00:30:00Z",
+      "bodyPreview": "各位\r\n\r\n前期試験の日程を掲示しました。詳細は学務情報システムで確認してください。\r\n\r\n教務係",
+      "body": {
+        "contentType": "text",
+        "content": "各位\r\n\r\n前期試験の日程を掲示しました。詳細は学務情報システムで確認してください。\r\n\r\n教務係"
+      },
+      "conversationId": "CONV-EXAM",
+      "webLink": "https://outlook.office365.com/owa/?ItemID=MSG-0001&exvsurl=1&viewmodel=ReadMessageItem",
+      "isRead": false,
+      "isDraft": false,
+      "importance": "normal",
+      "hasAttachments": false
+    },
+    {
+      "@odata.etag": "W/\"mail-etag-MSG-0002\"",
+      "id": "MSG-0002",
+      "subject": "RE: レポート課題の提出について",
+      "from": {
+        "emailAddress": {
+          "name": "学習 花子",
+          "address": "gakushu.hanako@example.ac.jp"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "試験 花子",
+            "address": "test.hanako@example.ac.jp"
+          }
+        }
+      ],
+      "receivedDateTime": "2026-09-30T02:00:00Z",
+      "sentDateTime": "2026-09-30T02:00:00Z",
+      "lastModifiedDateTime": "2026-09-30T02:00:00Z",
+      "bodyPreview": "先生、提出期限は10月8日で間違いないでしょうか？",
+      "body": {
+        "contentType": "text",
+        "content": "先生、提出期限は10月8日で間違いないでしょうか？"
+      },
+      "conversationId": "CONV-REPORT",
+      "webLink": "https://outlook.office365.com/owa/?ItemID=MSG-0002&exvsurl=1&viewmodel=ReadMessageItem",
+      "isRead": false,
+      "isDraft": false,
+      "importance": "normal",
+      "hasAttachments": false
+    },
+    {
+      "@odata.etag": "W/\"mail-etag-MSG-0003\"",
+      "id": "MSG-0003",
+      "subject": "レポート課題の提出について",
+      "from": {
+        "emailAddress": {
+          "name": "講義 太郎",
+          "address": "lecturer.taro@example.ac.jp"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "試験 花子",
+            "address": "test.hanako@example.ac.jp"
+          }
+        }
+      ],
+      "receivedDateTime": "2026-09-29T09:00:00Z",
+      "sentDateTime": "2026-09-29T09:00:00Z",
+      "lastModifiedDateTime": "2026-09-29T09:00:00Z",
+      "bodyPreview": "課題レポートは10月8日（木）17:00までにTeamsで提出してください。",
+      "body": {
+        "contentType": "text",
+        "content": "課題レポートは10月8日（木）17:00までにTeamsで提出してください。"
+      },
+      "conversationId": "CONV-REPORT",
+      "webLink": "https://outlook.office365.com/owa/?ItemID=MSG-0003&exvsurl=1&viewmodel=ReadMessageItem",
+      "isRead": false,
+      "isDraft": false,
+      "importance": "normal",
+      "hasAttachments": true
+    }
+  ]
+}

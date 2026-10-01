@@ -1,0 +1,44 @@
+{
+  "value": [
+    {
+      "id": "ITEM-DOCX",
+      "name": "メモ.docx",
+      "deleted": {
+        "state": "deleted"
+      },
+      "parentReference": {
+        "driveId": "b!drive0001"
+      }
+    },
+    {
+      "@odata.etag": "\"{ITEM-PDF},1\"",
+      "@microsoft.graph.downloadUrl": "https://example-my.sharepoint.com/personal/test/_layouts/15/download.aspx?UniqueId=ITEM-PDF&tempauth=SECRET-TEMP-AUTH",
+      "id": "ITEM-PDF",
+      "name": "配布資料.pdf",
+      "size": 4096,
+      "webUrl": "https://example-my.sharepoint.com/personal/test/Documents/配布資料.pdf",
+      "createdDateTime": "2026-09-01T00:00:00Z",
+      "lastModifiedDateTime": "2026-10-01T02:00:00Z",
+      "eTag": "\"{ITEM-PDF},1\"",
+      "cTag": "\"c:{ITEM-PDF},1\"",
+      "parentReference": {
+        "driveId": "b!drive0001",
+        "driveType": "business",
+        "id": "PARENT-1",
+        "name": "データベース",
+        "path": "/drive/root:/授業/データベース",
+        "siteId": "site-0001"
+      },
+      "fileSystemInfo": {
+        "createdDateTime": "2026-09-01T00:00:00Z",
+        "lastModifiedDateTime": "2026-09-30T00:00:00Z"
+      },
+      "file": {
+        "mimeType": "application/pdf",
+        "hashes": {
+          "quickXorHash": "QXH-PDF2"
+        }
+      }
+    }
+  ]
+}

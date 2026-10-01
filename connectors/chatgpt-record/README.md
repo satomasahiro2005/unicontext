@@ -1,3 +1,3 @@
 # @unicontext/chatgpt-record
 
-ChatGPT Record / transcript importer connector (stub).
+ChatGPT Record / generic transcript importer connector.

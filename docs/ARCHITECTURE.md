@@ -42,25 +42,26 @@ fix without contacting any university system (§6).
 
 ## 2. Workspace
 
-| Path                                                                      | Package                                    | Status                                    |
-| ------------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------- |
-| packages/core                                                             | `@unicontext/core`                         | implemented                               |
-| packages/canonical-model                                                  | `@unicontext/canonical-model`              | implemented                               |
-| packages/database                                                         | `@unicontext/database`                     | implemented                               |
-| packages/connector-sdk                                                    | `@unicontext/connector-sdk` (+ `/testing`) | implemented                               |
-| packages/auth                                                             | `@unicontext/auth`                         | implemented                               |
-| packages/provenance                                                       | `@unicontext/provenance`                   | implemented                               |
-| packages/identity                                                         | `@unicontext/identity`                     | implemented (new package, §14)            |
-| packages/search                                                           | `@unicontext/search`                       | implemented                               |
-| packages/sync-engine                                                      | `@unicontext/sync-engine`                  | implemented                               |
-| packages/task-engine                                                      | `@unicontext/task-engine`                  | implemented                               |
-| packages/context-engine                                                   | `@unicontext/context-engine`               | implemented (includes `createUniContext`) |
-| packages/adapter-{mcp,cli,rest,browser}                                   | `@unicontext/adapter-*`                    | stub (lane a)                             |
-| packages/notifications                                                    | `@unicontext/notifications`                | implemented (§3.12)                       |
-| apps/{daemon,cli,web,mcp}                                                 | `@unicontext/{daemon,cli,web,mcp}`         | implemented (§3.12)                       |
-| connectors/{microsoft365,livecampusu,local-files,syllabus,chatgpt-record} | `@unicontext/<dir>`                        | stub (lane a)                             |
-| profiles/shizuoka-university                                              | profile.yaml                               | settings only (§54)                       |
-| tests/                                                                    | `@unicontext/tests` (private)              | cross-package integration tests           |
+| Path                                                                                       | Package                                    | Status                                      |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------ | ------------------------------------------- |
+| packages/core                                                                              | `@unicontext/core`                         | implemented                                 |
+| packages/canonical-model                                                                   | `@unicontext/canonical-model`              | implemented                                 |
+| packages/database                                                                          | `@unicontext/database`                     | implemented                                 |
+| packages/connector-sdk                                                                     | `@unicontext/connector-sdk` (+ `/testing`) | implemented                                 |
+| packages/auth                                                                              | `@unicontext/auth`                         | implemented                                 |
+| packages/provenance                                                                        | `@unicontext/provenance`                   | implemented                                 |
+| packages/identity                                                                          | `@unicontext/identity`                     | implemented (new package, §14)              |
+| packages/search                                                                            | `@unicontext/search`                       | implemented                                 |
+| packages/sync-engine                                                                       | `@unicontext/sync-engine`                  | implemented                                 |
+| packages/task-engine                                                                       | `@unicontext/task-engine`                  | implemented                                 |
+| packages/context-engine                                                                    | `@unicontext/context-engine`               | implemented (includes `createUniContext`)   |
+| packages/adapter-{mcp,cli,rest,browser}                                                    | `@unicontext/adapter-*`                    | implemented (docs/connectors/)              |
+| packages/mapping                                                                           | `@unicontext/mapping`                      | implemented (YAML mapping for MCP/CLI/REST) |
+| packages/notifications                                                                     | `@unicontext/notifications`                | implemented (§3.12)                         |
+| apps/{daemon,cli,web,mcp}                                                                  | `@unicontext/{daemon,cli,web,mcp}`         | implemented (§3.12)                         |
+| connectors/{microsoft365,livecampusu,local-files,syllabus,chatgpt-record,wordpress-portal} | `@unicontext/<dir>`                        | implemented (docs/connectors/)              |
+| profiles/shizuoka-university                                                               | profile.yaml                               | settings only (§54)                         |
+| tests/                                                                                     | `@unicontext/tests` (private)              | cross-package integration tests             |
 
 Commands (from the repo root):
 
@@ -309,6 +310,13 @@ message|exam|submission|document|transcript` (`FakePayloadSchemas`). Tests mutat
   `lms` submission-system, `record` transcript) and `applySeedDay2(adapters)` for the second day
   (deadline change, new slides, room change post). Constants `SEED_TODAY`, `SEED_DAY1_SYNC_AT`,
   `SEED_DAY2_SYNC_AT`. All data is synthetic.
+- Optional adapter extensions (detect with the guards): `InteractiveAuthAdapter` (`login(options)`,
+  `logout()`; `supportsInteractiveLogin`) for human-in-the-loop auth — `authenticate()` stays
+  non-interactive; `WatchableAdapter` (`watch(listener) → {close()}`; `isWatchable`) for event-driven
+  sources — feed each `listener.onResult(result)` to `SyncEngine.ingest`.
+- Package entries: a connector/adapter package exports a `ConnectorModule` or a
+  `ConnectorFactory` (`({sourceId, config, profile}) => Promise<ConnectorModule>`) as `default` and
+  named `connector`; `resolveConnectorExport(entry, input)` turns either into a module.
 - `@unicontext/connector-sdk/testing`: `testConnectorCompliance(name, {createAdapter, metadata,
 normalizer?, rawFixtures?, profile?, sourceId?, maxPages?, skipAuthenticate?})` — the shared
   contract suite (§66), call it at the top level of a vitest file. It checks metadata, capability
@@ -377,6 +385,9 @@ sourceItemId, retrievedAt, url, location, rawItemId, label}`; `toCitation(ref, t
   with `toCandidate(offering, sourceId)`. Weights: code 0.4, title 0.5×similarity, teacher 0.2,
   timetable 0.15, year/term 0.05 each; year or term mismatch vetoes. `DEFAULT_THRESHOLDS = {link:
 0.75, suggest: 0.5}`.
+  A title-only candidate (no code, teacher or timetable — course folders, transcript hints, Teams
+  team names) with an exact normalized title (similarity ≥ 0.95) in the same academic year gets
+  +0.2, so it can reach the link threshold on its own.
 - `IdentityResolver(db, {clock?, thresholds?, sourcePriority?})`: `resolveCourseOfferings()`
   (pairs across different sources; never overrides user decisions), `link`, `confirm(a, b)`,
   `reject(a, b)`, `getLink`, `listLinks({status?, entityId?})`, `expand(id)` (connected component

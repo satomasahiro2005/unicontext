@@ -1,0 +1,30 @@
+<!-- UniContext SYNTHETIC fixture: logged-in landing screen (SC_01002B00_00). Head plugin paths copied from the real login page (lcu-login-SC_01001B00_01.html); body is a minimal stand-in carrying the hidden _csrf/_TRANSACTION_TOKEN fields every LCU form has. {{CSRF}}/{{TX}} are replaced by the fake server. No personal data. -->
+<!DOCTYPE html>
+<html class="no-js" lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>ホーム</title>
+<link rel="stylesheet" type="text/css" href="/lcu-web/plugin/datatables/v1.10.20/datatables.min.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/plugin/modaal/v0.4.4/css/modaal.min.css">
+<link rel="stylesheet" type="text/css" href="/lcu-web/plugin/jquery/jquery-ui/v1.12.1/jquery-ui.min.css">
+<script src="/lcu-web/plugin/desvg/vX.X.X/desvg.js"></script>
+<script src="/lcu-web/plugin/jquery/v3.5.1/jquery-3.5.1.min.js"></script>
+<script src="/lcu-web/plugin/jquery/jquery-ui/v1.12.1/jquery-ui.min.js"></script>
+<script src="/lcu-web/plugin/smooth-scroll/v16.1.2/smooth-scroll.polyfills.min.js"></script>
+<script src="/lcu-web/plugin/datatables/v1.10.20/datatables.min.js"></script>
+<script src="/lcu-web/plugin/modaal/v0.4.4/js/modaal.min.js"></script>
+<script src="/lcu-web/plugin/dropzone/v5.7.0/dropzone.min.js"></script>
+<script src="/lcu-web/js/viewport.js"></script>
+<script src="/lcu-web/js/common.js"></script>
+<script src="/lcu-web/js/fileupload.js"></script>
+<script src="/lcu-web/js/fileuploadDb.js"></script>
+</head>
+<body>
+<header><p class="timer">タイムアウトまであと 59:59</p></header>
+<form id="emptyForm" method="post" action="/lcu-web/">
+<input type="hidden" name="_csrf" value="{{CSRF}}" />
+<input type="hidden" name="_TRANSACTION_TOKEN" value="{{TX}}" />
+</form>
+<main class="c-container"><h2 class="c-heading-h1">ホーム</h2></main>
+</body>
+</html>

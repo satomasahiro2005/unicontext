@@ -1,0 +1,137 @@
+# Canvas LMS through an external MCP server (UniContext adapter-mcp, spec §28).
+#
+# ASSUMPTIONS ABOUT THE SERVER (tool names and result shapes of community Canvas MCP servers vary):
+#   list_courses()                    -> Canvas course objects, each with id, name, course_code,
+#                                        term.name, html_url (include teachers/term when supported)
+#   list_assignments({course_id})     -> Canvas assignment objects (id, name, description, due_at,
+#                                        unlock_at, points_possible, submission_types, html_url)
+#   list_announcements({course_id})   -> Canvas announcement / discussion topics (id, title,
+#                                        message, posted_at, author.display_name, html_url)
+#   list_submissions({course_id})     -> the signed-in student's own submissions (assignment_id,
+#                                        workflow_state, submitted_at, score, late)
+# If the server wraps lists (for example {"courses": [...]}) change `select` to the key
+# (`select: courses`). Run `adapter.discover()` (or `unicontext doctor`) to list the real tool
+# names and adapt every `call.tool` / `call.args` below; a tool that does not exist makes the
+# source "degraded" and the sync fails with the list of available tools.
+#
+# Authorities: course data is `lms`; assignment due dates and submission state come from the
+# submission system (Canvas itself) so they win conflicts for `assignment_due` /
+# `submission_status` (§12); announcements are instructor posts (`instructor-announcement`).
+id: canvas
+product: canvas
+sourceLabel: Canvas
+description: Canvas LMS via an MCP server (courses, assignments, announcements, submissions)
+defaultAuthority: lms
+capabilities: [courses, assignments, announcements, submissions]
+
+resources:
+  - name: courses
+    call:
+      tool: list_courses
+      args: { enrollment_state: active, include: [term, teachers] }
+    select: '$'
+    sourceType: canvas.course
+    externalId: '$string(id)'
+    updatedAt: updated_at
+    complete: true
+    capability: courses
+
+  - name: assignments
+    forEach: { resource: courses, as: course }
+    call:
+      tool: list_assignments
+      args: { course_id: '{{course.id}}' }
+    select: '$'
+    sourceType: canvas.assignment
+    externalId: '$string(id)'
+    updatedAt: updated_at
+    attach: { courseId: 'course.id' }
+    complete: true
+    capability: assignments
+
+  - name: announcements
+    forEach: { resource: courses, as: course }
+    call:
+      tool: list_announcements
+      args: { course_id: '{{course.id}}' }
+    select: '$'
+    sourceType: canvas.announcement
+    externalId: '$string(id)'
+    updatedAt: updated_at
+    attach: { courseId: 'course.id' }
+    capability: announcements
+
+  - name: submissions
+    forEach: { resource: courses, as: course }
+    call:
+      tool: list_submissions
+      args: { course_id: '{{course.id}}' }
+    select: '$'
+    sourceType: canvas.submission
+    externalId: '$string(assignment_id)'
+    updatedAt: submitted_at
+    attach: { courseId: 'course.id' }
+    complete: true
+    capability: submissions
+
+entities:
+  canvas.course:
+    - kind: courseOffering
+      key: '$string(id)'
+      fields:
+        title: name
+        courseCode: course_code
+        # "2026 Fall", "2026年度 前期": the leading four digits are the academic year
+        academicYear: 'term.name and $count($match(term.name, /^\d{4}/)) > 0 ? $number($substring(term.name, 0, 4))'
+        term: term.name
+        instructorNames: teachers.display_name
+        url: html_url
+      ref: { url: html_url }
+
+  canvas.assignment:
+    - kind: assignment
+      key: '$string(id)'
+      fields:
+        title: name
+        description: description
+        dueAt: due_at
+        availableFrom: unlock_at
+        points: points_possible
+        submissionType: '$join(submission_types, ",")'
+        url: html_url
+        courseOfferingId: { ref: courseOffering, key: '$string(_parent.courseId)' }
+      ref: { url: html_url, authority: submission-system }
+
+  canvas.announcement:
+    - kind: announcement
+      key: '$string(id)'
+      fields:
+        title: title
+        body: '$replace(message, /<[^>]+>/, " ")'
+        publishedAt: posted_at
+        authorName: author.display_name
+        url: html_url
+        scope: { const: course }
+        courseOfferingId: { ref: courseOffering, key: '$string(_parent.courseId)' }
+      ref:
+        url: html_url
+        authority: instructor-announcement
+        location: { messageId: '$string(id)' }
+
+  canvas.submission:
+    - kind: submission
+      key: '$string(assignment_id)'
+      fields:
+        assignmentId: { ref: assignment, key: '$string(assignment_id)' }
+        status: 'workflow_state = "graded" ? "graded" : late = true ? "late" : (workflow_state = "submitted" or workflow_state = "pending_review") ? "submitted" : "not_submitted"'
+        submittedAt: submitted_at
+        score: score
+      ref: { authority: submission-system }
+
+# Fields the mapping relies on; a missing/renamed one marks the source "degraded" (§73).
+drift:
+  canvas.course: { id: number, name: string, 'course_code?': 'string|null' }
+  canvas.assignment: { id: number, name: string, 'due_at?': 'string|null', 'html_url?': string }
+  canvas.announcement:
+    { id: number, title: string, 'message?': 'string|null', 'posted_at?': 'string|null' }
+  canvas.submission: { assignment_id: number, workflow_state: string }
