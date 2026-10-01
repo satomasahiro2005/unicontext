@@ -56,12 +56,23 @@ export interface BrowserSsoStrategyOptions {
   createSession?: ((options: BrowserSessionOptions) => BrowserSessionLike) | undefined;
 }
 
+/** Screens served without login (syllabus SC_06*, public notices SC_90*). */
+const PUBLIC_SCREEN = /^SC_(06|90)/;
+
 /** True when the page is a logged-in LCU screen (under the base path, logged-in screen id). */
 export function isLoggedInPage(deployment: LcuDeploymentProfile, url: string): boolean {
   const rel = relativeLcuPath(deployment, url);
   if (rel === undefined) return false;
   const screen = screenIdFromUrl(`/${rel}`);
-  return screen !== undefined && deployment.auth.loggedInScreenIds.includes(screen);
+  if (screen === undefined) return false;
+  if (deployment.auth.loggedInScreenIds.includes(screen)) return true;
+  // Any other LCU screen except the login screen also means the session is live
+  // (home variants differ per deployment, and SSO may land on a deep link).
+  return (
+    screen !== deployment.auth.loginScreenId &&
+    !PUBLIC_SCREEN.test(screen) &&
+    !/error/i.test(rel)
+  );
 }
 
 /**

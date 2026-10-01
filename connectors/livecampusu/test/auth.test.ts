@@ -277,7 +277,10 @@ describe('browser-sso strategy (adapter-browser, scripted fake browser)', () => 
     expect(isLoggedInPage(deployment, `${BASE}SC_01002B00_00`)).toBe(true);
     expect(isLoggedInPage(deployment, `${BASE}SC_01002B00_01;jsessionid=X`)).toBe(true);
     expect(isLoggedInPage(deployment, BASE)).toBe(false);
-    expect(isLoggedInPage(deployment, `${BASE}SC_17001B00_01`)).toBe(false);
+    expect(isLoggedInPage(deployment, `${BASE}SC_17001B00_01`)).toBe(true);
+    expect(isLoggedInPage(deployment, `${BASE}SC_01001B00_01`)).toBe(false);
+    expect(isLoggedInPage(deployment, `${BASE}SC_06001B00_21`)).toBe(false);
+    expect(isLoggedInPage(deployment, `${BASE}SC_90002szu_01`)).toBe(false);
     expect(isLoggedInPage(deployment, 'https://idp.example.ac.jp/lcu-web/SC_01002B00_00')).toBe(
       false,
     );
