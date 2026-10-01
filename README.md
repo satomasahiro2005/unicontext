@@ -162,10 +162,6 @@ pnpm check        # build + type-check tests + lint + test
 
 Layout: `packages/*` (core, canonical-model, database, connector-sdk, auth, provenance, identity, search, sync-engine, task-engine, context-engine, notifications, adapters), `connectors/*`, `apps/{daemon,cli,mcp,web}`, `profiles/*`. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## 日本語の概要
-
-UniContext は大学生活のためのローカルファースト文脈レイヤーです。学務情報システム、LMS、Microsoft 365、ディスカッション、講義の文字起こし、手元のファイルをつなぎ、一人の学生の大学生活として統合した文脈を AI エージェントに渡します。データは手元の SQLite に置き、トークンは OS のキーチェーンに保存します。情報源が食い違うときは両方を保持して「競合している」と伝え、すべての回答から出典に戻れます。書き込みは提案から確認、実行の順で、AI が勝手に提出済みにすることはありません。
-
 ## License
 
 MIT. See [LICENSE](LICENSE).
