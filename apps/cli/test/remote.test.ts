@@ -24,7 +24,7 @@ describe('unicontext remote', () => {
       env: { UC_PASS: 'short' },
     });
     expect(short.code).toBe(1);
-    expect(short.stderr).toContain('12文字以上');
+    expect(short.stderr).toContain('8文字以上');
     const ok = await run(['remote', 'set-passphrase', '--from-env', 'UC_PASS'], {
       env: { UC_PASS: 'a long enough passphrase' },
     });

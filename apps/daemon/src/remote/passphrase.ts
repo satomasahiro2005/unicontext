@@ -18,7 +18,7 @@ export interface PassphraseHash extends ScryptParams {
 /** ~100 ms on a laptop; 64 MiB of memory per attempt makes offline guessing expensive. */
 export const DEFAULT_SCRYPT: ScryptParams = { N: 2 ** 15, r: 8, p: 1 };
 
-export const MIN_PASSPHRASE_LENGTH = 12;
+export const MIN_PASSPHRASE_LENGTH = 8;
 
 function derive(passphrase: string, salt: Buffer, params: ScryptParams): Promise<Buffer> {
   return new Promise((resolve, reject) => {
