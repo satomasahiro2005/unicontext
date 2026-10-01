@@ -1,0 +1,41 @@
+{
+  "name": "@unicontext/connector-sdk",
+  "version": "1.0.0",
+  "description": "SourceAdapter/Normalizer contracts, rate limiter, schema drift and compliance suite",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@unicontext/core": "workspace:*",
+    "@unicontext/canonical-model": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.0"
+  },
+  "peerDependencies": {
+    "vitest": "^4.1.0"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  }
+}

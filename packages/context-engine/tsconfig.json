@@ -1,0 +1,38 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/canonical-model"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/provenance"
+    },
+    {
+      "path": "../../packages/identity"
+    },
+    {
+      "path": "../../packages/search"
+    },
+    {
+      "path": "../../packages/task-engine"
+    },
+    {
+      "path": "../../packages/sync-engine"
+    },
+    {
+      "path": "../../packages/connector-sdk"
+    }
+  ]
+}

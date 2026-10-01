@@ -1,0 +1,80 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/canonical-model"
+    },
+    {
+      "path": "./packages/database"
+    },
+    {
+      "path": "./packages/connector-sdk"
+    },
+    {
+      "path": "./packages/auth"
+    },
+    {
+      "path": "./packages/provenance"
+    },
+    {
+      "path": "./packages/identity"
+    },
+    {
+      "path": "./packages/search"
+    },
+    {
+      "path": "./packages/sync-engine"
+    },
+    {
+      "path": "./packages/task-engine"
+    },
+    {
+      "path": "./packages/context-engine"
+    },
+    {
+      "path": "./packages/adapter-mcp"
+    },
+    {
+      "path": "./packages/adapter-cli"
+    },
+    {
+      "path": "./packages/adapter-rest"
+    },
+    {
+      "path": "./packages/adapter-browser"
+    },
+    {
+      "path": "./packages/notifications"
+    },
+    {
+      "path": "./apps/daemon"
+    },
+    {
+      "path": "./apps/cli"
+    },
+    {
+      "path": "./apps/web"
+    },
+    {
+      "path": "./apps/mcp"
+    },
+    {
+      "path": "./connectors/microsoft365"
+    },
+    {
+      "path": "./connectors/livecampusu"
+    },
+    {
+      "path": "./connectors/local-files"
+    },
+    {
+      "path": "./connectors/syllabus"
+    },
+    {
+      "path": "./connectors/chatgpt-record"
+    }
+  ]
+}

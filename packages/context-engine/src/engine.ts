@@ -1,0 +1,1007 @@
+import {
+  type Announcement,
+  type CanonicalEntity,
+  type ChangeEvent,
+  type ClassSession,
+  type Conflict,
+  type CourseOffering,
+  entityLabel,
+  type Exam,
+  type JsonValue,
+  type Lecture,
+  type Material,
+  type Task,
+} from '@unicontext/canonical-model';
+import {
+  addZonedDays,
+  type Clock,
+  DEFAULT_TIMEZONE,
+  formatDateJa,
+  formatShortJa,
+  NotFoundError,
+  parseZonedDate,
+  startOfZonedDay,
+  startOfZonedWeek,
+  systemClock,
+  type UniversityProfile,
+  zonedDateString,
+  zonedParts,
+} from '@unicontext/core';
+import {
+  ChangeEventStore,
+  EntityStore,
+  RawStore,
+  SourceReferenceStore,
+  createStores,
+  type UniContextDatabase,
+} from '@unicontext/database';
+import type { IdentityResolver } from '@unicontext/identity';
+import {
+  type ConflictResolver,
+  type Resolution,
+  toCitation,
+  uniqueCitations,
+} from '@unicontext/provenance';
+import type { SearchService } from '@unicontext/search';
+import type { TaskEngine } from '@unicontext/task-engine';
+import type {
+  AdminContext,
+  AnnouncementItem,
+  ChangeItem,
+  ChangesContext,
+  Citation,
+  ClassItem,
+  ClassPreparationContext,
+  ClassReviewContext,
+  ConflictItem,
+  CourseContext,
+  CourseRef,
+  DayContext,
+  DeadlineContext,
+  DeadlineItem,
+  ExamPreparationContext,
+  FactItem,
+  LectureBundle,
+  MaterialItem,
+  PreparationItem,
+  QuestionItem,
+  ResolvedValue,
+  SegmentItem,
+  SourceStatus,
+  TaskItem,
+  TodayContext,
+  TomorrowContext,
+  WeekContext,
+} from './types.js';
+
+export interface ContextEngineOptions {
+  db: UniContextDatabase;
+  resolver: ConflictResolver;
+  identity: IdentityResolver;
+  tasks: TaskEngine;
+  search?: SearchService;
+  clock?: Clock;
+  timezone?: string;
+  profile?: UniversityProfile;
+}
+
+const OPEN_STATUSES: Task['status'][] = ['pending', 'in_progress', 'unknown'];
+const DAY = 86_400_000;
+
+function hms(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+/**
+ * Builds purpose-specific context bundles (§17, §18) so AI agents never query the DB directly.
+ * Every item carries citations (§49) and conflicts are passed through as conflicts (§12).
+ */
+export class ContextEngine {
+  readonly timezone: string;
+  private readonly db: UniContextDatabase;
+  private readonly clock: Clock;
+  private readonly entities: EntityStore;
+  private readonly refs: SourceReferenceStore;
+  private readonly changes: ChangeEventStore;
+  private readonly resolver: ConflictResolver;
+  private readonly identity: IdentityResolver;
+  private readonly tasks: TaskEngine;
+  private readonly search: SearchService | undefined;
+
+  constructor(options: ContextEngineOptions) {
+    this.db = options.db;
+    this.clock = options.clock ?? systemClock;
+    this.timezone =
+      options.timezone ?? options.profile?.academicCalendar.timezone ?? DEFAULT_TIMEZONE;
+    this.entities = new EntityStore(this.db, { clock: this.clock });
+    this.refs = new SourceReferenceStore(this.db);
+    this.changes = new ChangeEventStore(this.db);
+    this.resolver = options.resolver;
+    this.identity = options.identity;
+    this.tasks = options.tasks;
+    this.search = options.search;
+  }
+
+  // ---------- building blocks ----------
+
+  private now(): Date {
+    return this.clock.now();
+  }
+
+  private base<V extends string>(view: V): { view: V; generatedAt: string; timezone: string } {
+    return { view, generatedAt: this.now().toISOString(), timezone: this.timezone };
+  }
+
+  citationsFor(entityIds: readonly string[]): Citation[] {
+    const out: Citation[] = [];
+    for (const list of this.refs.forEntities(entityIds).values())
+      out.push(...list.map((r) => toCitation(r, this.timezone)));
+    return uniqueCitations(out);
+  }
+
+  courseRef(id: string | undefined): CourseRef | undefined {
+    if (!id) return undefined;
+    const linked = this.identity.expand(id);
+    const canonical = linked[0] ?? id;
+    const offering =
+      this.entities.getOfKind('courseOffering', canonical) ??
+      linked.map((l) => this.entities.getOfKind('courseOffering', l)).find(Boolean);
+    return {
+      id: canonical,
+      title: offering?.title ?? canonical,
+      courseCode: offering?.courseCode,
+      linkedIds: linked,
+    };
+  }
+
+  private requireCourse(id: string): CourseRef & { offering: CourseOffering } {
+    const ref = this.courseRef(id);
+    const offering = ref ? this.entities.getOfKind('courseOffering', ref.id) : undefined;
+    if (!ref || !offering) throw new NotFoundError(`course offering ${id}`);
+    return { ...ref, offering };
+  }
+
+  private resolvedValue<T extends JsonValue>(res: Resolution, fallback?: T): ResolvedValue<T> {
+    const candidates = res.candidates.map((c) => ({
+      value: c.fact.value,
+      origin: c.fact.origin,
+      authority: c.authority,
+      source: c.source?.sourceLabel ?? c.source?.sourceSystem ?? 'unknown',
+      observedAt: c.fact.observedAt,
+      citation: c.source ? toCitation(c.source, this.timezone) : undefined,
+    }));
+    if (res.status === 'none' && fallback !== undefined)
+      return {
+        value: fallback,
+        status: 'resolved',
+        origin: undefined,
+        method: 'entity',
+        candidates,
+      };
+    return {
+      value: res.value as T | undefined,
+      status: res.status,
+      origin: res.origin,
+      method: res.method,
+      candidates,
+    };
+  }
+
+  private describeValue(v: ResolvedValue<string>): string {
+    if (v.status === 'conflict')
+      return `情報が食い違っています（${v.candidates.map((c) => `${String(c.value)}: ${c.citation?.label ?? c.source}`).join(' / ')}）`;
+    const cite = v.candidates[0]?.citation?.label;
+    return `${v.value ?? '不明'}${cite ? `（根拠: ${cite}）` : ''}`;
+  }
+
+  classItem(session: ClassSession): ClassItem {
+    const course = this.courseRef(session.courseOfferingId) ?? {
+      id: session.courseOfferingId,
+      title: session.courseOfferingId,
+      courseCode: undefined,
+      linkedIds: [session.courseOfferingId],
+    };
+    const at = session.startsAt
+      ? new Date(session.startsAt)
+      : new Date(parseZonedDate(session.date, this.timezone).getTime() + 12 * 3_600_000);
+    const subjects = [session.id, ...course.linkedIds];
+    const room = this.resolvedValue<string>(
+      this.resolver.resolve(subjects, 'room', { at }),
+      session.room,
+    );
+    const status = this.resolvedValue<string>(
+      this.resolver.resolve([session.id], 'class_status', { at }),
+      session.status,
+    );
+    const cancelled = status.status === 'resolved' && status.value === 'cancelled';
+    const time = session.period
+      ? `${session.period}限`
+      : session.startsAt
+        ? formatShortJa(new Date(session.startsAt), this.timezone)
+        : session.date;
+    const summary = `${formatDateJa(parseZonedDate(session.date, this.timezone), this.timezone)} ${time} ${course.title}${cancelled ? '（休講）' : ''} / 教室: ${this.describeValue(room)}`;
+    return {
+      sessionId: session.id,
+      course,
+      date: session.date,
+      period: session.period,
+      startsAt: session.startsAt,
+      endsAt: session.endsAt,
+      room,
+      status,
+      cancelled,
+      note: session.note,
+      summary,
+      citations: uniqueCitations([
+        ...this.citationsFor([session.id]),
+        ...room.candidates.flatMap((c) => (c.citation ? [c.citation] : [])),
+      ]),
+    };
+  }
+
+  /** Sessions on a local date, one per (canonical course, period/start), sorted by time. */
+  sessionsOn(date: string): ClassSession[] {
+    const next = zonedDateString(
+      addZonedDays(parseZonedDate(date, this.timezone), 1, this.timezone),
+      this.timezone,
+    );
+    const all = this.entities.listByDateRange('classSession', 'date', date, next);
+    const seen = new Map<string, ClassSession>();
+    for (const s of all) {
+      const key = `${this.identity.canonical(s.courseOfferingId)}|${s.period ?? s.startsAt ?? s.id}`;
+      const prev = seen.get(key);
+      if (
+        !prev ||
+        (prev.courseOfferingId !== this.identity.canonical(s.courseOfferingId) &&
+          s.courseOfferingId === this.identity.canonical(s.courseOfferingId))
+      )
+        seen.set(key, s);
+    }
+    return [...seen.values()].sort(
+      (a, b) =>
+        (a.period ?? 99) - (b.period ?? 99) || (a.startsAt ?? '').localeCompare(b.startsAt ?? ''),
+    );
+  }
+
+  private taskCitations(t: Task): Citation[] {
+    const ids = [t.assignmentId, t.examId].filter(
+      (x): x is NonNullable<typeof x> => x !== undefined,
+    );
+    const fromFacts = this.resolver.facts
+      .withSources(this.resolver.facts.getMany(t.sourceFactIds))
+      .flatMap((f) => (f.source ? [toCitation(f.source, this.timezone)] : []));
+    return uniqueCitations([...this.citationsFor(ids), ...fromFacts]);
+  }
+
+  deadlineItem(t: Task): DeadlineItem | undefined {
+    if (!t.dueAt) return undefined;
+    const due = new Date(t.dueAt);
+    const hoursLeft = Math.round(((due.getTime() - this.now().getTime()) / 3_600_000) * 10) / 10;
+    const course = this.courseRef(t.courseOfferingId);
+    const citations = this.taskCitations(t);
+    const origin =
+      t.origin === 'extracted' ? '（文章から抽出）' : t.origin === 'inferred' ? '（推定）' : '';
+    return {
+      taskId: t.id,
+      kind: t.taskKind,
+      title: t.title,
+      course,
+      dueAt: t.dueAt,
+      status: t.status,
+      origin: t.origin,
+      overdue: hoursLeft < 0,
+      hoursLeft,
+      evidence: t.evidence,
+      summary: `${course ? `${course.title}: ` : ''}${t.title} 締切 ${formatShortJa(due, this.timezone)}${origin}${citations[0] ? `（根拠: ${citations[0].label}）` : ''}`,
+      citations,
+    };
+  }
+
+  private taskItem(t: Task): TaskItem {
+    return {
+      taskId: t.id,
+      title: t.title,
+      course: this.courseRef(t.courseOfferingId),
+      dueAt: t.dueAt,
+      status: t.status,
+      taskKind: t.taskKind,
+      origin: t.origin,
+      createdBy: t.createdBy,
+      citations: this.taskCitations(t),
+    };
+  }
+
+  private deadlines(
+    from: Date | undefined,
+    to: Date,
+    options: { courseOfferingId?: string; kinds?: Task['taskKind'][] } = {},
+  ): DeadlineItem[] {
+    return this.tasks
+      .list({
+        statuses: OPEN_STATUSES,
+        ...(from ? { dueFrom: from.toISOString() } : {}),
+        dueTo: to.toISOString(),
+        includeUndated: false,
+        ...(options.courseOfferingId ? { courseOfferingId: options.courseOfferingId } : {}),
+      })
+      .filter((t) => !options.kinds || options.kinds.includes(t.taskKind))
+      .map((t) => this.deadlineItem(t))
+      .filter((d): d is DeadlineItem => d !== undefined);
+  }
+
+  changeItem(c: ChangeEvent): ChangeItem {
+    return {
+      id: c.id,
+      entityId: c.entityId,
+      entityKind: c.entityKind,
+      type: c.type,
+      summary: c.summary ?? `${c.entityKind} ${c.type}`,
+      changedFields: c.changedFields,
+      before: c.before,
+      after: c.after,
+      occurredAt: c.occurredAt,
+      observedAt: c.observedAt,
+      course: this.courseRef(c.courseOfferingId),
+      citations: this.citationsFor([c.entityId]),
+    };
+  }
+
+  announcementItem(a: Announcement): AnnouncementItem {
+    return {
+      id: a.id,
+      title: a.title,
+      body: truncate(a.body, 400),
+      publishedAt: a.publishedAt,
+      importance: a.importance,
+      scope: a.scope,
+      author: a.authorName,
+      course: this.courseRef(a.courseOfferingId),
+      citations: this.citationsFor([a.id]),
+    };
+  }
+
+  materialItem(m: Material): MaterialItem {
+    return {
+      id: m.id,
+      title: m.title,
+      materialKind: m.materialKind,
+      url: m.url,
+      publishedAt: m.publishedAt,
+      documentId: m.documentId,
+      citations: this.citationsFor([m.id, ...(m.documentId ? [m.documentId] : [])]),
+    };
+  }
+
+  conflictItem(c: Conflict): ConflictItem {
+    const subject = this.entities.get(c.subject, { includeDeleted: true });
+    const facts = this.resolver.facts.withSources(
+      this.resolver.facts.getMany(c.candidates.map((x) => x.factId)),
+    );
+    const cite = new Map(
+      facts.map((f) => [f.fact.id, f.source ? toCitation(f.source, this.timezone) : undefined]),
+    );
+    const candidates = c.candidates.map((x) => ({
+      value: x.value,
+      origin: x.origin,
+      authority: x.authority,
+      source: x.sourceLabel ?? x.sourceSystem,
+      observedAt: x.observedAt,
+      citation: cite.get(x.factId),
+    }));
+    const label = subject ? entityLabel(subject) : c.subject;
+    return {
+      id: c.id,
+      subject: c.subject,
+      subjectLabel: label,
+      predicate: c.predicate,
+      detectedAt: c.detectedAt,
+      candidates,
+      note: `「${label}」の${c.predicate}について情報源の間で食い違いがあります: ${candidates.map((x) => `${String(x.value)}（${x.citation?.label ?? x.source}）`).join(' / ')}`,
+      citations: uniqueCitations(candidates.flatMap((x) => (x.citation ? [x.citation] : []))),
+    };
+  }
+
+  private openConflicts(courseIds?: readonly string[]): ConflictItem[] {
+    const all = this.resolver.listConflicts({ status: 'open' });
+    const filtered = courseIds
+      ? all.filter((c) => {
+          if (courseIds.includes(c.subject)) return true;
+          const e = this.entities.get(c.subject, { includeDeleted: true }) as
+            (CanonicalEntity & { courseOfferingId?: string }) | undefined;
+          return e?.courseOfferingId !== undefined && courseIds.includes(e.courseOfferingId);
+        })
+      : all;
+    return filtered.map((c) => this.conflictItem(c));
+  }
+
+  private announcementsBetween(
+    from: Date,
+    to: Date,
+    filter: (a: Announcement) => boolean = () => true,
+  ): AnnouncementItem[] {
+    return this.entities
+      .listInRange('announcement', 'publishedAt', from.toISOString(), to.toISOString())
+      .filter(filter)
+      .reverse()
+      .map((a) => this.announcementItem(a));
+  }
+
+  private materialsFor(courseIds: readonly string[], since?: Date): MaterialItem[] {
+    return this.entities
+      .list('material', { where: { courseOfferingId: courseIds } })
+      .filter((m) => !since || !m.publishedAt || new Date(m.publishedAt) >= since)
+      .map((m) => this.materialItem(m));
+  }
+
+  private preparationFor(item: ClassItem): PreparationItem {
+    const start = item.startsAt
+      ? new Date(item.startsAt)
+      : parseZonedDate(item.date, this.timezone);
+    const ids = item.course.linkedIds;
+    const lectures = this.entities
+      .list('lecture', { where: { courseOfferingId: ids } })
+      .filter((l) => l.date === item.date);
+    const lectureIds = new Set(lectures.map((l) => l.id));
+    const materials = this.entities
+      .list('material', { where: { courseOfferingId: ids } })
+      .filter(
+        (m) =>
+          (m.lectureId && lectureIds.has(m.lectureId)) ||
+          (m.publishedAt &&
+            start.getTime() - new Date(m.publishedAt).getTime() < 7 * DAY &&
+            new Date(m.publishedAt) <= start),
+      )
+      .map((m) => this.materialItem(m));
+    const dueBeforeClass = this.deadlines(this.now(), new Date(start.getTime() + 60_000), {
+      courseOfferingId: item.course.id,
+    });
+    const announcements = this.announcementsBetween(
+      new Date(start.getTime() - 7 * DAY),
+      start,
+      (a) => a.courseOfferingId !== undefined && ids.includes(a.courseOfferingId),
+    );
+    return {
+      sessionId: item.sessionId,
+      course: item.course,
+      startsAt: item.startsAt,
+      materials,
+      dueBeforeClass,
+      announcements,
+      citations: uniqueCitations([
+        ...item.citations,
+        ...materials.flatMap((m) => m.citations),
+        ...announcements.flatMap((a) => a.citations),
+      ]),
+    };
+  }
+
+  // ---------- views (§18) ----------
+
+  private day<V extends 'today' | 'tomorrow'>(view: V, offset: number): DayContext<V> {
+    const now = this.now();
+    const dayStart = addZonedDays(startOfZonedDay(now, this.timezone), offset, this.timezone);
+    const date = zonedDateString(dayStart, this.timezone);
+    const classes = this.sessionsOn(date).map((s) => this.classItem(s));
+    const since = addZonedDays(startOfZonedDay(now, this.timezone), -1, this.timezone);
+    const changes = this.changes
+      .list({ since: since.toISOString() })
+      .reverse()
+      .map((c) => this.changeItem(c));
+    const horizon = addZonedDays(dayStart, 15, this.timezone);
+    const deadlines = this.deadlines(new Date(now.getTime() - 7 * DAY), horizon);
+    const tasks = this.tasks
+      .list({ statuses: OPEN_STATUSES })
+      .filter((t) => !t.dueAt || new Date(t.dueAt) >= new Date(now.getTime() - 7 * DAY))
+      .slice(0, 30)
+      .map((t) => this.taskItem(t));
+    const importantAnnouncements = this.announcementsBetween(
+      new Date(now.getTime() - 3 * DAY),
+      new Date(now.getTime() + 1),
+      (a) => a.importance === 'critical' || a.importance === 'high' || a.scope === 'university',
+    );
+    const preparation = classes.filter((c) => !c.cancelled).map((c) => this.preparationFor(c));
+    return {
+      ...this.base(view),
+      date,
+      classes,
+      changes,
+      deadlines,
+      tasks,
+      importantAnnouncements,
+      preparation,
+      conflicts: this.openConflicts(),
+    };
+  }
+
+  /** getTodayContext() → {classes, changes, deadlines, tasks, importantAnnouncements, preparation, conflicts} (§17). */
+  today(): TodayContext {
+    return this.day('today', 0);
+  }
+
+  tomorrow(): TomorrowContext {
+    return this.day('tomorrow', 1);
+  }
+
+  week(): WeekContext {
+    const now = this.now();
+    const from = startOfZonedWeek(now, this.timezone);
+    const to = addZonedDays(from, 7, this.timezone);
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const date = zonedDateString(addZonedDays(from, i, this.timezone), this.timezone);
+      return { date, classes: this.sessionsOn(date).map((s) => this.classItem(s)) };
+    });
+    const all = this.deadlines(from, to);
+    return {
+      ...this.base('week'),
+      from: from.toISOString(),
+      to: to.toISOString(),
+      days,
+      deadlines: all.filter((d) => d.kind !== 'exam_preparation'),
+      exams: all.filter((d) => d.kind === 'exam_preparation'),
+      changes: this.changes
+        .list({ since: new Date(now.getTime() - 7 * DAY).toISOString() })
+        .reverse()
+        .map((c) => this.changeItem(c)),
+      conflicts: this.openConflicts(),
+    };
+  }
+
+  course(courseOfferingId: string): CourseContext {
+    const c = this.requireCourse(courseOfferingId);
+    const now = this.now();
+    const ids = c.linkedIds;
+    const offerings = ids
+      .map((id) => this.entities.getOfKind('courseOffering', id))
+      .filter((o): o is CourseOffering => o !== undefined);
+    const today = zonedDateString(now, this.timezone);
+    const sessions = this.entities
+      .list('classSession', { where: { courseOfferingId: ids }, orderBy: 'date' })
+      .filter((s) => s.date >= today)
+      .slice(0, 5)
+      .map((s) => this.classItem(s));
+    const lectures = this.entities
+      .list('lecture', { where: { courseOfferingId: ids }, orderBy: 'date' })
+      .filter((l) => l.date <= today)
+      .slice(-3)
+      .reverse()
+      .map((l) => this.lectureBundle(l));
+    return {
+      ...this.base('course'),
+      course: { id: c.id, title: c.title, courseCode: c.courseCode, linkedIds: c.linkedIds },
+      instructors: [...new Set(offerings.flatMap((o) => o.instructorNames))],
+      schedule: c.offering.schedule.map((s) => ({
+        dayOfWeek: s.dayOfWeek,
+        period: s.period,
+        room: s.room,
+      })),
+      room: this.resolvedValue<string>(this.resolver.resolve(ids, 'room'), c.offering.room),
+      sources: ids.map((id) => ({
+        id,
+        sourceId: this.entities.meta(id)?.sourceId,
+        citations: this.citationsFor([id]),
+      })),
+      upcomingClasses: sessions,
+      recentLectures: lectures,
+      deadlines: this.deadlines(
+        new Date(now.getTime() - 7 * DAY),
+        addZonedDays(now, 60, this.timezone),
+        { courseOfferingId: c.id },
+      ),
+      announcements: this.entities
+        .list('announcement', { where: { courseOfferingId: ids } })
+        .sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''))
+        .slice(0, 10)
+        .map((a) => this.announcementItem(a)),
+      materials: this.materialsFor(ids),
+      changes: this.changes
+        .list({ since: new Date(now.getTime() - 14 * DAY).toISOString(), courseOfferingIds: ids })
+        .reverse()
+        .map((x) => this.changeItem(x)),
+      conflicts: this.openConflicts(ids),
+      pendingLinks: ids.flatMap((id) =>
+        this.identity.listLinks({ entityId: id, status: 'suggested' }),
+      ),
+    };
+  }
+
+  deadline(options: { days?: number; courseOfferingId?: string } = {}): DeadlineContext {
+    const now = this.now();
+    const all = this.deadlines(
+      new Date(now.getTime() - 30 * DAY),
+      addZonedDays(now, options.days ?? 14, this.timezone),
+      options.courseOfferingId ? { courseOfferingId: options.courseOfferingId } : {},
+    );
+    return {
+      ...this.base('deadline'),
+      overdue: all.filter((d) => d.overdue),
+      upcoming: all.filter((d) => !d.overdue),
+    };
+  }
+
+  /** What changed since `since` (default: start of yesterday) — "昨日から何が変わった？" (§13, §45). */
+  changesSince(options: { since?: string; courseOfferingId?: string } = {}): ChangesContext {
+    const since =
+      options.since ??
+      addZonedDays(startOfZonedDay(this.now(), this.timezone), -1, this.timezone).toISOString();
+    const ids = options.courseOfferingId
+      ? this.identity.expand(options.courseOfferingId)
+      : undefined;
+    return {
+      ...this.base('changes'),
+      since,
+      changes: this.changes
+        .list({ since, ...(ids ? { courseOfferingIds: ids } : {}) })
+        .reverse()
+        .map((c) => this.changeItem(c)),
+      conflicts: this.openConflicts(ids),
+    };
+  }
+
+  private nextSession(courseIds: readonly string[], after: Date): ClassSession | undefined {
+    return this.entities
+      .list('classSession', { where: { courseOfferingId: courseIds }, orderBy: 'date' })
+      .filter((s) => s.status !== 'cancelled')
+      .find(
+        (s) =>
+          (s.endsAt
+            ? new Date(s.endsAt)
+            : addZonedDays(parseZonedDate(s.date, this.timezone), 1, this.timezone)) > after,
+      );
+  }
+
+  classPreparation(options: {
+    sessionId?: string;
+    courseOfferingId?: string;
+  }): ClassPreparationContext {
+    let session: ClassSession | undefined;
+    if (options.sessionId) session = this.entities.getOfKind('classSession', options.sessionId);
+    else if (options.courseOfferingId)
+      session = this.nextSession(this.identity.expand(options.courseOfferingId), this.now());
+    else
+      session =
+        this.sessionsOn(zonedDateString(this.now(), this.timezone)).find(
+          (s) => !s.endsAt || new Date(s.endsAt) > this.now(),
+        ) ?? this.nextAnySession();
+    if (!session)
+      return {
+        ...this.base('class-preparation'),
+        session: undefined,
+        preparation: undefined,
+        previousLecture: undefined,
+      };
+    const item = this.classItem(session);
+    const prev = this.entities
+      .list('lecture', { where: { courseOfferingId: item.course.linkedIds }, orderBy: 'date' })
+      .filter((l) => l.date < session.date)
+      .pop();
+    return {
+      ...this.base('class-preparation'),
+      session: item,
+      preparation: this.preparationFor(item),
+      previousLecture: prev ? this.lectureBundle(prev) : undefined,
+    };
+  }
+
+  private nextAnySession(): ClassSession | undefined {
+    const today = zonedDateString(this.now(), this.timezone);
+    const until = zonedDateString(addZonedDays(this.now(), 14, this.timezone), this.timezone);
+    return this.entities
+      .listByDateRange('classSession', 'date', today, until)
+      .find((s) => s.status !== 'cancelled' && (!s.endsAt || new Date(s.endsAt) > this.now()));
+  }
+
+  classReview(
+    options: {
+      lectureId?: string;
+      sessionId?: string;
+      courseOfferingId?: string;
+      date?: string;
+    } = {},
+  ): ClassReviewContext {
+    let lecture: LectureBundle | undefined;
+    if (options.lectureId || options.sessionId || (options.courseOfferingId && options.date)) {
+      lecture = this.lecture(options);
+    } else {
+      const today = zonedDateString(this.now(), this.timezone);
+      const ids = options.courseOfferingId
+        ? this.identity.expand(options.courseOfferingId)
+        : undefined;
+      const sessions = (
+        ids
+          ? this.entities.list('classSession', {
+              where: { courseOfferingId: ids },
+              orderBy: 'date',
+            })
+          : this.entities.list('classSession', { orderBy: 'date' })
+      ).filter(
+        (s) =>
+          s.date <= today &&
+          (!s.startsAt || new Date(s.startsAt) <= this.now()) &&
+          s.status !== 'cancelled',
+      );
+      const last = sessions[sessions.length - 1];
+      if (last) lecture = this.lecture({ sessionId: last.id });
+    }
+    const courseId = lecture?.course?.id;
+    return {
+      ...this.base('class-review'),
+      lecture,
+      nextDeadlines: courseId
+        ? this.deadlines(this.now(), addZonedDays(this.now(), 14, this.timezone), {
+            courseOfferingId: courseId,
+          })
+        : [],
+    };
+  }
+
+  /** Lecture aggregation (§21) by lecture id, session id, or (course, date). */
+  lecture(options: {
+    lectureId?: string;
+    sessionId?: string;
+    courseOfferingId?: string;
+    date?: string;
+  }): LectureBundle | undefined {
+    if (options.lectureId) {
+      const l = this.entities.getOfKind('lecture', options.lectureId);
+      return l ? this.lectureBundle(l) : undefined;
+    }
+    let courseId = options.courseOfferingId;
+    let date = options.date;
+    if (options.sessionId) {
+      const s = this.entities.getOfKind('classSession', options.sessionId);
+      if (!s) return undefined;
+      courseId = s.courseOfferingId;
+      date = s.date;
+    }
+    if (!courseId || !date) return undefined;
+    const ids = this.identity.expand(courseId);
+    const lecture = this.entities.list('lecture', { where: { courseOfferingId: ids, date } })[0];
+    if (lecture) return this.lectureBundle(lecture);
+    return this.lectureBundle({ id: undefined, courseOfferingId: courseId, date });
+  }
+
+  private lectureBundle(
+    l: Lecture | { id: undefined; courseOfferingId: string; date: string },
+  ): LectureBundle {
+    const course = this.courseRef(l.courseOfferingId);
+    const ids = course?.linkedIds ?? [];
+    const lectureIds = new Set<string>();
+    if (l.id) lectureIds.add(l.id);
+    for (const other of this.entities.list('lecture', {
+      where: { courseOfferingId: ids, date: l.date },
+    }))
+      lectureIds.add(other.id);
+    const lecture = l.id ? (l as Lecture) : undefined;
+    const sessionEntity =
+      (lecture?.classSessionId
+        ? this.entities.getOfKind('classSession', lecture.classSessionId)
+        : undefined) ??
+      this.entities.list('classSession', { where: { courseOfferingId: ids, date: l.date } })[0];
+    const dayStart = parseZonedDate(l.date, this.timezone);
+    const dayEnd = addZonedDays(dayStart, 1, this.timezone);
+    const materials = this.entities
+      .list('material', { where: { courseOfferingId: ids } })
+      .filter(
+        (m) =>
+          (m.lectureId && lectureIds.has(m.lectureId)) ||
+          (m.publishedAt &&
+            new Date(m.publishedAt) >= dayStart &&
+            new Date(m.publishedAt) < dayEnd),
+      );
+    const transcripts = [...lectureIds].flatMap((id) =>
+      this.entities.list('lectureTranscript', { where: { lectureId: id } }),
+    );
+    const segments: SegmentItem[] = transcripts.flatMap((t) =>
+      this.entities
+        .list('lectureSegment', { where: { transcriptId: t.id }, orderBy: 'ordinal' })
+        .map((s) => ({
+          id: s.id,
+          startMs: s.startMs,
+          timestamp: hms(s.startMs),
+          speaker: s.speaker,
+          text: s.text,
+          citations: this.citationsFor([s.id]),
+        })),
+    );
+    const announcements = this.entities
+      .list('announcement', { where: { courseOfferingId: ids } })
+      .filter(
+        (a) =>
+          (a.lectureId && lectureIds.has(a.lectureId)) ||
+          (a.publishedAt &&
+            new Date(a.publishedAt) >= dayStart &&
+            new Date(a.publishedAt) < dayEnd),
+      )
+      .map((a) => this.announcementItem(a));
+    const questions: QuestionItem[] = this.entities
+      .list('message', { where: { courseOfferingId: ids } })
+      .filter(
+        (m) =>
+          (m.lectureId && lectureIds.has(m.lectureId)) ||
+          (m.isQuestion &&
+            m.sentAt &&
+            new Date(m.sentAt) >= dayStart &&
+            new Date(m.sentAt) < dayEnd),
+      )
+      .map((m) => ({
+        id: m.id,
+        author: m.authorName,
+        body: m.body,
+        sentAt: m.sentAt,
+        citations: this.citationsFor([m.id]),
+      }));
+    const factSubjects = [...lectureIds, ...(sessionEntity ? [sessionEntity.id] : [])];
+    const facts: FactItem[] = this.resolver.facts
+      .withSources(this.resolver.facts.active({ subjects: factSubjects }))
+      .map((f) => ({
+        id: f.fact.id,
+        subject: f.fact.subject,
+        predicate: f.fact.predicate,
+        value: f.fact.value,
+        origin: f.fact.origin,
+        confidence: f.fact.confidence,
+        evidence: f.fact.evidence,
+        citations: f.source ? [toCitation(f.source, this.timezone)] : [],
+      }));
+    const session = sessionEntity ? this.classItem(sessionEntity) : undefined;
+    const slides = materials
+      .filter((m) => m.materialKind !== 'recording')
+      .map((m) => this.materialItem(m));
+    const recordings = materials
+      .filter((m) => m.materialKind === 'recording')
+      .map((m) => this.materialItem(m));
+    return {
+      lectureId: lecture?.id,
+      date: l.date,
+      title: lecture?.title ?? (course ? `${course.title} ${l.date}` : undefined),
+      course,
+      session,
+      slides,
+      recordings,
+      transcript: segments,
+      announcements,
+      questions,
+      facts,
+      citations: uniqueCitations([
+        ...this.citationsFor([...lectureIds, ...transcripts.map((t) => t.id)]),
+        ...(session?.citations ?? []),
+        ...slides.flatMap((s) => s.citations),
+        ...segments.slice(0, 3).flatMap((s) => s.citations),
+      ]),
+    };
+  }
+
+  examPreparation(
+    options: { examId?: string; courseOfferingId?: string } = {},
+  ): ExamPreparationContext {
+    const now = this.now();
+    let exams: Exam[];
+    if (options.examId) {
+      const e = this.entities.getOfKind('exam', options.examId);
+      exams = e ? [e] : [];
+    } else {
+      const ids = options.courseOfferingId
+        ? this.identity.expand(options.courseOfferingId)
+        : undefined;
+      exams = this.entities
+        .listInRange(
+          'exam',
+          'startsAt',
+          now.toISOString(),
+          addZonedDays(now, 60, this.timezone).toISOString(),
+        )
+        .filter(
+          (e) => !ids || (e.courseOfferingId !== undefined && ids.includes(e.courseOfferingId)),
+        );
+    }
+    const items = exams.map((e) => {
+      const task = this.tasks.list().find((t) => t.examId === e.id);
+      const base: DeadlineItem =
+        (task && this.deadlineItem(task)) ??
+        ({
+          taskId: '',
+          kind: 'exam_preparation',
+          title: e.title,
+          course: this.courseRef(e.courseOfferingId),
+          dueAt: e.startsAt ?? '',
+          status: 'unknown',
+          origin: 'authoritative',
+          overdue: false,
+          hoursLeft: e.startsAt ? (new Date(e.startsAt).getTime() - now.getTime()) / 3_600_000 : 0,
+          evidence: undefined,
+          summary: e.title,
+          citations: this.citationsFor([e.id]),
+        } satisfies DeadlineItem);
+      const at = e.startsAt ? new Date(e.startsAt) : undefined;
+      return {
+        ...base,
+        examId: e.id,
+        room: this.resolvedValue<string>(
+          this.resolver.resolve([e.id], 'room', at ? { at } : {}),
+          e.room,
+        ),
+        scope: e.scope,
+        daysLeft: e.startsAt
+          ? Math.ceil((new Date(e.startsAt).getTime() - now.getTime()) / DAY)
+          : 0,
+        citations: uniqueCitations([...this.citationsFor([e.id]), ...base.citations]),
+      };
+    });
+    const courseIds = [
+      ...new Set(
+        exams.flatMap((e) => (e.courseOfferingId ? this.identity.expand(e.courseOfferingId) : [])),
+      ),
+    ];
+    const announcements = this.entities
+      .list('announcement', { where: { courseOfferingId: courseIds } })
+      .filter((a) => /試験|テスト|exam|範囲/i.test(`${a.title}${a.body}`))
+      .map((a) => this.announcementItem(a));
+    const transcriptMentions: SegmentItem[] = [];
+    if (this.search && courseIds.length) {
+      for (const h of this.search.lexical(['試験'], { kinds: ['lectureSegment'] })) {
+        if (h.courseOfferingId && !courseIds.includes(h.courseOfferingId)) continue;
+        const s = this.entities.getOfKind('lectureSegment', h.id);
+        if (s)
+          transcriptMentions.push({
+            id: s.id,
+            startMs: s.startMs,
+            timestamp: hms(s.startMs),
+            speaker: s.speaker,
+            text: s.text,
+            citations: h.citations,
+          });
+      }
+    }
+    return {
+      ...this.base('exam-preparation'),
+      exams: items,
+      announcements,
+      transcriptMentions,
+      materials: this.materialsFor(courseIds),
+    };
+  }
+
+  /** Administrative overview: university notices, source health, things awaiting the user's confirmation. */
+  admin(): AdminContext {
+    const now = this.now();
+    const stores = createStores(this.db, this.clock);
+    const raw = new RawStore(this.db, { clock: this.clock });
+    const sources: SourceStatus[] = raw.listSources().map((s) => {
+      const h = stores.health.get(s.id);
+      const v = stores.versions.latest(s.id);
+      return {
+        sourceId: s.id,
+        displayName: s.displayName,
+        state: h?.state ?? 'unknown',
+        message: h?.message,
+        lastSyncAt: s.lastSyncAt,
+        lastSuccessAt: h?.lastSuccessAt,
+        detectedVersion: v?.version ?? h?.detectedVersion,
+        versionKnown: v?.known,
+        openDrift: stores.drift.list({ sourceId: s.id, unresolvedOnly: true }).length,
+      };
+    });
+    return {
+      ...this.base('admin'),
+      universityAnnouncements: this.announcementsBetween(
+        new Date(now.getTime() - 14 * DAY),
+        new Date(now.getTime() + 1),
+        (a) => a.scope === 'university' || a.scope === 'faculty',
+      ),
+      sources,
+      conflicts: this.openConflicts(),
+      pendingLinks: this.identity.listLinks({ status: 'suggested' }),
+    };
+  }
+
+  /** Day-of-week helper for callers rendering timetables. */
+  weekdayOf(date: string): number {
+    return zonedParts(parseZonedDate(date, this.timezone), this.timezone).weekday;
+  }
+}

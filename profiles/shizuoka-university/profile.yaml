@@ -1,0 +1,38 @@
+# Shizuoka University deployment profile (§54, §76).
+# Settings only. Product logic lives in connectors/*; nothing here is Shizuoka-specific code.
+# Period times are the commonly published 静岡大学 timetable; verify against the current
+# academic calendar before relying on them.
+id: shizuoka-university
+name: 静岡大学
+locale: ja-JP
+academicCalendar:
+  timezone: Asia/Tokyo
+  periods:
+    - { period: 1, start: '08:40', end: '10:10' }
+    - { period: 2, start: '10:20', end: '11:50' }
+    - { period: 3, start: '12:45', end: '14:15' }
+    - { period: 4, start: '14:25', end: '15:55' }
+    - { period: 5, start: '16:05', end: '17:35' }
+  terms:
+    - { id: '2026-1', name: '2026年度 前期', year: 2026, start: '2026-04-08', end: '2026-08-10' }
+    - { id: '2026-2', name: '2026年度 後期', year: 2026, start: '2026-10-01', end: '2027-02-10' }
+sources:
+  academic: { product: livecampusu }
+  collaboration: { product: microsoft365 }
+  discussion: { product: edstem }
+  syllabus: { product: syllabus }
+  lectures: { product: chatgpt-record }
+  files: { product: local-files }
+products:
+  livecampusu:
+    # Deployment settings consumed by connectors/livecampusu. The connector decides how to use them.
+    auth: entra
+    sourceLabel: 学務情報システム
+  microsoft365:
+    tenantHint: shizuoka.ac.jp
+    sourceLabel: Microsoft Teams
+  syllabus:
+    sourceLabel: シラバス
+privacy:
+  # Student IDs are redacted from logs. Pattern is intentionally broad (8 alphanumerics).
+  studentIdPattern: "\\b[0-9]{2}[0-9A-Z][0-9]{5}\\b"

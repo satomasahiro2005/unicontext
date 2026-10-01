@@ -1,0 +1,30 @@
+{
+  "name": "@unicontext/provenance",
+  "version": "1.0.0",
+  "description": "Fact store, source references and conflict resolution",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "default-rules.yaml"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@unicontext/core": "workspace:*",
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/database": "workspace:*",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5",
+    "drizzle-orm": "^0.45.3"
+  }
+}

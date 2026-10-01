@@ -1,0 +1,28 @@
+{
+  "name": "@unicontext/sync-engine",
+  "version": "1.0.0",
+  "description": "Raw ingestion, normalization pipeline, scheduler, health and change events",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@unicontext/core": "workspace:*",
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/database": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/provenance": "workspace:*"
+  }
+}

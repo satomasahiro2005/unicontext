@@ -1,0 +1,15 @@
+{
+  "name": "@unicontext/tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cross-package integration tests",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/context-engine": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/database": "workspace:*"
+  }
+}

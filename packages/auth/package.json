@@ -1,0 +1,25 @@
+{
+  "name": "@unicontext/auth",
+  "version": "1.0.0",
+  "description": "Secret storage (OS keychain) and OAuth 2.0 PKCE loopback helper",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@unicontext/core": "workspace:*",
+    "@napi-rs/keyring": "^2.1.0"
+  }
+}

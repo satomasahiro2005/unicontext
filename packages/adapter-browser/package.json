@@ -1,0 +1,25 @@
+{
+  "name": "@unicontext/adapter-browser",
+  "version": "1.0.0",
+  "description": "Browser (Playwright) adapter (stub)",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@unicontext/connector-sdk": "workspace:*"
+  }
+}

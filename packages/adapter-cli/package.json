@@ -1,0 +1,25 @@
+{
+  "name": "@unicontext/adapter-cli",
+  "version": "1.0.0",
+  "description": "External CLI adapter (stub)",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@unicontext/connector-sdk": "workspace:*"
+  }
+}

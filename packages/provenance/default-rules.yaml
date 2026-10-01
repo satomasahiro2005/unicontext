@@ -1,0 +1,47 @@
+# Default authority rules for conflict resolution (§12).
+# For each predicate, sources earlier in the list are more authoritative.
+# Authorities are free-form strings set on SourceReference.authority by connectors.
+version: 1
+# Human corrections (origin "user", §74) always win.
+userOverrides: true
+# What to do when a LOWER-authority source reports a DIFFERENT value that is NEWER than the
+# best-authority value (e.g. 学務 9/1 says A, Teams instructor post 10/2 says B):
+#   conflict  -> keep both and create a Conflict (default; the AI is told they disagree)
+#   recency   -> trust the newer value
+#   authority -> trust the higher authority
+recencyOverride: conflict
+# Facts below this confidence never override or conflict with better sources.
+minConfidence: 0.5
+predicates:
+  room: [academic-system, instructor-announcement, syllabus]
+  class_status: [academic-system, instructor-announcement, calendar]
+  starts_at: [academic-system, instructor-announcement, calendar, syllabus]
+  grade: [academic-system]
+  grade_letter: [academic-system]
+  assignment_due: [submission-system, instructor-announcement, syllabus]
+  submission_status: [submission-system]
+  exam_at: [academic-system, instructor-announcement, syllabus]
+  deadline:
+    [
+      submission-system,
+      instructor-announcement,
+      syllabus,
+      lms,
+      collaboration,
+      discussion,
+      transcript,
+    ]
+# Used for predicates not listed above.
+default:
+  [
+    academic-system,
+    submission-system,
+    instructor-announcement,
+    lms,
+    syllabus,
+    calendar,
+    collaboration,
+    discussion,
+    transcript,
+    local-file,
+  ]
