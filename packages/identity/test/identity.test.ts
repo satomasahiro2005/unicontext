@@ -156,4 +156,41 @@ describe('IdentityResolver', () => {
     expect(new IdentityResolver(db).expand(edId)).toEqual([lcuId, edId]);
     db.close();
   });
+
+  it('does not merge two same-titled sections through one title-only folder', () => {
+    const db = openDatabase();
+    const entities = new EntityStore(db);
+    const secA = stableId('courseOffering', 'syllabus', 'A');
+    const secB = stableId('courseOffering', 'syllabus', 'B');
+    const folder = stableId('courseOffering', 'files', 'eng');
+    const section = (instructor: string, code: string) => ({
+      title: '英語I',
+      academicYear: 2026,
+      courseCode: code,
+      instructorNames: [instructor],
+    });
+    entities.upsert(offering(secA, section('山田太郎', 'E101')), { sourceId: 'syllabus' });
+    entities.upsert(offering(secB, section('佐藤花子', 'E102')), { sourceId: 'syllabus' });
+    entities.upsert(offering(folder, { title: '英語I', academicYear: 2026 }), {
+      sourceId: 'files',
+    });
+    const r = new IdentityResolver(db);
+    const report = r.resolveCourseOfferings();
+    expect(report.linked).toHaveLength(0);
+    expect(r.expand(secA)).toEqual([secA]);
+    expect(r.expand(secB)).toEqual([secB]);
+    expect(r.getLink(folder, secA)?.status).toBe('suggested');
+    expect(r.getLink(folder, secB)?.status).toBe('suggested');
+
+    // with only one candidate the exact title still auto-links
+    const db2 = openDatabase();
+    const e2 = new EntityStore(db2);
+    e2.upsert(offering(secA, section('山田太郎', 'E101')), { sourceId: 'syllabus' });
+    e2.upsert(offering(folder, { title: '英語I', academicYear: 2026 }), { sourceId: 'files' });
+    const r2 = new IdentityResolver(db2);
+    r2.resolveCourseOfferings();
+    expect(r2.getLink(folder, secA)?.status).toBe('auto');
+    db.close();
+    db2.close();
+  });
 });

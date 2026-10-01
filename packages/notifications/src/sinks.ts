@@ -54,7 +54,13 @@ async function loadNodeNotifier(): Promise<NotifierLike | undefined> {
   return typeof candidate.notify === 'function' ? (candidate as NotifierLike) : undefined;
 }
 
-const DESKTOP_TIMEOUT_MS = 10_000;
+/**
+ * How long send() waits for the notifier's callback. Toast helpers (SnoreToast, notify-send) may
+ * only call back when the toast is dismissed, and NotificationService delivery runs inside the sync
+ * engine's event bus — waiting for that would stall every sync that notifies. Errors reported
+ * after the grace period are logged instead of rejected.
+ */
+const DESKTOP_GRACE_MS = 250;
 
 /**
  * Desktop notifications through the optional `node-notifier` module. Returns undefined when the
@@ -87,7 +93,11 @@ export async function createDesktopSink(
     send(n) {
       if (!meetsPriority(n.priority, minPriority)) return;
       return new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, DESKTOP_TIMEOUT_MS);
+        let settled = false;
+        const timer = setTimeout(() => {
+          settled = true;
+          resolve();
+        }, DESKTOP_GRACE_MS);
         timer.unref?.();
         try {
           target.notify(
@@ -99,6 +109,11 @@ export async function createDesktopSink(
             },
             (err) => {
               clearTimeout(timer);
+              if (settled) {
+                if (err) logger.warn('desktop notification failed', { error: errorMessage(err) });
+                return;
+              }
+              settled = true;
               if (err) reject(err);
               else resolve();
             },
@@ -120,6 +135,19 @@ export interface WebhookSinkOptions {
   minPriority?: NotificationPriority;
   /** Default 10 seconds. */
   timeoutMs?: number;
+}
+
+/** Notifications carry course data: https only, except a receiver on this machine. */
+export function isAllowedWebhookUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol === 'https:') return true;
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  return u.protocol === 'http:' && (host === 'localhost' || host === '127.0.0.1' || host === '::1');
 }
 
 /** Signature header value for a webhook body. */
@@ -150,10 +178,12 @@ export function createWebhookSink(opts: WebhookSinkOptions): NotificationSink {
       timer.unref?.();
       let status: number;
       try {
+        // A redirect would re-send the signed body to wherever the server points.
         const res = await doFetch(opts.url, {
           method: 'POST',
           headers,
           body,
+          redirect: 'error',
           signal: controller.signal,
         });
         status = res.status;
@@ -187,7 +217,9 @@ export async function createSinksFromConfig(
     if (desktop) sinks.push(desktop);
   }
   const hook = config.sinks.webhook;
-  if (hook.enabled && hook.url) {
+  if (hook.enabled && hook.url && !isAllowedWebhookUrl(hook.url)) {
+    logger.warn('webhook disabled: url must be https:// (http:// only for localhost)');
+  } else if (hook.enabled && hook.url) {
     let secret: string | undefined;
     if (hook.secretRef) {
       try {

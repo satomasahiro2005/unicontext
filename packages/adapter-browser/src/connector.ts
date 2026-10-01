@@ -8,7 +8,12 @@ import {
 } from '@unicontext/connector-sdk';
 import { z } from 'zod';
 import { BrowserSourceAdapter } from './adapter.js';
-import { shibbolethConsentHandler, type InterstitialHandler } from './interstitial.js';
+import { AuthRequiredError } from '@unicontext/core';
+import {
+  hasVisibleCredentialField,
+  shibbolethConsentHandler,
+  type InterstitialHandler,
+} from './interstitial.js';
 import { BrowserSession, defaultProfileDir } from './session.js';
 import type { BrowserDriver } from './types.js';
 
@@ -195,6 +200,12 @@ export function createBrowserConnector(
           const items = [];
           for (const target of pages) {
             await page.goto(target.url, { waitUntil: 'load' });
+            // The session ran out mid-run (the page bounced to a sign-in form): do not store the
+            // login screen as the page's content.
+            if (await hasVisibleCredentialField(page))
+              throw new AuthRequiredError(
+                `Signed out while capturing ${target.url}. Run \`unicontext login ${ctx.sourceId}\`.`,
+              );
             const title = (target as { title?: string }).title ?? (await page.title());
             const text = htmlToText(await page.content()).slice(0, cfg.maxChars);
             items.push({

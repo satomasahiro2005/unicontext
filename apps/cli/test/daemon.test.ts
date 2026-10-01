@@ -250,7 +250,7 @@ describe('daemon commands without a running daemon', () => {
     expect(received[0]).toMatchObject({ handleSignals: true, port: 18124, dev: true });
   });
 
-  it('stop falls back to the pid in the lock file when the API is unreachable', async () => {
+  it('stop never kills an unverified lock pid without --force (pid reuse after a crash)', async () => {
     const dir = tempDir();
     const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
       stdio: 'ignore',
@@ -261,7 +261,32 @@ describe('daemon commands without a running daemon', () => {
         lockFile({ root: dir }),
         JSON.stringify({ pid: child.pid, port: 1, startedAt: '2026-10-01T00:00:00Z' }),
       );
+      const killed: number[] = [];
       const r = await exec(['--data-dir', dir, 'daemon', 'stop'], {
+        killProcess: (pid) => void killed.push(pid),
+      });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('--force');
+      expect(killed).toEqual([]);
+      expect(existsSync(lockFile({ root: dir }))).toBe(true);
+    } finally {
+      child.kill();
+      removeDir(dir);
+    }
+  });
+
+  it('stop --force falls back to the pid in the lock file when the API is unreachable', async () => {
+    const dir = tempDir();
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+      stdio: 'ignore',
+    });
+    try {
+      expect(child.pid).toBeDefined();
+      writeFileSync(
+        lockFile({ root: dir }),
+        JSON.stringify({ pid: child.pid, port: 1, startedAt: '2026-10-01T00:00:00Z' }),
+      );
+      const r = await exec(['--data-dir', dir, 'daemon', 'stop', '--force'], {
         killProcess: (pid) => void process.kill(pid),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       });

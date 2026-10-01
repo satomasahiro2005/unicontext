@@ -119,16 +119,22 @@ export class CancellationsAdapter implements SourceAdapter {
     return Promise.resolve();
   }
 
-  private async userCourses(warnings: string[]): Promise<UserCourse[]> {
+  /**
+   * The user's courses. A failing provider fails the run: storing the rows without their `matched`
+   * marks would delete the user's cancelled class sessions until the next good run.
+   */
+  private async userCourses(): Promise<UserCourse[]> {
     const courses = [...this.ctx.config.courses];
     if (this.courseProvider) {
+      let provided: readonly UserCourse[];
       try {
-        for (const c of await this.courseProvider()) {
-          const parsed = UserCourseSchema.safeParse(c);
-          if (parsed.success) courses.push(parsed.data);
-        }
+        provided = await this.courseProvider();
       } catch (e) {
-        warnings.push(`courseProvider failed: ${errorMessage(e)}`);
+        throw new ConnectorError(`courseProvider failed: ${errorMessage(e)}`, { cause: e });
+      }
+      for (const c of provided) {
+        const parsed = UserCourseSchema.safeParse(c);
+        if (parsed.success) courses.push(parsed.data);
       }
     }
     return courses;
@@ -162,7 +168,7 @@ export class CancellationsAdapter implements SourceAdapter {
             this.timezone,
           ).toISOString()
         : now.toISOString();
-      const courses = await this.userCourses(warnings);
+      const courses = await this.userCourses();
       const threshold = this.ctx.config.matchThreshold;
 
       const byKey = new Map<string, RawItem>();

@@ -440,11 +440,34 @@ describe('correct_fact is propose-only (§50, §74)', () => {
   });
 
   it('refuses grade / submission / enrolment predicates (§51)', async () => {
-    for (const predicate of ['grade', 'grade_letter', 'submission_status', 'enrollment_status']) {
+    const before = proposals.list().length;
+    for (const predicate of [
+      'grade',
+      'grade_letter',
+      'submission_status',
+      'enrollment_status',
+      'final_grade',
+      'courseGrade',
+      'assignment.submission',
+      'task_submitted',
+      'course_registration',
+      'exam_score',
+    ]) {
       const r = await call('correct_fact', { subject: dbCourse, predicate, value: 'A' });
       expect(r.isError, predicate).toBe(true);
       expect(r.text).toContain('not allowed');
     }
+    expect(proposals.list().length).toBe(before);
+  });
+
+  it('tool error text is redacted before it reaches the AI client (§60)', async () => {
+    const r = await call('correct_fact', {
+      subject: 'courseOffering:x access_token=SECRETVALUE123',
+      predicate: 'room',
+      value: 'x',
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).not.toContain('SECRETVALUE123');
   });
 
   it('rejects unknown subjects, bad predicates and non-JSON values', async () => {

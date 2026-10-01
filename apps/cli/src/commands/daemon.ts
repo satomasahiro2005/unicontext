@@ -128,8 +128,12 @@ export function registerDaemon(program: Command, h: Harness): void {
   daemon
     .command('stop')
     .description('デーモンを停止する / Stop the daemon')
+    .option(
+      '--force',
+      'APIが応答しなくてもロックファイルのpidを終了する / kill the lock file pid even when the API does not answer',
+    )
     .action(
-      action(h, async (ctx) => {
+      action<{ force?: boolean }>(h, async (ctx, { opts }) => {
         const paths = ctx.paths();
         const client = await probe(ctx);
         const lock = readLock(paths);
@@ -147,6 +151,14 @@ export function registerDaemon(program: Command, h: Harness): void {
         if (!stopped) {
           const pid = lock?.pid;
           if (pid && isProcessAlive(pid)) {
+            // Only a pid that answered as the daemon (discover checks health.pid against the lock)
+            // is killed without --force: after a crash or reboot the pid may belong to any process.
+            if (!client && !opts.force)
+              throw new CliError(
+                `デーモンが応答しません（ロックファイルのpid ${pid}）`,
+                1,
+                'このpidは別のプロセスに再利用されている可能性があるため停止しませんでした。デーモンであることを確認してから「unicontext daemon stop --force」を実行してください',
+              );
             try {
               ctx.deps.killProcess(pid);
               how = 'signal';

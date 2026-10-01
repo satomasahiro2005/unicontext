@@ -162,7 +162,9 @@ export class SyllabusAdapter implements SourceAdapter {
         units,
         seen: new Set(),
         failures: 0,
-        incomplete: !ok,
+        // Resumed at a later page without the run state (restart): earlier pages are unknown
+        // to this run, so it must not retire anything.
+        incomplete: !ok || !!input.pageToken,
         items: 0,
         firstError: undefined,
       };

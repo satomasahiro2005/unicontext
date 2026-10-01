@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { uptime } from 'node:os';
 import path from 'node:path';
 import type { DataPaths } from '@unicontext/core';
 
@@ -41,6 +42,24 @@ export function readLock(paths: Pick<DataPaths, 'root'>): LockInfo | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Lock files written more than this long before the computed boot time are from a previous boot. */
+const BOOT_SLACK_MS = 10 * 60_000;
+
+/**
+ * True when the lock was written before the current OS boot, so its pid (if alive) now belongs to
+ * an unrelated process. The slack absorbs wall-clock corrections after boot (NTP on machines
+ * without an RTC). An unparsable startedAt is not treated as stale.
+ */
+export function startedBeforeBoot(
+  info: Pick<LockInfo, 'startedAt'>,
+  now: Date = new Date(),
+  uptimeSeconds: number = uptime(),
+): boolean {
+  const started = Date.parse(info.startedAt);
+  if (Number.isNaN(started)) return false;
+  return started < now.getTime() - uptimeSeconds * 1000 - BOOT_SLACK_MS;
 }
 
 export interface DaemonLock {
@@ -87,7 +106,14 @@ export function acquireLock(
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       const cur = readLock(paths);
-      if (cur && cur.pid !== process.pid && isProcessAlive(cur.pid))
+      // After a crash or power loss the pid may have been reused by another process; a lock from a
+      // previous boot must not keep the daemon from starting.
+      if (
+        cur &&
+        cur.pid !== process.pid &&
+        isProcessAlive(cur.pid) &&
+        !startedBeforeBoot(cur, now())
+      )
         throw new DaemonAlreadyRunningError(cur);
       try {
         unlinkSync(file);

@@ -13,10 +13,12 @@ import {
   createSinksFromConfig,
   NotificationService,
 } from '@unicontext/notifications';
+import type { WatchHandle } from '@unicontext/connector-sdk';
 import type { FastifyInstance } from 'fastify';
 import { acquireLock, type DaemonLock } from './lock.js';
 import { createRestServer, defaultWebDir } from './rest.js';
 import { buildLogger, createRuntime, type Runtime, type RuntimeOptions } from './runtime.js';
+import { startWatchers } from './wiring.js';
 import { loadOrCreateApiToken } from './token.js';
 import { VERSION } from './version.js';
 import { resolveDataPaths, dataPathsFromRoot, type DataPaths } from '@unicontext/core';
@@ -82,6 +84,31 @@ export function daemonLogSink(paths: Pick<DataPaths, 'logs'>): LogSink {
   };
 }
 
+/**
+ * Wait (bounded) for syncs that are already running before the database is closed. SyncEngine.sync
+ * returns the in-flight promise for a running source, so this never starts a new sync.
+ */
+export async function drainSyncs(
+  uc: Pick<Runtime['uc'], 'sync'>,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const running = uc.sync
+    .sources()
+    .map((s) => s.sourceId)
+    .filter((id) => uc.sync.isRunning(id))
+    .map((id) => uc.sync.sync(id).catch(() => undefined));
+  if (running.length === 0) return;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    Promise.allSettled(running),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+      timer.unref?.();
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
 function resolvePaths(options: DaemonOptions, root: string | undefined): DataPaths {
   const r = root ?? options.dataDir;
   return r ? dataPathsFromRoot(r, r) : resolveDataPaths();
@@ -100,6 +127,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
   let runtime: Runtime | undefined;
   let app: FastifyInstance | undefined;
   let notifications: NotificationService | undefined;
+  let watchers: WatchHandle[] = [];
   try {
     runtime = await createRuntime({
       ...options,
@@ -115,19 +143,30 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
       resolveStopped = r;
     });
     let stopping: Promise<void> | undefined;
+    let onUnhandled: ((reason: unknown) => void) | undefined;
     const stop = (): Promise<void> => {
       stopping ??= (async () => {
         logger.info('unicontextd stopping');
         try {
           notifications?.stop();
           rt.uc.scheduler.stop();
+          await Promise.allSettled(watchers.map((w) => w.close()));
           await app?.close();
+          // A scheduled sync may still be writing; closing the database under it would turn its
+          // failure handling into an unhandled rejection.
+          await drainSyncs(rt.uc);
           await rt.close();
         } catch (e) {
           logger.error('error during shutdown', { error: errorMessage(e) });
         } finally {
-          lock?.release();
-          if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+          try {
+            lock?.release();
+            if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+          } catch (e) {
+            // Windows may still hold a file in the temp dir (EBUSY); never leave stop() pending.
+            logger.warn('cleanup after shutdown failed', { error: errorMessage(e) });
+          }
+          if (onUnhandled) process.off('unhandledRejection', onUnhandled);
           resolveStopped();
         }
       })();
@@ -176,9 +215,18 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
     }
 
     const background = options.noScheduler ? false : !dev && rt.config.sync.background;
-    if (background) rt.uc.scheduler.start();
+    if (background) {
+      rt.uc.scheduler.start();
+      watchers = await startWatchers(rt.uc, logger);
+    }
 
     if (options.handleSignals) {
+      // A stray rejection (connector, scheduler timer) must not kill the daemon: on Windows the
+      // Startup launcher does not restart it, so the user would silently lose sync until logon.
+      onUnhandled = (reason: unknown): void => {
+        logger.error('unhandled promise rejection', { error: errorMessage(reason) });
+      };
+      process.on('unhandledRejection', onUnhandled);
       const onSignal = (sig: string) => (): void => {
         logger.info('signal received', { signal: sig });
         void stop();
@@ -207,6 +255,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
     };
   } catch (e) {
     notifications?.stop();
+    await Promise.allSettled(watchers.map((w) => w.close()));
     await app?.close().catch(() => undefined);
     await runtime?.close().catch(() => undefined);
     lock?.release();

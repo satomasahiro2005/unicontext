@@ -99,14 +99,23 @@ export class SyncScheduler {
       sourceId,
       this.clock.setTimeout(() => {
         this.timers.delete(sourceId);
-        void this.engine.sync(sourceId).finally(() => {
-          if (this.started) this.afterRun(sourceId);
-        });
+        // A rejected timer run (source unregistered meanwhile, DB closed during shutdown) must not
+        // become an unhandled rejection that takes the daemon down.
+        void this.engine
+          .sync(sourceId)
+          .catch(() => undefined)
+          .finally(() => {
+            if (this.started) this.afterRun(sourceId);
+          });
       }, delayMs),
     );
   }
 
   private afterRun(sourceId: string): void {
+    if (!this.engine.sources().some((s) => s.sourceId === sourceId)) {
+      this.next.delete(sourceId);
+      return;
+    }
     const interval = this.intervalOf(sourceId);
     if (interval === undefined) return;
     const health = this.engine.health(sourceId);

@@ -66,7 +66,14 @@ export interface PolicyContext {
  */
 export function assertRequestAllowed(method: string, path: string, ctx: PolicyContext): void {
   const clean = path.replace(/;jsessionid=[^/?#]*/gi, '').replace(/[?#].*$/, '');
-  const segments = clean.split('/').filter(Boolean).map(safeDecode);
+  // Normalize the way a servlet container does before matching: path parameters (`;x=y`) are
+  // dropped from every segment, and an encoded separator (%2F, %5C) is treated as a separator,
+  // so `SC_14002B00_03;x/init` or `SC_14002B00_03%2Finit` cannot slip past the screen rules.
+  const segments = clean
+    .split('/')
+    .flatMap((raw) => safeDecode(raw.replace(/;.*$/, '')).split(/[/\\]/))
+    .map((seg) => seg.replace(/;.*$/, ''))
+    .filter(Boolean);
   const deny = (why: string): never => {
     throw new PolicyViolationError(
       `LiveCampusU request blocked by the read-only policy: ${method.toUpperCase()} ${clean} (${why})`,

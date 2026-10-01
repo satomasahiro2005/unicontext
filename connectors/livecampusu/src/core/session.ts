@@ -258,6 +258,16 @@ export class LcuSession {
     });
   }
 
+  /** Policy check of an absolute URL: it must be under the base URL, then the path rules apply. */
+  private checkUrl(method: string, url: string, grant?: PolicyGrant): void {
+    const rel = relativeLcuPath(this.d, url);
+    if (rel === undefined)
+      throw new PolicyViolationError(
+        `LiveCampusU request blocked: ${new URL(url).host} is outside the deployment base URL`,
+      );
+    this.check(method, rel, grant);
+  }
+
   /** Serial queue: one operation (incl. its redirects) at a time, in call order. */
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.queue.then(fn, fn);
@@ -392,6 +402,9 @@ export class LcuSession {
     let m = method;
     let body = opts.body;
     let headers = opts.headers ?? {};
+    // The first hop too (covers internal requests such as the bootstrap GET, and resolves the
+    // path the way fetch will, so `..` or an absolute URL cannot slip past the string check).
+    this.checkUrl(m, url, opts.grant);
     for (let hop = 0; ; hop++) {
       const res = await this.fetchOnce(m, url, headers, body);
       const setCookie = res.headers.getSetCookie();
@@ -418,14 +431,7 @@ export class LcuSession {
       }
       const nextMethod = res.status === 307 || res.status === 308 ? m : 'GET';
       // Every hop obeys the policy (a redirect to a denied screen is never followed).
-      assertRequestAllowed(nextMethod, next, {
-        gradesEnabled: this.gradesEnabled,
-        grant: opts.grant,
-        extraDeniedScreens: [this.d.screens.assignmentSubmit],
-        noticeListScreen: this.d.screens.noticeList,
-        noticeDetailScreen: this.d.screens.noticeDetail,
-        gradeScreens: [this.d.screens.grades, this.d.screens.gradeDashboard],
-      });
+      this.check(nextMethod, next, opts.grant);
       url = stripped.url;
       if (nextMethod === 'GET') {
         body = undefined;

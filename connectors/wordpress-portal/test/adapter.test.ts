@@ -95,6 +95,18 @@ describe('posts and categories', () => {
     expect(r.pages[1]?.complete?.sourceTypes).toEqual(['wp.category']);
   });
 
+  it('a run resumed at a later page without its state (restart) does not retire posts', async () => {
+    const posts = [1, 2, 3, 4, 5].map((n) => post(n, `2026-05-0${n}T00:00:00`));
+    const first = setup({ posts }, { perPage: 2 });
+    const p1 = await first.adapter.sync({ mode: 'full' });
+    expect(p1.hasMore).toBe(true);
+    // A fresh adapter instance (daemon restart) is asked for page 3 of that run.
+    const fresh = setup({ posts }, { perPage: 2 });
+    const p3 = await fresh.adapter.sync({ mode: 'full', pageToken: '3' });
+    expect(p3.hasMore).toBe(false);
+    expect(p3.complete?.sourceTypes ?? []).not.toContain('wp.post');
+  });
+
   it('filters by category id', async () => {
     const posts = [
       post(1, '2026-05-01T00:00:00', { categories: [1] }),

@@ -88,6 +88,7 @@ export function migrate(sqlite: Database.Database, options: MigrateOptions = {})
   const insert = sqlite.prepare(
     'INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)',
   );
+  const alreadyApplied = sqlite.prepare('SELECT 1 FROM schema_migrations WHERE version = ?');
   for (const m of migrations) {
     if (m.version <= applied.length || m.version > target) continue;
     const record: AppliedMigration = {
@@ -96,15 +97,22 @@ export function migrate(sqlite: Database.Database, options: MigrateOptions = {})
       checksum: migrationChecksum(m),
       appliedAt: now().toISOString(),
     };
+    let ran = false;
     try {
-      sqlite.transaction(() => {
-        sqlite.exec(m.sql);
-        insert.run(record.version, record.name, record.checksum, record.appliedAt);
-      })();
+      // IMMEDIATE takes the write lock first, and the re-check skips a migration another process
+      // (daemon and CLI starting together) applied after we read schema_migrations.
+      sqlite
+        .transaction(() => {
+          if (alreadyApplied.get(m.version)) return;
+          sqlite.exec(m.sql);
+          insert.run(record.version, record.name, record.checksum, record.appliedAt);
+          ran = true;
+        })
+        .immediate();
     } catch (e) {
       throw new MigrationError(`Migration ${m.name} failed`, { cause: e });
     }
-    done.push(record);
+    if (ran) done.push(record);
   }
   return { applied: done, currentVersion: currentSchemaVersion(sqlite) };
 }

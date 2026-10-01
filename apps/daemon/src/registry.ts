@@ -1,7 +1,11 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { ConnectorModule } from '@unicontext/connector-sdk';
+import {
+  type ConnectorModule,
+  isConnectorModule,
+  resolveConnectorExport,
+} from '@unicontext/connector-sdk';
 import {
   ConfigError,
   errorMessage,
@@ -22,7 +26,76 @@ export const CONNECTOR_PACKAGES: Readonly<Record<string, string>> = {
   syllabus: '@unicontext/syllabus',
   'chatgpt-record': '@unicontext/chatgpt-record',
   record: '@unicontext/chatgpt-record',
+  'wordpress-portal': '@unicontext/wordpress-portal',
+  // One package, two modules: the public 休講 page is `module: public-cancellations` of syllabus.
+  'lcu-public-cancellations': '@unicontext/syllabus',
 };
+
+/** Source config defaults implied by a product (merged under the user's config). */
+const PRODUCT_DEFAULTS: Readonly<Record<string, Record<string, unknown>>> = {
+  'lcu-public-cancellations': { module: 'public-cancellations' },
+};
+
+type ProfileSources = Pick<UniversityProfile, 'sources'>['sources'];
+
+function profileEntryFor(
+  sourceId: string,
+  profileSources: ProfileSources,
+): { role: string; product: string; settings: Record<string, unknown> } | undefined {
+  const pick = (role: string) => {
+    const entry = profileSources[role];
+    if (!entry) return undefined;
+    const { product, ...settings } = entry;
+    return { role, product, settings };
+  };
+  // 1. same key as a profile role ("academic"), 2. same name as a role's product ("livecampusu").
+  const byRole = pick(sourceId);
+  if (byRole) return byRole;
+  const byProduct = Object.keys(profileSources).find(
+    (role) => profileSources[role]?.product === sourceId,
+  );
+  if (byProduct) return pick(byProduct);
+  return undefined;
+}
+
+/**
+ * The sources the runtime actually runs (§53, §54): every source of the university profile (keyed
+ * by product name, e.g. `livecampusu`, `lcu-public-cancellations`) plus every source in
+ * config.yaml. A config entry that names a profile role or product is merged over that profile
+ * entry, so `sources.livecampusu: {}` keeps the profile's `connector`/`module`/`mapping` and a
+ * profile source marked `enabled: false` (EdStem) is switched on by listing it in config.yaml.
+ * Set `enabled: false` in config.yaml to turn a profile source off.
+ */
+export function effectiveSources(
+  sources: Readonly<Record<string, SourceConfig>>,
+  profile?: Pick<UniversityProfile, 'sources'>,
+): Record<string, SourceConfig> {
+  const profileSources: ProfileSources = profile?.sources ?? {};
+  const out: Record<string, SourceConfig> = {};
+  const usedRoles = new Set<string>();
+  for (const [sourceId, src] of Object.entries(sources)) {
+    const match = profileEntryFor(sourceId, profileSources);
+    if (match) usedRoles.add(match.role);
+    const product = match?.product ?? sourceId;
+    out[sourceId] = {
+      ...(PRODUCT_DEFAULTS[product] ?? {}),
+      ...(match?.settings ?? {}),
+      ...src,
+    } as SourceConfig;
+  }
+  for (const [role, entry] of Object.entries(profileSources)) {
+    if (usedRoles.has(role)) continue;
+    const { product, ...settings } = entry;
+    const sourceId = out[product] === undefined ? product : role;
+    if (out[sourceId] !== undefined) continue;
+    out[sourceId] = {
+      enabled: true,
+      ...(PRODUCT_DEFAULTS[product] ?? {}),
+      ...settings,
+    } as SourceConfig;
+  }
+  return out;
+}
 
 /** `adapter:` keys (§28-§31): generic adapters for services without a first-class connector. */
 export const ADAPTER_PACKAGES: Readonly<Record<string, string>> = {
@@ -121,22 +194,23 @@ export function createDefaultImporter(searchDirs: string[] = []): ModuleImporter
   };
 }
 
-function looksLikeModule(v: unknown): v is ConnectorModule {
-  if (!v || typeof v !== 'object') return false;
-  const m = v as Record<string, unknown>;
-  return (
-    typeof m.metadata === 'object' &&
-    m.metadata !== null &&
-    typeof m.createAdapter === 'function' &&
-    typeof m.createNormalizer === 'function'
-  );
+/** The export a package offers as its connector entry: `default`, then `connector` (§69). */
+function connectorEntry(imported: unknown): unknown {
+  const ns = (imported ?? {}) as Record<string, unknown>;
+  const candidates: unknown[] = [ns.default, ns.connector, ns.createConnector, ns];
+  // CommonJS packages arrive as `{ default: module.exports }`.
+  const cjs = ns.default as Record<string, unknown> | undefined;
+  if (cjs && typeof cjs === 'object') candidates.push(cjs.connector, cjs.default);
+  return candidates.find((c) => isConnectorModule(c) || typeof c === 'function');
 }
 
 /**
- * Load the ConnectorModule for one source. A package may export the module as `default` or
- * `connector`, or export a (possibly async) factory `(init: {sourceId, config, profile}) =>
- * ConnectorModule` — the shape generic adapter packages use, because they need the source's
- * config (command, url, ...) to know what they connect to.
+ * Load the ConnectorModule for one source. A package exports a `ConnectorModule` or a
+ * `ConnectorFactory` (`({sourceId, config, profile}) => Promise<ConnectorModule>`) as `default`
+ * and/or named `connector`; `resolveConnectorExport` from the connector SDK turns either into the
+ * module — the same function every host uses, so the daemon and the packages cannot drift apart.
+ * Factories receive the effective source config (see `effectiveSources`): generic adapters and the
+ * syllabus package pick their module from `mapping:` / `module:`.
  */
 export async function loadConnectorModule(options: LoadConnectorOptions): Promise<{
   module: ConnectorModule;
@@ -167,32 +241,30 @@ export async function loadConnectorModule(options: LoadConnectorOptions): Promis
       'import_failed',
     );
   }
-  const ns = (imported ?? {}) as Record<string, unknown>;
-  const candidates = [ns.default, ns.connector, ns.createConnector, ns];
-  for (const c of candidates) {
-    if (looksLikeModule(c)) return { module: c, packageName };
-    if (typeof c === 'function') {
-      try {
-        const made: unknown = await (c as (init: unknown) => unknown)({
-          sourceId,
-          config,
-          profile: options.profile,
-        });
-        if (looksLikeModule(made)) return { module: made, packageName };
-      } catch (e) {
-        throw new ConnectorLoadError(
-          `コネクタ ${packageName} の初期化に失敗しました: ${errorMessage(e)}`,
-          packageName,
-          'import_failed',
-        );
-      }
-    }
+  const entry = connectorEntry(imported);
+  if (entry === undefined)
+    throw new ConnectorLoadError(
+      `コネクタ ${packageName} が ConnectorModule を export していません（default か connector に defineConnector() の結果かファクトリが必要です）`,
+      packageName,
+      'bad_export',
+    );
+  let module: ConnectorModule<unknown>;
+  try {
+    module = await resolveConnectorExport(entry, {
+      sourceId,
+      config,
+      profile: options.profile,
+    });
+  } catch (e) {
+    throw new ConnectorLoadError(
+      isConnectorModule(entry)
+        ? `コネクタ ${packageName} を読み込めません: ${errorMessage(e)}`
+        : `コネクタ ${packageName} の初期化に失敗しました: ${errorMessage(e)}`,
+      packageName,
+      typeof entry === 'function' ? 'import_failed' : 'bad_export',
+    );
   }
-  throw new ConnectorLoadError(
-    `コネクタ ${packageName} が ConnectorModule を export していません（default か connector に defineConnector() の結果が必要です）`,
-    packageName,
-    'bad_export',
-  );
+  return { module: module as ConnectorModule, packageName };
 }
 
 export function describeLoadError(e: unknown): string {

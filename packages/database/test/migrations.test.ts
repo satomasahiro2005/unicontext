@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import Database from 'better-sqlite3';
 import { getTableColumns, getTableName, is, Table } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
@@ -33,6 +36,33 @@ describe('migrations', () => {
     expect(getAppliedMigrations(sqlite).map((m) => m.version)).toEqual(
       MIGRATIONS.map((m) => m.version),
     );
+  });
+
+  it('tolerate another process migrating the same file concurrently (daemon + CLI)', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'uc-mig-'));
+    try {
+      const file = path.join(dir, 'unicontext.db');
+      const a = new Database(file);
+      const b = new Database(file);
+      a.pragma('busy_timeout = 5000');
+      let raced = false;
+      // `now` runs after `a` read schema_migrations and before it applies the first migration.
+      const result = migrate(a, {
+        now: () => {
+          if (!raced) {
+            raced = true;
+            migrate(b);
+          }
+          return new Date('2026-10-01T00:00:00Z');
+        },
+      });
+      expect(result.applied).toHaveLength(0);
+      expect(result.currentVersion).toBe(MIGRATIONS.length);
+      a.close();
+      b.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('upgrade step by step from an older schema', () => {

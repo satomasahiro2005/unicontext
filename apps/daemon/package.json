@@ -58,6 +58,7 @@
     "@unicontext/adapter-mcp": "workspace:*",
     "@unicontext/adapter-cli": "workspace:*",
     "@unicontext/adapter-rest": "workspace:*",
-    "@unicontext/adapter-browser": "workspace:*"
+    "@unicontext/adapter-browser": "workspace:*",
+    "@unicontext/wordpress-portal": "workspace:*"
   }
 }

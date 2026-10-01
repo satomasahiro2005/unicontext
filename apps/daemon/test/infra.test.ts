@@ -4,7 +4,13 @@ import path from 'node:path';
 import { MemorySecretStore } from '@unicontext/auth';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OffsetClock } from '../src/dev.js';
-import { acquireLock, DaemonAlreadyRunningError, lockFile, readLock } from '../src/lock.js';
+import {
+  acquireLock,
+  DaemonAlreadyRunningError,
+  lockFile,
+  readLock,
+  startedBeforeBoot,
+} from '../src/lock.js';
 import {
   CsrfTokens,
   bearerToken,
@@ -145,6 +151,29 @@ describe('single-instance lock (§34)', () => {
     l.release();
     writeFileSync(lockFile({ root: dir }), '{not json');
     acquireLock({ root: dir }).release();
+  });
+
+  it('a lock from a previous boot is stale even if its pid was reused by a live process', () => {
+    writeFileSync(
+      lockFile({ root: dir }),
+      JSON.stringify({ pid: process.ppid, port: 1234, startedAt: '2000-01-01T00:00:00.000Z' }),
+    );
+    const l = acquireLock({ root: dir });
+    expect(readLock({ root: dir })?.pid).toBe(process.pid);
+    l.release();
+  });
+
+  it('startedBeforeBoot uses the boot time with slack and ignores unparsable times', () => {
+    const now = new Date('2026-10-01T12:00:00.000Z');
+    const uptimeSec = 3600; // booted 11:00
+    expect(startedBeforeBoot({ startedAt: '2026-10-01T10:00:00.000Z' }, now, uptimeSec)).toBe(true);
+    expect(startedBeforeBoot({ startedAt: '2026-10-01T10:55:00.000Z' }, now, uptimeSec)).toBe(
+      false,
+    );
+    expect(startedBeforeBoot({ startedAt: '2026-10-01T11:30:00.000Z' }, now, uptimeSec)).toBe(
+      false,
+    );
+    expect(startedBeforeBoot({ startedAt: 'x' }, now, uptimeSec)).toBe(false);
   });
 
   it('release does not remove somebody else lock', () => {

@@ -355,7 +355,8 @@ export class ChatGptRecordAdapter implements WatchableAdapter {
 
   private locate(absolutePath: string): { rel: string } | undefined {
     const rel = path.relative(this.watchDir, absolutePath);
-    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+    const outside = rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+    if (rel === '' || outside) return undefined;
     return { rel: toPosix(rel) };
   }
 
@@ -365,26 +366,34 @@ export class ChatGptRecordAdapter implements WatchableAdapter {
     return dirs.find((d) => !this.termPattern.test(d));
   }
 
-  private async walk(dirRel: string, out: ScanFile[], warnings: string[]): Promise<void> {
+  private async walk(
+    dirRel: string,
+    out: ScanFile[],
+    warnings: string[],
+    unreadable: Set<string>,
+  ): Promise<void> {
     const dirAbs = dirRel ? path.join(this.watchDir, ...dirRel.split('/')) : this.watchDir;
     let entries;
     try {
       entries = await readdir(dirAbs, { withFileTypes: true });
     } catch (e) {
       warnings.push(`Cannot read ${dirRel || this.watchDir}: ${errorMessage(e)}`);
+      // Its transcripts were not listed: they must not be reported as deleted.
+      unreadable.add(externalIdFor(this.rootKey, dirRel ? `${dirRel}/` : ''));
       return;
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
       const rel = dirRel ? `${dirRel}/${entry.name}` : entry.name;
       if (isHidden(rel)) continue;
-      if (entry.isDirectory()) await this.walk(rel, out, warnings);
+      if (entry.isDirectory()) await this.walk(rel, out, warnings, unreadable);
       else if (entry.isFile() && this.isTranscriptPath(rel)) {
         try {
           const s = await stat(path.join(dirAbs, entry.name));
           out.push({ rel, size: s.size, mtimeMs: s.mtimeMs });
         } catch (e) {
           warnings.push(`Cannot stat ${rel}: ${errorMessage(e)}`);
+          unreadable.add(externalIdFor(this.rootKey, rel));
         }
       }
     }
@@ -394,7 +403,9 @@ export class ChatGptRecordAdapter implements WatchableAdapter {
     const warnings: string[] = [];
     const files: ScanFile[] = [];
     const rootOk = await isDirectory(this.watchDir);
-    if (rootOk) await this.walk('', files, warnings);
+    // Keys (files) and key prefixes (directories, ending in "/" or ":") that could not be listed.
+    const unreadable = new Set<string>();
+    if (rootOk) await this.walk('', files, warnings, unreadable);
     else warnings.push(`Watch directory not found, keeping its transcripts: ${this.watchDir}`);
     const seen = new Set(files.map((f) => externalIdFor(this.rootKey, f.rel)));
     const candidates = files.filter((f) => {
@@ -407,6 +418,13 @@ export class ChatGptRecordAdapter implements WatchableAdapter {
       if (seen.has(key)) continue;
       // Entries of the watch dir go only when it is reachable (unplugged drive); entries of a
       // watch dir that is no longer configured always go.
+      if (
+        entry.rootKey === this.rootKey &&
+        [...unreadable].some(
+          (u) => key === u || ((u.endsWith('/') || u.endsWith(':')) && key.startsWith(u)),
+        )
+      )
+        continue; // under a directory that could not be read this time
       if (rootOk || entry.rootKey !== this.rootKey)
         deletions.push({ sourceType: RAW_TYPE_TRANSCRIPT, externalId: key });
     }

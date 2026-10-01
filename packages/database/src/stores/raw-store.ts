@@ -73,6 +73,11 @@ export interface RawBlobRecord {
   createdAt: string;
 }
 
+/** Absolute path of a stored blob; accepts relative paths written with "/" or "\" (older Windows rows). */
+function blobFile(blobsDir: string, relPath: string): string {
+  return path.join(blobsDir, ...relPath.split(/[\\/]+/));
+}
+
 export function rawItemId(sourceId: string, sourceType: string, externalId: string): string {
   return `raw:${stableUuid(sourceId, sourceType, externalId)}`;
 }
@@ -351,8 +356,9 @@ export class RawStore {
     let storage: 'file' | 'inline' = 'inline';
     let relPath: string | null = null;
     if (this.db.blobsDir) {
-      relPath = path.join(digest.slice(0, 2), digest);
-      const abs = path.join(this.db.blobsDir, relPath);
+      // Stored with "/" on every platform so a backup restored on another OS still resolves.
+      relPath = `${digest.slice(0, 2)}/${digest}`;
+      const abs = blobFile(this.db.blobsDir, relPath);
       if (!existsSync(abs)) {
         mkdirSync(path.dirname(abs), { recursive: true });
         writeFileSync(abs, input.data);
@@ -415,14 +421,21 @@ export class RawStore {
     if (r.storage === 'file') {
       if (!this.db.blobsDir || !r.path)
         throw new NotFoundError(`blob file for ${id} (no blobs dir configured)`);
-      return readFileSync(path.join(this.db.blobsDir, r.path));
+      return readFileSync(blobFile(this.db.blobsDir, r.path));
     }
     if (!r.data) throw new NotFoundError(`blob data ${id}`);
     return Buffer.from(r.data);
   }
 
-  /** Remove blob rows of a source and delete files no longer referenced. Returns number of rows. */
-  deleteBlobsBySource(sourceId: string): number {
+  /**
+   * Remove blob rows of a source and delete files no longer referenced. Returns number of rows.
+   * Inside a transaction pass `removeFile` to defer the unlink until it commits; otherwise a
+   * rollback would restore rows whose files are already gone.
+   */
+  deleteBlobsBySource(
+    sourceId: string,
+    removeFile: (absolutePath: string) => void = (f) => rmSync(f, { force: true }),
+  ): number {
     const rows = this.db.orm
       .select({ id: rawBlobs.id, sha256: rawBlobs.sha256, path: rawBlobs.path })
       .from(rawBlobs)
@@ -437,7 +450,7 @@ export class RawStore {
           .from(rawBlobs)
           .where(eq(rawBlobs.sha256, r.sha256))
           .get();
-        if (!still) rmSync(path.join(this.db.blobsDir, r.path), { force: true });
+        if (!still) removeFile(blobFile(this.db.blobsDir, r.path));
       }
     }
     return rows.length;

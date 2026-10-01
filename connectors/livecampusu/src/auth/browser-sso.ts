@@ -76,6 +76,9 @@ export class BrowserSsoStrategy implements LcuAuthStrategy {
   private readonly session: BrowserSessionLike;
   private readonly logger: Logger;
   private loadedCookies: string | undefined;
+  /** Bumped by logout() and login(): jars handed out before them must never be written back. */
+  private generation = 0;
+  private readonly jarGeneration = new WeakMap<object, number>();
 
   constructor(private readonly options: BrowserSsoStrategyOptions) {
     const d = options.deployment;
@@ -130,14 +133,21 @@ export class BrowserSsoStrategy implements LcuAuthStrategy {
     };
   }
 
-  login(options?: InteractiveLoginOptions): Promise<AuthResult> {
-    return this.session.login(options);
+  async login(options?: InteractiveLoginOptions): Promise<AuthResult> {
+    const r = await this.session.login(options);
+    // The human's login exported fresh cookies: a sync still holding an older jar must not
+    // overwrite them with its (now superseded) session when it finishes.
+    if (r.status === 'authenticated') this.generation++;
+    return r;
   }
 
   async cookies(): Promise<LcuCookieJar | undefined> {
+    const gen = this.generation;
     if (!(await this.session.hasStoredSession())) return undefined;
     const jar = await this.session.jar();
+    if (gen !== this.generation) return undefined; // logged out while reading
     this.loadedCookies = stableStringify(jar.toBrowserCookies());
+    this.jarGeneration.set(jar, gen);
     return jar;
   }
 
@@ -150,6 +160,9 @@ export class BrowserSsoStrategy implements LcuAuthStrategy {
 
   async persist(jar: LcuCookieJar): Promise<void> {
     if (!(jar instanceof CookieJar)) return;
+    // A sync that was running when the user logged out must not write its cookies back (that
+    // would silently log the user in again).
+    if (this.jarGeneration.get(jar) !== this.generation) return;
     const cookies = jar.toBrowserCookies();
     const serialized = stableStringify(cookies);
     if (serialized === this.loadedCookies) return;
@@ -159,8 +172,9 @@ export class BrowserSsoStrategy implements LcuAuthStrategy {
 
   /** Local logout: forget exported cookies and the persistent profile (no server call). */
   async logout(): Promise<void> {
-    await this.session.clear({ profile: true });
+    this.generation++;
     this.loadedCookies = undefined;
+    await this.session.clear({ profile: true });
   }
 
   dispose(): Promise<void> {

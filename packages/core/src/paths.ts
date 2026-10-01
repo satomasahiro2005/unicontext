@@ -33,19 +33,25 @@ export function resolveDataPaths(options: ResolvePathsOptions = {}): DataPaths {
   const env = options.env ?? process.env;
   const home = options.homedir ?? osHomedir();
   const p = platform === 'win32' ? path.win32 : path.posix;
+  // XDG base dirs: an empty or relative value is invalid and must be ignored (it would put the
+  // database under the current working directory). Same for an empty LOCALAPPDATA.
+  const absEnv = (name: string): string | undefined => {
+    const v = env[name];
+    return v && p.isAbsolute(v) ? v : undefined;
+  };
 
   let root: string;
   let configDir: string;
   if (platform === 'win32') {
-    const local = env.LOCALAPPDATA ?? p.join(home, 'AppData', 'Local');
+    const local = absEnv('LOCALAPPDATA') ?? p.join(home, 'AppData', 'Local');
     root = p.join(local, 'unicontext');
     configDir = root;
   } else if (platform === 'darwin') {
     root = p.join(home, 'Library', 'Application Support', 'unicontext');
-    configDir = p.join(env.XDG_CONFIG_HOME ?? p.join(home, '.config'), 'unicontext');
+    configDir = p.join(absEnv('XDG_CONFIG_HOME') ?? p.join(home, '.config'), 'unicontext');
   } else {
-    root = p.join(env.XDG_DATA_HOME ?? p.join(home, '.local', 'share'), 'unicontext');
-    configDir = p.join(env.XDG_CONFIG_HOME ?? p.join(home, '.config'), 'unicontext');
+    root = p.join(absEnv('XDG_DATA_HOME') ?? p.join(home, '.local', 'share'), 'unicontext');
+    configDir = p.join(absEnv('XDG_CONFIG_HOME') ?? p.join(home, '.config'), 'unicontext');
   }
   if (env.UNICONTEXT_DATA_DIR) root = env.UNICONTEXT_DATA_DIR;
   if (env.UNICONTEXT_CONFIG_DIR) configDir = env.UNICONTEXT_CONFIG_DIR;

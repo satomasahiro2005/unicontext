@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { stableId } from '@unicontext/canonical-model';
@@ -98,5 +98,26 @@ describe('backup (§62) and purge (§63)', () => {
     expect(db.sqlite.prepare('SELECT COUNT(*) AS n FROM fts_announcements').get()).toEqual({
       n: 1,
     });
+  });
+
+  it('keeps blob files when the purge transaction rolls back', () => {
+    const blobsDir = mkdtempSync(path.join(tmpdir(), 'uc-purge-blobs-'));
+    dirs.push(blobsDir);
+    const db = openDatabase({ blobsDir });
+    const s = createStores(db);
+    s.raw.ensureSource({ id: 'a', connector: 'a' });
+    const blob = s.raw.putBlob({ sourceId: 'a', data: new TextEncoder().encode('lecture.pdf') });
+    const file = path.join(blobsDir, ...(blob.path ?? '').split('/'));
+    expect(existsSync(file)).toBe(true);
+    db.sqlite.exec(
+      "CREATE TRIGGER fail_purge BEFORE DELETE ON raw_sources BEGIN SELECT RAISE(ABORT, 'boom'); END",
+    );
+    expect(() => purgeSource(db, 'a')).toThrow(/boom/);
+    expect(s.raw.getBlob(blob.id)).toBeDefined();
+    expect(existsSync(file)).toBe(true);
+    db.sqlite.exec('DROP TRIGGER fail_purge');
+    expect(purgeSource(db, 'a').rawBlobs).toBe(1);
+    expect(existsSync(file)).toBe(false);
+    db.close();
   });
 });

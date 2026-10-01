@@ -87,7 +87,14 @@ export class CookieJar {
 
   /** Apply Set-Cookie headers of a response (use `response.headers.getSetCookie()`). */
   update(requestUrl: string, setCookie: string[]): void {
-    for (const header of setCookie) this.set(parseSetCookie(header, requestUrl, this.now()));
+    const host = new URL(requestUrl).hostname;
+    for (const header of setCookie) {
+      const cookie = parseSetCookie(header, requestUrl, this.now());
+      // RFC 6265 §5.3 step 6: a Domain attribute that does not cover the responding host is
+      // rejected (a server must not plant cookies for other sites).
+      if (!cookie.name || !domainMatches(host, cookie.domain)) continue;
+      this.set(cookie);
+    }
   }
 
   /** Cookies that would be sent to `url`. */

@@ -535,7 +535,9 @@ export class Microsoft365Adapter implements InteractiveAuthAdapter {
   private startTask(walk: Walk, task: Task, cursor: Cursor): void {
     const cfg = this.ctx.config;
     const now = this.ctx.clock.now();
-    const prior = cursor.deltaLinks[this.deltaKey(task)];
+    const storedLink = cursor.deltaLinks[this.deltaKey(task)];
+    // The bearer token is attached to every request: never follow a stored link off Graph.
+    const prior = storedLink && this.isGraphUrl(storedLink) ? storedLink : undefined;
     let link: string;
     let usedPrior = false;
     switch (task.kind) {
@@ -681,6 +683,12 @@ export class Microsoft365Adapter implements InteractiveAuthAdapter {
 
     const next = page['@odata.nextLink'];
     if (next) {
+      if (!this.isGraphUrl(next)) {
+        // The access token goes with every request: a link to another origin is not followed,
+        // and the resource is not complete.
+        this.skip(walk, task, out, 'nextLink points outside the Graph API', false, blockedTypes);
+        return;
+      }
       cur.link = next;
       return;
     }
@@ -694,7 +702,22 @@ export class Microsoft365Adapter implements InteractiveAuthAdapter {
         return;
       }
     }
-    this.completeTask(walk, cur, task, page['@odata.deltaLink']);
+    const deltaLink = page['@odata.deltaLink'];
+    this.completeTask(
+      walk,
+      cur,
+      task,
+      deltaLink && this.isGraphUrl(deltaLink) ? deltaLink : undefined,
+    );
+  }
+
+  /** Same origin as the configured Graph base URL (the bearer token may be sent there). */
+  private isGraphUrl(link: string): boolean {
+    try {
+      return new URL(link).origin === new URL(this.graph).origin;
+    } catch {
+      return false;
+    }
   }
 
   private completeTask(

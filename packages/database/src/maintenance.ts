@@ -1,4 +1,4 @@
-import { createReadStream, mkdirSync, writeFileSync } from 'node:fs';
+import { createReadStream, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import {
@@ -346,6 +346,8 @@ export function purgeSource(db: UniContextDatabase, sourceId: string): PurgeRepo
     identityLinks: 0,
     changeEvents: 0,
   };
+  // Blob files are unlinked only after the transaction committed (a rollback keeps them).
+  const blobFiles: string[] = [];
   db.transaction(() => {
     const refIds = refs.bySource(sourceId).map((r) => r.id);
     const purgedFactIds = new Set<string>();
@@ -385,7 +387,7 @@ export function purgeSource(db: UniContextDatabase, sourceId: string): PurgeRepo
       report.changeEvents += del('DELETE FROM change_events WHERE entity_id = ?', id);
       del('DELETE FROM embeddings WHERE entity_id = ?', id);
     }
-    report.rawBlobs = raw.deleteBlobsBySource(sourceId);
+    report.rawBlobs = raw.deleteBlobsBySource(sourceId, (f) => blobFiles.push(f));
     report.rawItems = del('DELETE FROM raw_items WHERE source_id = ?', sourceId);
     new SyncStateStore(db).clear(sourceId);
     new HealthStore(db).delete(sourceId);
@@ -393,5 +395,6 @@ export function purgeSource(db: UniContextDatabase, sourceId: string): PurgeRepo
     new ProductVersionStore(db).deleteBySource(sourceId);
     del('DELETE FROM raw_sources WHERE id = ?', sourceId);
   });
+  for (const f of blobFiles) rmSync(f, { force: true });
   return report;
 }

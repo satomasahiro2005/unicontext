@@ -191,9 +191,8 @@ describe('cancellations adapter', () => {
     adapter.courseProvider = () => {
       throw new Error('timetable not synced');
     };
-    const res = await adapter.sync({ mode: 'initial' });
-    expect(res.warnings?.join()).toMatch(/courseProvider failed/);
-    expect(res.complete).toBeDefined();
+    // failing provider: the run fails instead of rewriting rows without their matches
+    await expect(adapter.sync({ mode: 'initial' })).rejects.toThrow(/courseProvider failed/);
 
     const broken = new CancellationsAdapter(makeContext(cfg(), htmlFetch('<html>x</html>')));
     await expect(broken.sync({ mode: 'initial' })).rejects.toThrow(/layout changed/);

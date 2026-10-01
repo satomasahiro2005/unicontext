@@ -29,10 +29,12 @@ import type { SourceInfo } from './api-types.js';
 import { OffsetClock, seedDevData } from './dev.js';
 import {
   describeLoadError,
+  effectiveSources,
   loadConnectorModule,
   type ModuleImporter,
   resolveConnectorPackage,
 } from './registry.js';
+import { wireCourseProviders } from './wiring.js';
 
 export interface RuntimeOptions {
   /** Data root; config.yaml is read from the same directory unless configFile is given. */
@@ -116,19 +118,23 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
   const paths = pathsFor(options, tempRoot);
   ensureDataDirs(paths);
   const configFile = options.configFile ?? paths.configFile;
-  const config = options.config ?? (dev ? defaultConfig() : loadConfig(configFile));
+  const loadedConfig = options.config ?? (dev ? defaultConfig() : loadConfig(configFile));
   let profile = options.profile;
-  const profileId = dev ? 'shizuoka-university' : config.profile;
+  const profileId = dev ? 'shizuoka-university' : loadedConfig.profile;
   if (!profile && profileId) {
     try {
       profile = loadProfile(profileId, { searchPaths: [path.join(paths.configDir, 'profiles')] });
     } catch (e) {
       if (!options.logger)
-        buildLogger(config, undefined).warn('profile not loaded', { error: errorMessage(e) });
+        buildLogger(loadedConfig, undefined).warn('profile not loaded', { error: errorMessage(e) });
       else options.logger.warn('profile not loaded', { error: errorMessage(e) });
       if (dev) throw e;
     }
   }
+  // Profile sources are defaults; config.yaml entries override them (registry.effectiveSources).
+  const config: UniContextConfig = dev
+    ? loadedConfig
+    : { ...loadedConfig, sources: effectiveSources(loadedConfig.sources, profile) };
   const logger = options.logger ?? buildLogger(config, profile, options.logSink);
   const secrets =
     options.secrets ??
@@ -227,6 +233,8 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
       }
     }
   }
+
+  if (!dev) wireCourseProviders(uc);
 
   const describeSources = (): SourceInfo[] => {
     const status = new Map(uc.context.admin().sources.map((s) => [s.sourceId, s]));

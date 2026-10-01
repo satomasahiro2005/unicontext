@@ -10,7 +10,13 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { JsonValueSchema, type Fact, type JsonValue } from '@unicontext/canonical-model';
-import { NotFoundError, systemClock, ValidationError, type Clock } from '@unicontext/core';
+import {
+  NotFoundError,
+  PolicyViolationError,
+  systemClock,
+  ValidationError,
+  type Clock,
+} from '@unicontext/core';
 import type { UniContext } from '@unicontext/context-engine';
 import { z } from 'zod';
 
@@ -20,6 +26,30 @@ import { z } from 'zod';
  * applyProposal(). Proposals are one JSON file each so the stdio MCP process and the daemon/CLI,
  * which are different processes, share them without a database lock.
  */
+
+/**
+ * High-risk predicates (§51): grades, submissions and enrolment. Matched per word so `final_grade`,
+ * `courseGrade` or `assignment.submission` are caught, not only a leading `grade`.
+ */
+const HIGH_RISK_WORDS =
+  /^(grades?|grading|gpa|scores?|submissions?|submit|submitted|enrol|enroll|enrolment|enrollment|enrolled|registration|register|registered)$/i;
+
+/** Entity kinds whose facts an AI proposal may never touch (§51). */
+export const HIGH_RISK_SUBJECT_KINDS: ReadonlySet<string> = new Set(['grade', 'submission']);
+
+export function isHighRiskPredicate(predicate: string): boolean {
+  if (/^(grade|submission|enrol)/i.test(predicate)) return true;
+  return predicate
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .split(/[_.-]+/)
+    .some((w) => HIGH_RISK_WORDS.test(w));
+}
+
+function isHighRiskProposal(p: Pick<Proposal, 'subject' | 'predicate'>): boolean {
+  const colon = p.subject.indexOf(':');
+  const kind = colon > 0 ? p.subject.slice(0, colon) : '';
+  return isHighRiskPredicate(p.predicate) || HIGH_RISK_SUBJECT_KINDS.has(kind);
+}
 
 export type ProposalStatus = 'pending' | 'confirmed' | 'rejected' | 'expired';
 
@@ -219,6 +249,12 @@ export function applyProposal(
       proposal.status === 'expired'
         ? `proposal ${id} has expired; ask the assistant to propose it again`
         : `proposal ${id} is already ${proposal.status}`,
+    );
+  // Defence in depth: the MCP tool already refuses these, but a proposal file is plain JSON in the
+  // data dir, so the high-risk rule (§51) is enforced again where it is executed.
+  if (isHighRiskProposal(proposal))
+    throw new PolicyViolationError(
+      `proposal ${id} touches grades, submissions or enrolment, which cannot be applied from a proposal (§51)`,
     );
   const { fact } = uc.resolver.correct({
     subject: proposal.subject,

@@ -48,18 +48,21 @@ export class DaemonClient {
     const lock = readLock(paths);
     const port = lock?.port ?? options.port;
     if (!port) return undefined;
-    const token = await readApiToken(secrets, paths);
     const client = new DaemonClient({
       baseUrl: `http://127.0.0.1:${port}`,
-      token,
       timeoutMs: options.timeoutMs ?? 2_000,
       ...(options.fetch ? { fetch: options.fetch } : {}),
     });
+    let health: HealthResponse;
     try {
-      await client.health();
+      health = await client.health();
     } catch {
       return undefined;
     }
+    // A stale lock's port may now be served by another (possibly another user's) process: only
+    // hand the write token to the daemon that owns the lock.
+    if (lock && (health?.ok !== true || health.pid !== lock.pid)) return undefined;
+    const token = await readApiToken(secrets, paths);
     return new DaemonClient({
       baseUrl: client.baseUrl,
       token,

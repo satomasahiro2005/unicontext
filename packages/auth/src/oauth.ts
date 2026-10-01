@@ -153,24 +153,49 @@ export async function startLoopbackListener(
     server.listen(0, '127.0.0.1', () => resolve());
   });
   const port = (server.address() as AddressInfo).port;
-  const close = (): Promise<void> => new Promise((resolve) => server.close(() => resolve()));
+  let timer: ReturnType<Clock['setTimeout']> | undefined;
+  let closed = false;
+  const close = (): Promise<void> => {
+    if (timer !== undefined) clock.clearTimeout(timer);
+    timer = undefined;
+    // A waiter that never got its callback (browser failed to open, caller gave up) is settled
+    // here instead of by the timeout later, after the listener is already gone.
+    settle?.reject(new OAuthError('Login listener closed'));
+    if (closed) return Promise.resolve();
+    closed = true;
+    return new Promise((resolve) => {
+      server.close(() => resolve());
+      // Browsers keep the loopback connection alive; do not wait for their keep-alive to expire.
+      server.closeIdleConnections();
+    });
+  };
 
   return {
     redirectUri: `http://127.0.0.1:${port}${callbackPath}`,
     waitForCode(expectedState: string): Promise<string> {
       return new Promise<string>((resolve, reject) => {
-        const timer = clock.setTimeout(
-          () => reject(new OAuthError('Timed out waiting for the browser login')),
-          timeoutMs,
-        );
+        if (closed) {
+          reject(new OAuthError('Login listener closed'));
+          return;
+        }
+        let done = false;
+        const t = clock.setTimeout(() => {
+          done = true;
+          reject(new OAuthError('Timed out waiting for the browser login'));
+        }, timeoutMs);
+        timer = t;
         settle = {
           state: expectedState,
           resolve: (c) => {
-            clock.clearTimeout(timer);
+            if (done) return;
+            done = true;
+            clock.clearTimeout(t);
             resolve(c);
           },
           reject: (e) => {
-            clock.clearTimeout(timer);
+            if (done) return;
+            done = true;
+            clock.clearTimeout(t);
             reject(e);
           },
         };
@@ -316,6 +341,9 @@ export async function authorizeWithPkce(
       ...(options.loginHint ? { loginHint: options.loginHint } : {}),
     });
     const codePromise = listener.waitForCode(state);
+    // If opening the browser throws, nobody awaits codePromise; close() rejects it in `finally`,
+    // and this keeps that rejection from surfacing as an unhandled rejection (process crash).
+    codePromise.catch(() => undefined);
     await (options.openBrowser ?? openSystemBrowser)(url);
     const code = await codePromise;
     return await exchangeCode(config, {

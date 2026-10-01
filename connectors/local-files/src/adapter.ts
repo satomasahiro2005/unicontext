@@ -257,6 +257,7 @@ export class LocalFilesAdapter implements WatchableAdapter {
     dirRel: string,
     out: ScanFile[],
     warnings: string[],
+    unreadable: Set<string>,
   ): Promise<void> {
     const dirAbs = dirRel ? path.join(info.root, ...dirRel.split('/')) : info.root;
     let entries;
@@ -264,13 +265,15 @@ export class LocalFilesAdapter implements WatchableAdapter {
       entries = await readdir(dirAbs, { withFileTypes: true });
     } catch (e) {
       warnings.push(`Cannot read ${dirRel || info.root}: ${errorMessage(e)}`);
+      // Its files were not listed: they must not be reported as deleted.
+      unreadable.add(externalIdFor(info.key, dirRel ? `${dirRel}/` : ''));
       return;
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
       const rel = dirRel ? `${dirRel}/${entry.name}` : entry.name;
       if (matchesExclude(rel, this.exclude)) continue;
-      if (entry.isDirectory()) await this.walk(info, rel, out, warnings);
+      if (entry.isDirectory()) await this.walk(info, rel, out, warnings, unreadable);
       else if (entry.isFile()) {
         if (!matchesInclude(rel, this.include)) continue;
         try {
@@ -278,6 +281,7 @@ export class LocalFilesAdapter implements WatchableAdapter {
           out.push({ info, rel, size: s.size, mtimeMs: s.mtimeMs });
         } catch (e) {
           warnings.push(`Cannot stat ${rel}: ${errorMessage(e)}`);
+          unreadable.add(externalIdFor(info.key, rel));
         }
       }
     }
@@ -287,14 +291,21 @@ export class LocalFilesAdapter implements WatchableAdapter {
     const warnings: string[] = [];
     const files: ScanFile[] = [];
     const scanned = new Set<string>();
+    // Keys (files) and key prefixes (directories, ending in "/" or ":") that could not be listed.
+    const unreadable = new Set<string>();
     for (const info of this.roots) {
       if (!(await isDirectory(info.root))) {
         warnings.push(`Root directory not found, keeping its files as they are: ${info.root}`);
         continue;
       }
       scanned.add(info.key);
-      await this.walk(info, '', files, warnings);
+      await this.walk(info, '', files, warnings, unreadable);
     }
+    const notListed = (key: string): boolean => {
+      for (const u of unreadable)
+        if (key === u || ((u.endsWith('/') || u.endsWith(':')) && key.startsWith(u))) return true;
+      return false;
+    };
     const seen = new Set(files.map((f) => externalIdFor(f.info.key, f.rel)));
     const knownRoots = new Set(this.roots.map((r) => r.key));
     const candidates = files.filter((f) => {
@@ -307,6 +318,9 @@ export class LocalFilesAdapter implements WatchableAdapter {
       if (seen.has(key)) continue;
       // Files of a root that exists but no longer contain them are deleted; files of a root that is
       // currently unreachable (unplugged drive) are kept; files of a root no longer configured go.
+      // Files under a directory that could not be read this time (permissions, offline cloud
+      // placeholder, EBUSY) are kept as well.
+      if (knownRoots.has(entry.rootKey) && notListed(key)) continue;
       if (scanned.has(entry.rootKey) || !knownRoots.has(entry.rootKey))
         deletions.push({ sourceType: RAW_TYPE_DOCUMENT, externalId: key });
     }
@@ -383,7 +397,8 @@ export class LocalFilesAdapter implements WatchableAdapter {
   private locate(absolutePath: string): { info: RootInfo; rel: string } | undefined {
     for (const info of this.roots) {
       const rel = path.relative(info.root, absolutePath);
-      if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+      const outside = rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+      if (rel === '' || outside) continue;
       return { info, rel: toPosix(rel) };
     }
     return undefined;

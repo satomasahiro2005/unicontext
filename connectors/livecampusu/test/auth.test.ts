@@ -212,6 +212,54 @@ describe('browser-sso strategy (adapter-browser, scripted fake browser)', () => 
     expect(await strategy.cookies()).toBeUndefined();
   });
 
+  it('does not write cookies of a jar loaded before logout back to the SecretStore', async () => {
+    const driver = new FakeBrowserDriver({
+      screens: screens(),
+      cookies: [
+        {
+          name: 'JSESSIONID',
+          value: 'live-1',
+          domain: 'lcu.example.ac.jp',
+          path: '/lcu-web',
+          expires: -1,
+          httpOnly: true,
+          secure: true,
+        },
+      ],
+    });
+    const { strategy, secrets } = browserStrategy(driver);
+    await strategy.login();
+    const jar = await strategy.cookies(); // a sync is running with this jar
+    await strategy.logout(); // the user logs out meanwhile
+    jar?.update(`${BASE}SC_01002B00_00`, ['JSESSIONID=rotated; Path=/lcu-web; Secure; HttpOnly']);
+    if (jar) await strategy.persist(jar); // end of that sync
+    expect(await secrets.get(secretKey('livecampusu', COOKIE_SECRET_NAME))).toBeUndefined();
+    expect(await strategy.cookies()).toBeUndefined();
+  });
+
+  it('does not overwrite cookies of a newer interactive login with an older jar', async () => {
+    const cookie = (value: string) => ({
+      name: 'JSESSIONID',
+      value,
+      domain: 'lcu.example.ac.jp',
+      path: '/lcu-web',
+      expires: -1,
+      httpOnly: true,
+      secure: true,
+    });
+    const driver = new FakeBrowserDriver({ screens: screens(), cookies: [cookie('old')] });
+    const { strategy, secrets } = browserStrategy(driver);
+    await strategy.login();
+    const jar = await strategy.cookies(); // a sync starts with the old session
+    driver.cookies = [cookie('new')];
+    await strategy.login(); // the human logs in again meanwhile
+    jar?.update(`${BASE}SC_01002B00_00`, ['JSESSIONID=old-rotated; Path=/lcu-web; Secure']);
+    if (jar) await strategy.persist(jar); // the sync ends
+    const stored = await secrets.get(secretKey('livecampusu', COOKIE_SECRET_NAME));
+    expect(stored).toContain('"new"');
+    expect(stored).not.toContain('old-rotated');
+  });
+
   it('a headless refresh that reaches a credential page reports failure (never prompts)', async () => {
     const s = screens();
     const msLogin = 'https://login.microsoftonline.com/common/oauth2/authorize';

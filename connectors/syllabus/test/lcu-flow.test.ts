@@ -167,6 +167,17 @@ describe('syllabus adapter + lcu-public strategy', () => {
     expect(JSON.parse(JSON.stringify(pages[1]?.cursor))).toEqual(pages[1]?.cursor);
   });
 
+  it('a run resumed at a later page without its state (restart) does not retire entries', async () => {
+    const { adapter } = setup({
+      unitsPerPage: 1,
+      targets: [target('77403030'), target('77501090')],
+    });
+    // Fresh adapter instance asked for the last page of a run it never started.
+    const last = await adapter.sync({ mode: 'initial', pageToken: '1' });
+    expect(last.hasMore).toBe(false);
+    expect(last.complete).toBeUndefined();
+  });
+
   it('accepts a host-injected targetProvider (option and property)', async () => {
     const srv = createLcuServer();
     const module = createSyllabusConnector({

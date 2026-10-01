@@ -211,6 +211,37 @@ describe('runMappedResources', () => {
     expect(pages[0]?.warnings?.some((w) => /announcements: nope/.test(w))).toBe(true);
   });
 
+  it('does not mark fan-out children complete when their parent list is incomplete', async () => {
+    const optionalCourses = parseMappingSpec(
+      canvasYaml().replace(
+        /(updatedAt: updated_at\r?\n {4}complete: true)(\r?\n {2}- name: assignments)/,
+        '$1\n    optional: true$2',
+      ),
+    );
+    const failed = await runAll(
+      canvasCaller({
+        list_courses: () => {
+          throw new ConnectorError('down');
+        },
+      }),
+      {},
+      { mode: 'initial' },
+      optionalCourses,
+    );
+    expect(optionalCourses.resources[0]?.optional).toBe(true);
+    expect(count(failed.items, 'canvas.assignment')).toBe(0);
+    expect(failed.pages.at(-1)?.complete?.sourceTypes ?? []).not.toContain('canvas.assignment');
+
+    // Parent pagination cut by maxPagesPerCall: children of the unseen parents were not listed.
+    const cut = await runAll(
+      canvasCaller({
+        list_courses: (req) => ({ data: COURSES.slice(0, 1), next: { ...req.call } }),
+      }),
+      { maxPagesPerCall: 1 },
+    );
+    expect(cut.pages.at(-1)?.complete?.sourceTypes ?? []).not.toContain('canvas.assignment');
+  });
+
   it('skips items without an externalId, dedupes and validates the page token', async () => {
     const caller = canvasCaller({
       list_courses: () => ({ data: [COURSES[0], COURSES[0], { name: 'no id' }] }),

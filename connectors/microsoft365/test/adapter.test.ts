@@ -6,6 +6,7 @@ import {
   CH_DB_QA,
   FakeGraph,
   fixtureValues,
+  GRAPH_BASE,
   json,
   runSync,
   SELF_ID,
@@ -198,6 +199,29 @@ describe('incremental sync', () => {
     expect(graph.callsTo(isCalendar)[0]?.searchParams.has('startDateTime')).toBe(true);
     expect(typeCount(full.items, 'graph.event')).toBe(3);
     expect(full.complete.has('graph.event')).toBe(true);
+  });
+
+  it('never sends the bearer token to a link outside the Graph origin', async () => {
+    const { adapter, graph } = await setup();
+    const first = await runSync(adapter, { mode: 'initial' });
+    const extra = first.cursor?.extra as { deltaLinks: Record<string, string> };
+    // A tampered stored delta link is ignored (the resource re-baselines from Graph) …
+    const tampered = {
+      ...first.cursor,
+      extra: { ...extra, deltaLinks: { ...extra.deltaLinks, drive: 'https://attacker.example/x' } },
+    };
+    // … and a nextLink pointing elsewhere is not followed.
+    graph.override(
+      (u) => isCalendar(u),
+      () => json({ value: [], '@odata.nextLink': 'https://attacker.example/next' }),
+      1,
+    );
+    graph.calls = [];
+    const second = await runSync(adapter, { mode: 'incremental', cursor: tampered });
+    expect(graph.calls.every((c) => c.url.origin === new URL(GRAPH_BASE).origin)).toBe(true);
+    expect(second.complete.has('graph.event')).toBe(false);
+    expect(second.warnings.join()).toContain('outside the Graph API');
+    expect(second.complete.has('graph.driveItem')).toBe(true);
   });
 
   it('restarts a resource whose delta token expired (HTTP 410)', async () => {

@@ -24,7 +24,11 @@
     "@unicontext/connector-sdk": "workspace:*",
     "@unicontext/core": "workspace:*",
     "@unicontext/mapping": "workspace:*",
+    "cross-spawn": "^7.0.6",
     "yaml": "^2.9.1",
     "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6"
   }
 }

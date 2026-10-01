@@ -34,6 +34,52 @@ export interface HttpClient {
 
 export const DEFAULT_USER_AGENT = 'UniContext/1.0 (local-first personal client)';
 
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 10;
+const CREDENTIAL_HEADERS = ['authorization', 'cookie', 'proxy-authorization'];
+
+/**
+ * Follow redirects by hand when credential headers were injected: fetch strips `Authorization`
+ * on a cross-origin hop but not custom ones (`X-API-Key`, ...), so those are dropped here before
+ * leaving the original origin.
+ */
+async function fetchWithCredentialHeaders(
+  fetchFn: FetchLike,
+  url: string,
+  init: RequestInit,
+  headers: Headers,
+  injected: string[],
+): Promise<Response> {
+  const origin = new URL(url).origin;
+  let current = url;
+  let currentInit: RequestInit = { ...init, headers };
+  for (let hop = 0; ; hop++) {
+    const res = await fetchFn(current, { ...currentInit, redirect: 'manual' });
+    const location = res.headers.get('location');
+    if (!REDIRECTS.has(res.status) || !location) return res;
+    if (hop >= MAX_REDIRECTS)
+      throw new ConnectorError(`Too many redirects from ${new URL(url).host}`);
+    const next = new URL(location, current);
+    const nextHeaders = new Headers(currentInit.headers);
+    if (next.origin !== origin)
+      for (const name of [...injected, ...CREDENTIAL_HEADERS]) nextHeaders.delete(name);
+    const method = (currentInit.method ?? 'GET').toUpperCase();
+    const toGet =
+      res.status === 303 || ((res.status === 301 || res.status === 302) && method === 'POST');
+    if (toGet) {
+      nextHeaders.delete('content-type');
+      nextHeaders.delete('content-length');
+    }
+    await res.body?.cancel().catch(() => undefined);
+    currentInit = { ...currentInit, headers: nextHeaders };
+    if (toGet) {
+      delete currentInit.body;
+      currentInit.method = 'GET';
+    }
+    current = next.toString();
+  }
+}
+
 /**
  * fetch wrapper for connectors: rate limited, maps 401 → AuthRequiredError, 429/503 → RateLimitedError
  * (Retry-After aware), network failures → OfflineError, and retries 5xx with backoff.
@@ -56,7 +102,10 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
         for (const [k, v] of Object.entries(extra)) headers.set(k, v);
         let res: Response;
         try {
-          res = await fetchFn(url, { ...init, headers });
+          res =
+            Object.keys(extra).length > 0 && init.redirect === undefined
+              ? await fetchWithCredentialHeaders(fetchFn, url, init, headers, Object.keys(extra))
+              : await fetchFn(url, { ...init, headers });
         } catch (e) {
           if (e instanceof Error && e.name === 'AbortError') throw e;
           throw new OfflineError(`Request failed: ${new URL(url).host}`, { cause: e });

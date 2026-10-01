@@ -9,6 +9,7 @@ import {
   NotFoundError,
   PolicyViolationError,
   redact,
+  REDACTED,
   ValidationError,
   errorMessage,
 } from '@unicontext/core';
@@ -131,6 +132,50 @@ export function toProposalView(p: Proposal): ProposalView {
     value: p.value,
     note: p.note,
   };
+}
+
+/** Keep only scheme and host: webhook URLs (Slack/Discord/...) carry their secret in the path. */
+function maskUrl(value: string): string {
+  try {
+    const u = new URL(value);
+    return `${u.protocol}//${u.host}/${REDACTED}`;
+  } catch {
+    return REDACTED;
+  }
+}
+
+/** config for GET /api/v1/settings: redacted, with URLs that can embed credentials masked (§41). */
+export function settingsConfig(config: Runtime['config']): Record<string, unknown> {
+  const out = redact(config) as {
+    notifications?: { sinks?: { webhook?: { url?: unknown } } };
+    sources?: Record<string, { url?: unknown } | null>;
+  } & Record<string, unknown>;
+  const hook = out.notifications?.sinks?.webhook;
+  if (hook && typeof hook.url === 'string') hook.url = maskUrl(hook.url);
+  for (const src of Object.values(out.sources ?? {})) {
+    if (!src || typeof src.url !== 'string') continue;
+    try {
+      const u = new URL(src.url);
+      if (u.username || u.password) {
+        u.username = '';
+        u.password = '';
+        src.url = u.toString();
+      }
+    } catch {
+      // not a URL; leave as redacted text
+    }
+  }
+  return out;
+}
+
+function profileRedaction(runtime: Runtime): { extraValuePatterns?: RegExp[] } {
+  const pattern = runtime.profile?.privacy.studentIdPattern;
+  if (!pattern) return {};
+  try {
+    return { extraValuePatterns: [new RegExp(pattern, 'g')] };
+  } catch {
+    return {};
+  }
 }
 
 const FALLBACK_INDEX = `<!doctype html><html lang="ja"><meta charset="utf-8"><title>UniContext</title>
@@ -347,7 +392,9 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
               fetchedAt: raw.fetchedAt,
               sourceUpdatedAt: raw.sourceUpdatedAt,
               deletedAt: raw.deletedAt,
-              ...(wantsRaw ? { payload: redact(raw.payload) as JsonValue } : {}),
+              ...(wantsRaw
+                ? { payload: redact(raw.payload, profileRedaction(runtime)) as JsonValue }
+                : {}),
             }
           : undefined,
         facts,
@@ -390,7 +437,7 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
     timezone: uc.timezone,
     telemetry: runtime.config.telemetry.enabled,
     secretBackend: runtime.secrets.backend,
-    config: redact(runtime.config) as Record<string, unknown>,
+    config: settingsConfig(runtime.config),
   }));
 
   // ---- writes (bearer token or CSRF) -----------------------------------------------------

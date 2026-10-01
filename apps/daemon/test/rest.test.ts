@@ -7,6 +7,7 @@ import type {
   SourceRefResponse,
   TodayContext,
 } from '../src/api-types.js';
+import { settingsConfig } from '../src/rest.js';
 import { bearer, createTestServer, type TestServer, TOKEN } from './helpers.js';
 
 let s: TestServer;
@@ -147,6 +148,30 @@ describe('read endpoints (§41)', () => {
     expect(
       json<{ notifications: unknown[] }>(await get('/api/v1/notifications')).notifications,
     ).toEqual([]);
+  });
+
+  it('settings config masks webhook URLs and URL credentials', () => {
+    const base = s.runtime.config;
+    const cfg = settingsConfig({
+      ...base,
+      sources: { portal: { enabled: true, url: 'https://alice:pw123@portal.example.ac.jp/x' } },
+      notifications: {
+        ...base.notifications,
+        sinks: {
+          ...base.notifications.sinks,
+          webhook: {
+            enabled: true,
+            url: 'https://discord.com/api/webhooks/123/SECRETHOOKTOKEN',
+            minPriority: 'high',
+          },
+        },
+      },
+    });
+    const text = JSON.stringify(cfg);
+    expect(text).not.toContain('SECRETHOOKTOKEN');
+    expect(text).not.toContain('pw123');
+    expect(text).toContain('https://discord.com/');
+    expect(text).toContain('portal.example.ac.jp');
   });
 
   it('unknown /api route -> JSON 404', async () => {

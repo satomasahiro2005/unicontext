@@ -243,6 +243,38 @@ describe('BrowserSession', () => {
     expect(driver.launches).toHaveLength(1);
   });
 
+  it('a scrape (withPage) waits for a running interactive login instead of closing its window', async () => {
+    const s = screens();
+    s[LCU] = { ...s[LCU]!, clicks: { '#btnSsoStart': MS_LOGIN } };
+    const driver = new FakeBrowserDriver({ screens: s, cookies: [sessionCookie] });
+    const { session } = makeSession(driver);
+    const login = session.login();
+    await new Promise((r) => setTimeout(r, 10));
+    const scrape = session.withPage(async (page) => page.url());
+    await new Promise((r) => setTimeout(r, 20));
+    // The human's (headed) window is still open.
+    expect(driver.contexts[0]?.closed).toBe(false);
+    expect(driver.launches).toHaveLength(1);
+    driver.contexts[0]?.list[0]?.navigate(IDP); // the human finishes SSO + MFA
+    expect((await login).status).toBe('authenticated');
+    await scrape;
+    expect(driver.launches.map((l) => l.options.headless)).toEqual([false, true]);
+  });
+
+  it('a login requested during a headless refresh is not answered with the refresh result', async () => {
+    const s = screens();
+    s[LCU] = { ...s[LCU]!, clicks: { '#btnSsoStart': MS_LOGIN } };
+    const driver = new FakeBrowserDriver({ screens: s, cookies: [sessionCookie] });
+    const { session } = makeSession(driver);
+    const refresh = session.refresh();
+    const login = session.login();
+    expect((await refresh).status).toBe('auth_required');
+    await new Promise((r) => setTimeout(r, 10));
+    driver.activePage?.navigate(IDP);
+    expect((await login).status).toBe('authenticated');
+    expect(driver.launches.map((l) => l.options.headless)).toEqual([true, false]);
+  });
+
   it('clear() forgets exported cookies', async () => {
     const driver = new FakeBrowserDriver({ screens: screens(), cookies: [sessionCookie] });
     const { session } = makeSession(driver);
@@ -278,6 +310,16 @@ describe('BrowserSession', () => {
 });
 
 describe('CookieJar', () => {
+  it('rejects Set-Cookie for a domain that does not cover the responding host', () => {
+    const jar = new CookieJar(() => Date.UTC(2026, 9, 1));
+    jar.update('https://gakujo.example.ac.jp/lcu-web/x', [
+      'evil=1; Domain=attacker.example; Path=/',
+      'ok=1; Domain=example.ac.jp; Path=/',
+    ]);
+    expect(jar.header('https://attacker.example/')).toBe('');
+    expect(jar.header('https://gakujo.example.ac.jp/lcu-web/x')).toBe('ok=1');
+  });
+
   it('parses Set-Cookie and matches path/domain/secure', () => {
     const now = Date.parse('2026-10-01T00:00:00Z');
     const jar = new CookieJar(() => now);
@@ -383,5 +425,28 @@ describe('browser page-snapshot connector', () => {
     expect(res.items[0]?.payload).toMatchObject({ title: 'お知らせ', text: 'お知らせ\n休講&補講' });
     expect(driver.checked).toEqual([REMEMBER]);
     expect(htmlToText('<p>a&#x41;&#66;</p>')).toBe('aAB');
+  });
+
+  it('does not store a sign-in screen as page content when the session ran out', async () => {
+    const { instantiateConnector } = await import('@unicontext/connector-sdk');
+    const { createBrowserConnector } = await import('../src/index.js');
+    const driver = new FakeBrowserDriver({
+      screens: screens(),
+      cookies: [sessionCookie],
+      redirects: { [`${HOME}#notices`]: MS_LOGIN },
+    });
+    const inst = instantiateConnector(createBrowserConnector({ driver, pollIntervalMs: 2 }), {
+      sourceId: 'outlook-web',
+      config: {
+        startUrl: LCU,
+        loginButton: '#btnSsoStart',
+        authenticatedUrlPattern: '/SC_01002B00_00',
+        pages: [{ url: `${HOME}#notices` }],
+        consent: { shibboleth: { hosts: ['idp.example.ac.jp'] } },
+        profileDir: join(tempDir(), 'p'),
+      },
+      secrets: new MemorySecretStore(),
+    });
+    await expect(inst.adapter.sync({ mode: 'initial' })).rejects.toBeInstanceOf(AuthRequiredError);
   });
 });

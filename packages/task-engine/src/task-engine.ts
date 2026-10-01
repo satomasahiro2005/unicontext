@@ -238,7 +238,10 @@ export class TaskEngine {
         };
         const id = factId(ref.id, e.id, DEADLINE_PREDICATE, value);
         keep.add(id);
-        if (this.facts.get(id)) continue;
+        // A retracted copy must be re-asserted: re-normalizing the raw item (an edit, reprocess())
+        // retracts every fact hanging off its source reference, including these extracted ones.
+        const existing = this.facts.get(id);
+        if (existing && !existing.retractedAt) continue;
         this.facts.put({
           id,
           subject: e.id as EntityId,
@@ -298,6 +301,11 @@ export class TaskEngine {
     const count = (s: 'created' | 'updated' | 'unchanged'): void => {
       if (s !== 'unchanged') report[s]++;
     };
+    // A task the system cancelled because its origin disappeared comes back when the origin does.
+    const revived = (prev: Task | undefined): TaskStatus =>
+      !prev || (prev.status === 'cancelled' && prev.statusSetBy === 'system')
+        ? 'pending'
+        : prev.status;
 
     const assignmentTasks: Task[] = [];
     for (const a of this.entities.list('assignment')) {
@@ -341,8 +349,8 @@ export class TaskEngine {
         createdAt: prev?.createdAt ?? now,
         updatedAt: now,
       };
+      // Saved after the extracted deadlines below, which may add their fact ids to it.
       assignmentTasks.push(task);
-      count(this.save(task).status);
     }
 
     for (const ex of this.entities.list('exam') as Exam[]) {
@@ -361,7 +369,7 @@ export class TaskEngine {
           examId: ex.id,
           sourceFactIds: factIds as Task['sourceFactIds'],
           dueAt: ex.startsAt,
-          status: prev?.status ?? 'pending',
+          status: revived(prev),
           createdBy: 'system',
           taskKind: 'exam_preparation',
           origin: 'inferred',
@@ -392,7 +400,7 @@ export class TaskEngine {
       );
       if (dup) {
         if (!dup.sourceFactIds.includes(f.id))
-          count(this.save({ ...dup, sourceFactIds: [...dup.sourceFactIds, f.id] }).status);
+          dup.sourceFactIds = [...dup.sourceFactIds, f.id as Task['sourceFactIds'][number]];
         continue;
       }
       const id = stableId('task', 'extracted', f.id);
@@ -406,7 +414,7 @@ export class TaskEngine {
           ...(course ? { courseOfferingId: course as Task['courseOfferingId'] } : {}),
           sourceFactIds: [f.id],
           dueAt: v.dueAt,
-          status: prev?.status ?? 'pending',
+          status: revived(prev),
           createdBy: 'extractor',
           taskKind: 'extracted',
           origin: 'extracted',
@@ -418,6 +426,8 @@ export class TaskEngine {
         }).status,
       );
     }
+
+    for (const t of assignmentTasks) count(this.save(t).status);
 
     // Derived tasks whose origin disappeared are cancelled (never deleted: the user may have notes).
     for (const t of this.list()) {

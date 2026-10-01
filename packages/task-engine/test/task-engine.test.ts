@@ -173,8 +173,34 @@ describe('TaskEngine (§19)', () => {
     expect(extracted[0]?.evidence).toContain('10月12日17時までに');
     // the restated assignment deadline is merged into the assignment task
     expect(engine.list().find((t) => t.taskKind === 'assignment')?.sourceFactIds).toHaveLength(2);
-    // idempotent
-    expect(engine.derive()).toMatchObject({ created: 0, extractedFacts: 0 });
+    // idempotent: no churn on the assignment task that absorbed the restated deadline
+    expect(engine.derive()).toMatchObject({ created: 0, updated: 0, extractedFacts: 0 });
+    expect(engine.list().find((t) => t.taskKind === 'assignment')?.sourceFactIds).toHaveLength(2);
+
+    // Re-normalizing the announcement's raw item retracts every fact on its source reference.
+    // The next derive must bring the extracted deadlines back, and the task with them.
+    const deadlineIds = (
+      db.sqlite.prepare("SELECT id FROM facts WHERE predicate = 'deadline'").all() as {
+        id: string;
+      }[]
+    ).map((r) => r.id);
+    resolver.facts.retract(deadlineIds);
+    expect(engine.derive().cancelled).toBe(0);
+    expect(resolver.facts.getMany(deadlineIds).every((f) => f.retractedAt === undefined)).toBe(
+      true,
+    );
+    expect(engine.list().find((t) => t.taskKind === 'extracted')?.status).toBe('pending');
+
+    // The announcement disappears (task cancelled by the system), then comes back.
+    const n1 = stableId('announcement', 'n1');
+    const store = new EntityStore(db, { clock });
+    const announcement = store.get(n1);
+    store.softDelete(n1);
+    resolver.facts.retract(deadlineIds);
+    expect(engine.derive().cancelled).toBe(1);
+    if (announcement) store.upsert(announcement);
+    engine.derive();
+    expect(engine.list().find((t) => t.taskKind === 'extracted')?.status).toBe('pending');
   });
 
   it('cancels derived tasks whose assignment disappeared', () => {

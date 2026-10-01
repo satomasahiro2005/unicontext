@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CanonicalEntitySchema } from '@unicontext/canonical-model';
@@ -200,6 +202,33 @@ describe('runCommand', () => {
       }),
     ).rejects.toMatchObject({ name: 'AbortError' });
   });
+
+  it.runIf(process.platform === 'win32')(
+    'starts a Windows .cmd shim and still passes metacharacters literally',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'uc-cli-shim-'));
+      try {
+        // Same shape as the shims npm writes for globally installed CLIs.
+        writeFileSync(
+          join(dir, 'fakecli.cmd'),
+          `@ECHO off
+"${process.execPath}" "${SCRIPT}" %*
+`,
+        );
+        const nasty = ['a b', '& echo pwned', '| more', '%PATH%', '^caret', '"q"', '(x)'];
+        const r = await runCommand({
+          command: 'fakecli',
+          args: ['argv', ...nasty],
+          env: { ...env, PATH: `${dir};${env.PATH}`, PATHEXT: '.COM;.EXE;.BAT;.CMD' },
+          timeoutMs: 20000,
+        });
+        expect(r.code).toBe(0);
+        expect((JSON.parse(r.stdout) as { argv: string[] }[])[0]?.argv).toEqual(nasty);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('commandExists finds node and rejects unknown names', () => {
     expect(commandExists(process.execPath)).toBe(true);

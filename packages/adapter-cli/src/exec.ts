@@ -1,5 +1,6 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { ConnectorError, OfflineError, redact } from '@unicontext/core';
+import spawn from 'cross-spawn';
 
 export interface RunCommandOptions {
   command: string;
@@ -31,7 +32,9 @@ const SPAWN_FAILURES = new Set(['ENOENT', 'EACCES', 'ENOTDIR', 'EPERM', 'EINVAL'
 
 /**
  * Run a command WITHOUT a shell: `args` are passed to the program as separate argv entries, so
- * template values cannot inject shell syntax. Enforces a timeout (SIGKILL) and an output cap.
+ * template values cannot inject shell syntax. Spawning goes through cross-spawn so Windows `.cmd`
+ * / `.bat` shims (npm-installed CLIs) start too: it resolves the command via PATH/PATHEXT and, for
+ * shims only, runs them through cmd.exe with every argument escaped for cmd's metacharacters. Enforces a timeout (SIGKILL) and an output cap.
  * Spawn failures are OfflineError ("the tool is not installed"); everything else resolves with the
  * exit code for the caller to judge.
  */
@@ -66,6 +69,17 @@ export function runCommand(options: RunCommandOptions): Promise<CommandResult> {
     let settled = false;
 
     const kill = (): void => {
+      // A Windows .cmd shim runs the real tool as a grandchild of cmd.exe; kill the whole tree.
+      if (process.platform === 'win32' && child.pid !== undefined && child.exitCode === null) {
+        try {
+          spawn.sync('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+        } catch {
+          // fall through to child.kill()
+        }
+      }
       try {
         child.kill('SIGKILL');
       } catch {

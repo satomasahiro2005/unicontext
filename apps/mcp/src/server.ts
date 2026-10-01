@@ -34,7 +34,7 @@ import {
   type EnvelopeOptions,
   type McpEnvelope,
 } from './envelope.js';
-import type { ProposalStore } from './proposals.js';
+import { HIGH_RISK_SUBJECT_KINDS, isHighRiskPredicate, type ProposalStore } from './proposals.js';
 
 export interface McpDeps {
   uc: UniContext;
@@ -89,7 +89,12 @@ function envelopeResult(envelope: McpEnvelope): CallToolResult {
   };
 }
 
-function errorResult(e: unknown, logger: Logger, tool: string): CallToolResult {
+function errorResult(
+  e: unknown,
+  logger: Logger,
+  tool: string,
+  ropts: { extraValuePatterns?: RegExp[] } = {},
+): CallToolResult {
   let message: string;
   if (isUniContextError(e)) message = `${e.code}: ${e.message}`;
   else if (e instanceof z.ZodError)
@@ -98,7 +103,8 @@ function errorResult(e: unknown, logger: Logger, tool: string): CallToolResult {
     logger.error('mcp tool failed', { tool, error: errorMessage(e) });
     message = `internal: ${errorMessage(e)}`;
   }
-  return { isError: true, content: [{ type: 'text', text: message }] };
+  // Error text goes to the AI client: never let a token/cookie/student id inside it through (§60).
+  return { isError: true, content: [{ type: 'text', text: redact(message, ropts) as string }] };
 }
 
 function redactionOptions(uc: UniContext): { extraValuePatterns?: RegExp[] } {
@@ -176,7 +182,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         return envelopeResult(buildEnvelope(out.data, out.options));
       } catch (e) {
         logger.debug('mcp tool error', { tool: name, ms: Date.now() - started });
-        return errorResult(e, logger, name);
+        return errorResult(e, logger, name, redactionOptions(uc));
       }
     };
     server.registerTool(
@@ -493,7 +499,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       throw new ValidationError(
         'predicate must be a short identifier such as room or assignment_due',
       );
-    if (/^(grade|submission|enrol)/i.test(predicate))
+    if (isHighRiskPredicate(predicate))
       throw new ValidationError(
         `predicate "${predicate}" is not allowed: grades, submissions and enrolment are high-risk and cannot be changed through MCP (§51)`,
       );
@@ -501,6 +507,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     if (!parsed.success) throw new ValidationError('value must be valid JSON');
     const value: JsonValue = parsed.data;
     const subject = subjectEntity(a.subject);
+    const subjectKind = subject.id.slice(0, subject.id.indexOf(':'));
+    if (HIGH_RISK_SUBJECT_KINDS.has(subjectKind))
+      throw new ValidationError(
+        `subject "${subject.id}" is not allowed: grades and submissions are high-risk and cannot be changed through MCP (§51)`,
+      );
 
     const current = uc.resolver.resolve(subject.id, predicate);
     const candidates = current.candidates.map((c) => ({

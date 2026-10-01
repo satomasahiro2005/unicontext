@@ -111,6 +111,32 @@ describe('createHttpClient', () => {
     expect(seen?.get('user-agent')).toContain('UniContext');
   });
 
+  it('drops injected credential headers when a redirect leaves the origin', async () => {
+    const seen: { url: string; key: string | null; method: string | undefined }[] = [];
+    const http = createHttpClient({
+      headers: () => ({ 'x-api-key': 'k-secret' }),
+      fetch: async (url, init) => {
+        seen.push({
+          url,
+          key: new Headers(init?.headers).get('x-api-key'),
+          method: init?.method,
+        });
+        if (url === 'https://api.example.ac.jp/a')
+          return resp(302, { location: 'https://api.example.ac.jp/b' });
+        if (url === 'https://api.example.ac.jp/b')
+          return resp(303, { location: 'https://evil.example.com/c' });
+        return resp(200);
+      },
+    });
+    const res = await http.request('https://api.example.ac.jp/a', { method: 'POST', body: '{}' });
+    expect(res.status).toBe(200);
+    expect(seen).toEqual([
+      { url: 'https://api.example.ac.jp/a', key: 'k-secret', method: 'POST' },
+      { url: 'https://api.example.ac.jp/b', key: 'k-secret', method: 'GET' },
+      { url: 'https://evil.example.com/c', key: null, method: 'GET' },
+    ]);
+  });
+
   it('retries 429 using Retry-After, and 5xx with backoff', async () => {
     const clock = new ManualClock();
     const statuses = [429, 502, 200];

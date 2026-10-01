@@ -76,7 +76,14 @@ export class BrowserSession {
   private readonly handlers: InterstitialHandler[];
   private context: BrowserContextLike | undefined;
   private contextHeadless: boolean | undefined;
-  private inFlight: Promise<AuthResult> | undefined;
+  /** The running/queued login or refresh (callers of the same kind share it). */
+  private inFlight: { headless: boolean; promise: Promise<AuthResult> } | undefined;
+  /**
+   * Serial queue over everything that opens, closes or reads the persistent profile (login,
+   * refresh, withPage, clear): one browser context per profile at a time, so a scheduled sync can
+   * never close the window a human is logging in with, and logout cannot race a cookie export.
+   */
+  private chain: Promise<unknown> = Promise.resolve();
   lastResult: AuthResult | undefined;
 
   constructor(private readonly options: BrowserSessionOptions) {
@@ -96,7 +103,7 @@ export class BrowserSession {
 
   /** Interactive login: opens a visible browser and waits for the human (SSO + MFA). */
   login(options: InteractiveLoginOptions = {}): Promise<AuthResult> {
-    return this.exclusive(() =>
+    return this.exclusive(false, () =>
       this.run({
         headless: false,
         timeoutMs: options.timeoutMs ?? this.options.timeoutMs ?? 10 * 60_000,
@@ -110,7 +117,7 @@ export class BrowserSession {
    * credential/MFA page or does not finish in time, the result is `auth_required`.
    */
   refresh(signal?: AbortSignal): Promise<AuthResult> {
-    return this.exclusive(() =>
+    return this.exclusive(true, () =>
       this.run({
         headless: true,
         timeoutMs: this.options.refreshTimeoutMs ?? 60_000,
@@ -119,13 +126,26 @@ export class BrowserSession {
     );
   }
 
-  private exclusive(fn: () => Promise<AuthResult>): Promise<AuthResult> {
-    if (this.inFlight) return this.inFlight;
-    const p = fn().finally(() => {
-      this.inFlight = undefined;
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.chain.then(fn, fn);
+    this.chain = next.catch(() => undefined);
+    return next;
+  }
+
+  /**
+   * A refresh joins whatever login/refresh is already pending (a human login also yields fresh
+   * cookies); a login joins only a pending login, and otherwise queues behind a running refresh
+   * instead of being answered with the headless refresh's `auth_required`.
+   */
+  private exclusive(headless: boolean, fn: () => Promise<AuthResult>): Promise<AuthResult> {
+    const pending = this.inFlight;
+    if (pending && (headless || !pending.headless)) return pending.promise;
+    const entry = { headless, promise: undefined as unknown as Promise<AuthResult> };
+    entry.promise = this.serial(fn).finally(() => {
+      if (this.inFlight === entry) this.inFlight = undefined;
     });
-    this.inFlight = p;
-    return p;
+    this.inFlight = entry;
+    return entry.promise;
   }
 
   private async openContext(headless: boolean): Promise<BrowserContextLike> {
@@ -300,18 +320,30 @@ export class BrowserSession {
    * with `{profile: true}`.
    */
   async clear(options: { profile?: boolean } = {}): Promise<void> {
+    // Closing the context first ends a running login/refresh/withPage quickly (its pages are
+    // gone); the actual deletion then runs after it, so nothing re-exports cookies afterwards.
     await this.closeContext();
-    await this.options.secrets.delete(this.secretName);
-    if (options.profile) await rm(this.options.profileDir, { recursive: true, force: true });
+    await this.serial(async () => {
+      await this.closeContext();
+      await this.options.secrets.delete(this.secretName);
+      if (options.profile) await rm(this.options.profileDir, { recursive: true, force: true });
+    });
   }
 
   /**
    * Run `fn` with an authenticated page (headless by default) — for scraping sources that have no
    * usable HTTP API (§31). Returns undefined when the session cannot be established.
    */
-  async withPage<T>(
+  withPage<T>(
     fn: (page: PageLike, context: BrowserContextLike) => Promise<T>,
     options: { headless?: boolean; url?: string } = {},
+  ): Promise<{ result: T } | { auth: AuthResult }> {
+    return this.serial(() => this.withPageNow(fn, options));
+  }
+
+  private async withPageNow<T>(
+    fn: (page: PageLike, context: BrowserContextLike) => Promise<T>,
+    options: { headless?: boolean; url?: string },
   ): Promise<{ result: T } | { auth: AuthResult }> {
     const headless = options.headless ?? true;
     try {
@@ -342,6 +374,7 @@ export class BrowserSession {
   async close(): Promise<void> {
     await this.closeContext();
   }
+  // close() deliberately bypasses the queue: dispose must be able to end a stuck login.
 }
 
 function stripQuery(url: string): string {

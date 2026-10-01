@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DaemonApiError, DaemonClient } from '../src/client.js';
-import { startDaemon, type RunningDaemon } from '../src/daemon.js';
+import { drainSyncs, startDaemon, type RunningDaemon } from '../src/daemon.js';
 import { DaemonAlreadyRunningError, lockFile } from '../src/lock.js';
 
 /** fetch() forbids overriding Host, so use node:http for the rebinding cases. */
@@ -91,6 +91,21 @@ describe('unicontextd', () => {
     ).toBe(403);
   });
 
+  it('the Host check also covers the Web UI, SPA fallback, 404 and parse-error paths', async () => {
+    const evil = { host: 'evil.example.com' };
+    for (const url of ['/', '/app.js', '/today', '/nope.png', '/api/v1/nope'])
+      expect(await rawRequest(daemon.port, 'GET', url, evil), url).toBe(403);
+    expect(
+      await rawRequest(
+        daemon.port,
+        'POST',
+        '/api/v1/identity/confirm',
+        { ...evil, 'content-type': 'application/json' },
+        '{not json',
+      ),
+    ).toBe(403);
+  });
+
   it('single-instance lock: a second daemon on the same data dir fails', async () => {
     const file = lockFile(daemon.runtime.paths);
     expect(existsSync(file)).toBe(true);
@@ -133,6 +148,21 @@ describe('unicontextd', () => {
     writeFileSync(lockFile({ root: other }), JSON.stringify({ pid: 1, port: 1, startedAt: 'x' }));
     expect(await DaemonClient.discover({ root: other }, new MemorySecretStore())).toBeUndefined();
     rmSync(other, { recursive: true, force: true });
+  });
+
+  it('discover does not hand the token to a listener whose pid does not own the lock', async () => {
+    const other = mkdtempSync(path.join(tmpdir(), 'uc-squat-'));
+    try {
+      // a stale lock whose port is now served by a different process
+      writeFileSync(
+        lockFile({ root: other }),
+        JSON.stringify({ pid: process.pid + 1, port: daemon.port, startedAt: 'x' }),
+      );
+      writeFileSync(path.join(other, 'daemon.token'), `${'t'.repeat(43)}\n`);
+      expect(await DaemonClient.discover({ root: other }, new MemorySecretStore())).toBeUndefined();
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it('serves MCP over streamable HTTP at /mcp (§39)', async () => {
@@ -185,5 +215,44 @@ describe('unicontextd', () => {
     await d2.stopped;
     expect(existsSync(lock)).toBe(false);
     await expect(fetch(`${d2.url}/api/v1/health`)).rejects.toThrow();
+  });
+});
+
+describe('shutdown', () => {
+  const fakeUc = (running: string[], pending: Promise<unknown>, started: string[]) =>
+    ({
+      sync: {
+        sources: () => [{ sourceId: 'a' }, { sourceId: 'b' }],
+        isRunning: (id: string) => running.includes(id),
+        sync: (id: string) => {
+          started.push(id);
+          return pending;
+        },
+      },
+    }) as unknown as Parameters<typeof drainSyncs>[0];
+
+  it('drainSyncs waits for in-flight syncs before the database closes and starts none', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((r) => {
+      release = r;
+    });
+    const started: string[] = [];
+    let done = false;
+    const drained = drainSyncs(fakeUc(['a'], pending, started)).then(() => {
+      done = true;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(done).toBe(false);
+    release();
+    await drained;
+    expect(done).toBe(true);
+    expect(started).toEqual(['a']);
+  });
+
+  it('drainSyncs is bounded and tolerates a rejecting sync', async () => {
+    const started: string[] = [];
+    await drainSyncs(fakeUc(['a'], new Promise(() => undefined), started), 30);
+    await drainSyncs(fakeUc(['b'], Promise.reject(new Error('db closed')), started), 30);
+    expect(started).toEqual(['a', 'b']);
   });
 });

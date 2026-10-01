@@ -83,6 +83,13 @@ describe('RawStore', () => {
       data: new TextEncoder().encode('pdf bytes'),
     });
     expect(f.storage).toBe('file');
+    // portable relative path: the same DB/blobs dir must resolve on macOS/Linux and Windows
+    expect(f.path).toBe(`${f.sha256.slice(0, 2)}/${f.sha256}`);
+    expect(file.stores.raw.readBlob(f.id).toString()).toBe('pdf bytes');
+    // rows written by older Windows builds used "\" separators
+    db.sqlite
+      .prepare('UPDATE raw_blobs SET path = ? WHERE id = ?')
+      .run(`${f.sha256.slice(0, 2)}\\${f.sha256}`, f.id);
     expect(file.stores.raw.readBlob(f.id).toString()).toBe('pdf bytes');
     expect(file.stores.raw.deleteBlobsBySource('lcu')).toBe(1);
   });

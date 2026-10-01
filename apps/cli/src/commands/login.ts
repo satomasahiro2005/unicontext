@@ -1,4 +1,4 @@
-import type { AuthResult } from '@unicontext/connector-sdk';
+import { type AuthResult, supportsInteractiveLogin } from '@unicontext/connector-sdk';
 import { AuthRequiredError } from '@unicontext/core';
 import type { Command } from 'commander';
 import { CliError, loginHint } from '../errors.js';
@@ -51,7 +51,17 @@ export function registerLogin(program: Command, h: Harness): void {
           );
         let auth: AuthResult;
         try {
+          // authenticate() never prompts (connector-sdk contract); when the stored session is not
+          // enough, adapters with an interactive flow (OAuth / SSO + MFA) open the browser here.
           auth = await adapter.authenticate();
+          if (
+            (auth.status === 'auth_required' || auth.status === 'failed') &&
+            supportsInteractiveLogin(adapter)
+          ) {
+            if (!ctx.json)
+              ctx.err('ブラウザを開きます。大学のアカウントでログインを済ませてください…');
+            auth = await adapter.login();
+          }
         } catch (e) {
           if (e instanceof AuthRequiredError)
             throw new CliError(

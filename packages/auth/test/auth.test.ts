@@ -116,6 +116,25 @@ describe('loopback authorization flow (RFC 8252)', () => {
     await listener.close();
   });
 
+  it('closes the listener and clears its timeout when the browser cannot be opened', async () => {
+    const clock = new ManualClock('2026-10-01T00:00:00Z');
+    let redirectUri = '';
+    await expect(
+      authorizeWithPkce(config, {
+        clock,
+        openBrowser: (authUrl) => {
+          redirectUri = new URL(authUrl).searchParams.get('redirect_uri') ?? '';
+          return Promise.reject(new Error('xdg-open not found'));
+        },
+        fetch: () => Promise.reject(new Error('token endpoint must not be called')),
+      }),
+    ).rejects.toThrow(/xdg-open not found/);
+    // No timer is left behind to reject an orphaned promise minutes later.
+    expect(clock.pending).toBe(0);
+    // The loopback port is closed.
+    await expect(fetch(redirectUri)).rejects.toThrow();
+  });
+
   it('reports an authorization error from the provider', async () => {
     const listener = await startLoopbackListener();
     const assertion = expect(listener.waitForCode('s')).rejects.toThrow(/access_denied/);

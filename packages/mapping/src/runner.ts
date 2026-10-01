@@ -269,6 +269,7 @@ export async function runMappedResources(
           kept.push(p);
       } catch (e) {
         warn(`${res.name}: forEach.where failed: ${errText(e)}`);
+        incomplete.add(res.sourceType);
       }
     }
     return kept;
@@ -342,10 +343,27 @@ export async function runMappedResources(
     result.nextPageToken = JSON.stringify(nextState);
   } else {
     result.hasMore = false;
+    // A fan-out child is only as complete as its parent list: if the parent failed (optional),
+    // was cut by the page limit or lost rows to forEach.where errors, the children of the
+    // missing parents were never listed and must not be retired.
+    const byName = new Map(spec.resources.map((r) => [r.name, r] as const));
+    const parentIncomplete = (r: ResourceSpec): boolean => {
+      const visited = new Set<string>();
+      let cur: ResourceSpec | undefined = r;
+      while (cur?.forEach && !visited.has(cur.name)) {
+        visited.add(cur.name);
+        cur = byName.get(cur.forEach.resource);
+        if (!cur || incomplete.has(cur.sourceType)) return true;
+      }
+      return false;
+    };
     const completeTypes = [
       ...new Set(
         spec.resources
-          .filter((r) => r.complete && !skipped(r) && !incomplete.has(r.sourceType))
+          .filter(
+            (r) =>
+              r.complete && !skipped(r) && !incomplete.has(r.sourceType) && !parentIncomplete(r),
+          )
           .map((r) => r.sourceType),
       ),
     ];

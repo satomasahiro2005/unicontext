@@ -16,7 +16,10 @@ import {
 import { and, asc, eq, inArray, or } from 'drizzle-orm';
 import {
   DEFAULT_THRESHOLDS,
+  isTitleOnly,
+  type MatchResult,
   type MatchThresholds,
+  type OfferingCandidate,
   scoreOfferingMatch,
   toCandidate,
 } from './matcher.js';
@@ -162,35 +165,79 @@ export class IdentityResolver {
       .list('courseOffering')
       .map((o) => toCandidate(o, this.entities.meta(o.id)?.sourceId));
     const report: ResolveReport = { linked: [], suggested: [], removed: 0 };
+    const pairs: { a: OfferingCandidate; b: OfferingCandidate; m: MatchResult }[] = [];
     for (let i = 0; i < offerings.length; i++) {
       for (let j = i + 1; j < offerings.length; j++) {
         const a = offerings[i];
         const b = offerings[j];
         if (!a || !b || (a.sourceId && a.sourceId === b.sourceId)) continue;
-        const existing = this.getLink(a.id, b.id);
-        if (existing?.decidedBy === 'user') continue;
-        const m = scoreOfferingMatch(a, b, { thresholds: this.thresholds });
-        if (m.decision === 'none') {
-          if (existing) {
-            this.db.orm.delete(identityLinks).where(eq(identityLinks.id, existing.id)).run();
-            this.cache = undefined;
-            report.removed++;
-          }
-          continue;
-        }
-        const status: IdentityLinkStatus = m.decision === 'link' ? 'auto' : 'suggested';
-        if (existing && existing.status === status && existing.score === m.score) continue;
-        const link = this.link(a.id, b.id, {
-          status,
-          score: m.score,
-          method: 'course-offering-matcher',
-          evidence: m.evidence,
-          decidedBy: 'system',
-        });
-        (status === 'auto' ? report.linked : report.suggested).push(link);
+        if (this.getLink(a.id, b.id)?.decidedBy === 'user') continue;
+        pairs.push({ a, b, m: scoreOfferingMatch(a, b, { thresholds: this.thresholds }) });
       }
     }
+    this.demoteAmbiguousTitleOnly(pairs);
+    for (const { a, b, m } of pairs) {
+      const existing = this.getLink(a.id, b.id);
+      if (m.decision === 'none') {
+        if (existing) {
+          this.db.orm.delete(identityLinks).where(eq(identityLinks.id, existing.id)).run();
+          this.cache = undefined;
+          report.removed++;
+        }
+        continue;
+      }
+      const status: IdentityLinkStatus = m.decision === 'link' ? 'auto' : 'suggested';
+      if (existing && existing.status === status && existing.score === m.score) continue;
+      const link = this.link(a.id, b.id, {
+        status,
+        score: m.score,
+        method: 'course-offering-matcher',
+        evidence: m.evidence,
+        decidedBy: 'system',
+      });
+      (status === 'auto' ? report.linked : report.suggested).push(link);
+    }
     return report;
+  }
+
+  /**
+   * Links are unioned transitively, so a title-only offering (a folder named 「英語I」) auto-linked
+   * to two different offerings with that title (two sections from the syllabus) would merge those
+   * sections into one course. When the offerings a title-only one would auto-link to are not all
+   * linked to each other on their own evidence (or by the user), those links become suggestions.
+   */
+  private demoteAmbiguousTitleOnly(
+    pairs: { a: OfferingCandidate; b: OfferingCandidate; m: MatchResult }[],
+  ): void {
+    const key = (x: string, y: string): string => ordered(x, y).join('|');
+    const linked = new Set<string>();
+    for (const { a, b, m } of pairs)
+      if (m.decision === 'link' && !m.titleOnly) linked.add(key(a.id, b.id));
+    for (const l of this.listLinks({ status: 'confirmed' })) linked.add(key(l.leftId, l.rightId));
+    const byHub = new Map<string, MatchResult[]>();
+    const targets = new Map<string, string[]>();
+    for (const { a, b, m } of pairs) {
+      if (m.decision !== 'link' || !m.titleOnly) continue;
+      for (const [hub, other] of [
+        [a, b],
+        [b, a],
+      ] as const) {
+        if (!isTitleOnly(hub)) continue;
+        byHub.set(hub.id, [...(byHub.get(hub.id) ?? []), m]);
+        targets.set(hub.id, [...(targets.get(hub.id) ?? []), other.id]);
+      }
+    }
+    for (const [hub, others] of targets) {
+      const ambiguous = others.some((x, i) =>
+        others.slice(i + 1).some((y) => !linked.has(key(x, y))),
+      );
+      if (!ambiguous) continue;
+      for (const m of byHub.get(hub) ?? []) {
+        if (m.decision !== 'link') continue;
+        m.decision = 'suggest';
+        m.evidence.push('same title matches several different offerings; needs confirmation');
+      }
+    }
   }
 
   private components(): Map<string, string[]> {

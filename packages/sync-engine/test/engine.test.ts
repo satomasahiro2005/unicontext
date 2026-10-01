@@ -5,7 +5,7 @@ import {
   type FakeConnector,
   type Normalizer,
 } from '@unicontext/connector-sdk';
-import { openDatabase, type UniContextDatabase } from '@unicontext/database';
+import { openDatabase, purgeSource, type UniContextDatabase } from '@unicontext/database';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type HealthChangedEvent, SyncEngine, SyncScheduler } from '../src/index.js';
 
@@ -258,6 +258,54 @@ describe('SyncEngine', () => {
     expect(engine.stores.changes.list({ types: ['created'] })).toHaveLength(1);
   });
 
+  it('does not let a full refresh delete an item a watcher ingested during the run', async () => {
+    const original = fake.adapter.sync.bind(fake.adapter);
+    let pushed: Promise<unknown> | undefined;
+    fake.adapter.sync = async (input) => {
+      const result = await original(input);
+      // A file event arrives while the multi-page full listing is still in flight.
+      pushed ??= engine.ingest('lms', {
+        items: [
+          {
+            sourceType: 'fake.announcement',
+            externalId: 'n-pushed',
+            payload: { id: 'n-pushed', courseId: 'c1', title: '休講', body: '10/8は休講' },
+          },
+        ],
+      });
+      return result;
+    };
+    const report = await engine.sync('lms', { mode: 'full' });
+    await pushed;
+    expect(report.ok).toBe(true);
+    expect(report.raw.deleted).toBe(0);
+    const item = engine.stores.raw.find('lms', 'fake.announcement', 'n-pushed');
+    expect(item?.deletedAt).toBeUndefined();
+    expect(engine.stores.entities.get(id('announcement', 'n-pushed'))).toBeDefined();
+  });
+
+  it('keeps syncing a source purged by another process (§63)', async () => {
+    expect((await engine.sync('lms')).ok).toBe(true);
+    purgeSource(db, 'lms'); // e.g. `unicontext purge source lms` while the daemon runs
+    const r = await engine.sync('lms');
+    expect(r.ok).toBe(true);
+    expect(engine.stores.raw.countBySource('lms').live).toBeGreaterThan(0);
+  });
+
+  it('never stores or broadcasts secrets from adapter errors (§59)', async () => {
+    const failed: string[] = [];
+    engine.bus.on('sync:failed', (e) => void failed.push(e.error));
+    fake.adapter.failNext = new Error(
+      'GET https://api.example/x?access_token=SECRET123 failed: Authorization: Bearer SECRET456',
+    );
+    const r = await engine.sync('lms');
+    expect(r.ok).toBe(false);
+    const stored = JSON.stringify([engine.health('lms'), r.error, failed]);
+    expect(stored).not.toContain('SECRET123');
+    expect(stored).not.toContain('SECRET456');
+    expect(engine.health('lms')?.message).toContain('access_token=');
+  });
+
   it('runs post-processors with the changed entity ids', async () => {
     const seen: string[][] = [];
     engine.addPostProcessor({
@@ -302,5 +350,24 @@ describe('SyncScheduler (§36)', () => {
     sched.stop();
     await clock.advance(60 * 60_000);
     expect(fake.adapter.syncCalls).toHaveLength(5);
+  });
+
+  it('drops the timer of a source unregistered while armed instead of crashing', async () => {
+    const sched = new SyncScheduler(engine, { clock, schedules: { lms: '15m' }, jitterRatio: 0 });
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown): void => void rejections.push(e);
+    process.on('unhandledRejection', onRejection);
+    try {
+      sched.start();
+      await clock.advance(0);
+      await engine.unregister('lms');
+      await clock.advance(60 * 60_000);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(rejections).toEqual([]);
+      expect(sched.status()).toEqual([]);
+    } finally {
+      sched.stop();
+      process.off('unhandledRejection', onRejection);
+    }
   });
 });

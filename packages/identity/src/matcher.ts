@@ -49,6 +49,16 @@ export interface MatchResult {
   decision: 'link' | 'suggest' | 'none';
   evidence: string[];
   veto: string | undefined;
+  /**
+   * The exact-title bonus for a title-only source was applied. Such a link rests on the title
+   * alone, so the resolver demotes it when the same title points at several distinct offerings.
+   */
+  titleOnly?: boolean;
+}
+
+/** A source that knows only a course's title (course folder, transcript hint, Teams team name). */
+export function isTitleOnly(c: OfferingCandidate): boolean {
+  return !c.courseCode && c.instructorNames.length === 0 && c.schedule.length === 0;
 }
 
 /**
@@ -134,10 +144,10 @@ export function scoreOfferingMatch(
   // Title-only sources (a course folder, a transcript's course hint, a Teams team name) carry no
   // code/teacher/timetable. An exact normalized title in the same academic year is then the best
   // evidence available, so it may reach the link threshold on its own.
-  const titleOnly = (c: OfferingCandidate): boolean =>
-    !c.courseCode && c.instructorNames.length === 0 && c.schedule.length === 0;
-  if (sim >= 0.95 && a.academicYear && b.academicYear && (titleOnly(a) || titleOnly(b))) {
+  let titleOnly = false;
+  if (sim >= 0.95 && a.academicYear && b.academicYear && (isTitleOnly(a) || isTitleOnly(b))) {
     score += 0.2;
+    titleOnly = true;
     evidence.push('exact title from a title-only source in the same year');
   }
   score = Math.max(0, Math.min(1, score));
@@ -148,5 +158,11 @@ export function scoreOfferingMatch(
       : score >= t.suggest && strongEnough
         ? 'suggest'
         : 'none';
-  return { score: Math.round(score * 1000) / 1000, decision, evidence, veto: undefined };
+  return {
+    score: Math.round(score * 1000) / 1000,
+    decision,
+    evidence,
+    veto: undefined,
+    ...(titleOnly ? { titleOnly } : {}),
+  };
 }

@@ -7,6 +7,7 @@ import {
   createSinksFromConfig,
   createWebhookSink,
   formatNotificationLine,
+  isAllowedWebhookUrl,
   type Notification,
   type NotifierLike,
 } from '../src/index.js';
@@ -184,6 +185,30 @@ describe('webhook sink', () => {
         })) as typeof fetch,
     });
     await expect(sink.send(note())).rejects.toThrow('webhook delivery failed (AbortError)');
+  });
+});
+
+describe('webhook url policy', () => {
+  it('allows https and plain http only to this machine', () => {
+    expect(isAllowedWebhookUrl('https://hooks.example.invalid/x')).toBe(true);
+    expect(isAllowedWebhookUrl('http://127.0.0.1:9000/hook')).toBe(true);
+    expect(isAllowedWebhookUrl('http://[::1]:9000/hook')).toBe(true);
+    expect(isAllowedWebhookUrl('http://hooks.example.invalid/x')).toBe(false);
+    expect(isAllowedWebhookUrl('file:///etc/passwd')).toBe(false);
+    expect(isAllowedWebhookUrl('not a url')).toBe(false);
+  });
+
+  it('never follows redirects with the signed body', async () => {
+    let init: RequestInit | undefined;
+    const sink = createWebhookSink({
+      url: 'https://h.example.invalid/',
+      fetch: (async (_u: string | URL | Request, i?: RequestInit) => {
+        init = i;
+        return new Response(null, { status: 204 });
+      }) as typeof fetch,
+    });
+    await sink.send(note());
+    expect(init?.redirect).toBe('error');
   });
 });
 

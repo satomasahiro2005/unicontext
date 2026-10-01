@@ -55,6 +55,8 @@ interface RunState {
   known: Record<string, KnownPdf>;
   watch: Record<string, WatchState>;
   totalPages: number | undefined;
+  /** The run did not start at page 1, so it cannot claim a full listing. */
+  partial: boolean;
 }
 
 const MAX_KNOWN = 2000;
@@ -311,6 +313,8 @@ export class WordpressPortalAdapter implements SourceAdapter {
           known: extra.known,
           watch: extra.watch,
           totalPages: undefined,
+          // Resumed at page > 1 without the run state (restart): pages before it are unknown.
+          partial: page > 1,
         };
         await this.fetchCategories(this.run, items, input.signal);
         for (const url of this.ctx.config.pdf.watchPages) {
@@ -383,7 +387,7 @@ export class WordpressPortalAdapter implements SourceAdapter {
       if (!hasMore) {
         if (run.categoriesOk) complete.push(WP_CATEGORY);
         // A full listing lets deleted/unpublished posts disappear; incremental runs never retire.
-        if (run.mode !== 'incremental' && exhausted) complete.push(WP_POST);
+        if (run.mode !== 'incremental' && exhausted && !run.partial) complete.push(WP_POST);
         this.lastError = undefined;
         this.consecutiveFailures = 0;
         this.lastSuccessAt = this.ctx.clock.now().toISOString();

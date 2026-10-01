@@ -17,6 +17,7 @@ import {
   type Logger,
   OfflineError,
   RateLimitedError,
+  redact,
   silentLogger,
   systemClock,
   type UniversityProfile,
@@ -97,6 +98,11 @@ const emptyNormalize = (): NormalizeReport => ({
   changedEntityIds: [],
 });
 
+/** Error text that is stored or broadcast (health, raw_items, sync events) never carries secrets. */
+function safeMessage(error: unknown): string {
+  return redact(errorMessage(error)) as string;
+}
+
 function classify(error: unknown): HealthState {
   if (error instanceof AuthRequiredError) return 'auth_required';
   if (error instanceof RateLimitedError) return 'rate_limited';
@@ -120,12 +126,11 @@ export class SyncEngine {
   private readonly tz: string;
   private readonly registry = new Map<string, RegisteredSource>();
   private readonly running = new Map<string, Promise<SyncRunReport>>();
+  /** Per-source queue: sync runs, watcher ingests and reprocessing of one source never overlap. */
+  private readonly locks = new Map<string, Promise<unknown>>();
   private readonly postProcessors: PostProcessor[];
   private readonly fullRefreshIntervalMs: number;
   private readonly maxPages: number;
-  /** Events of the raw item being applied; committed to pendingEvents only if its transaction succeeds. */
-  private itemEvents: ChangeEvent[] = [];
-  private pendingEvents: ChangeEvent[] = [];
 
   constructor(options: SyncEngineOptions) {
     this.db = options.db;
@@ -147,6 +152,14 @@ export class SyncEngine {
 
   register(source: RegisteredSource): void {
     this.registry.set(source.sourceId, source);
+    this.ensureRawSource(source);
+  }
+
+  /**
+   * (Re)create the raw_sources row. Also called before every write, since `unicontext purge source`
+   * from another process deletes it under a running daemon (raw_items has a foreign key to it).
+   */
+  private ensureRawSource(source: RegisteredSource): void {
     this.stores.raw.ensureSource({
       id: source.sourceId,
       connector: source.metadata.name,
@@ -197,9 +210,30 @@ export class SyncEngine {
   ): Promise<SyncRunReport> {
     const existing = this.running.get(sourceId);
     if (existing) return existing;
-    const p = this.runSync(sourceId, options).finally(() => this.running.delete(sourceId));
+    const p = this.withSourceLock(sourceId, () => this.runSync(sourceId, options)).finally(() =>
+      this.running.delete(sourceId),
+    );
     this.running.set(sourceId, p);
     return p;
+  }
+
+  /**
+   * Run fn after every earlier sync/ingest/reprocess of the same source has finished. Without this
+   * a watcher ingest landing between the pages of a full refresh is marked deleted by that refresh
+   * (its `seen` set never contained it), and two normalizations of one raw item race each other.
+   */
+  private withSourceLock<T>(sourceId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.locks.get(sourceId) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.locks.set(sourceId, tail);
+    void tail.then(() => {
+      if (this.locks.get(sourceId) === tail) this.locks.delete(sourceId);
+    });
+    return run;
   }
 
   isRunning(sourceId: string): boolean {
@@ -218,6 +252,7 @@ export class SyncEngine {
     const raw: IngestReport = { inserted: 0, updated: 0, unchanged: 0, restored: 0, deleted: 0 };
     let pages = 0;
     try {
+      this.ensureRawSource(source);
       const auth = await source.adapter.authenticate();
       if (auth.status === 'auth_required' || auth.status === 'failed')
         throw new AuthRequiredError(auth.message ?? 'Authentication required');
@@ -288,7 +323,7 @@ export class SyncEngine {
       return report;
     } catch (e) {
       const health = await this.recordFailure(sourceId, e);
-      const message = errorMessage(e);
+      const message = safeMessage(e);
       this.logger.warn('sync failed', { sourceId, error: message, health });
       await this.bus.emit('sync:failed', { sourceId, error: message, health });
       const report: SyncRunReport = {
@@ -343,26 +378,34 @@ export class SyncEngine {
     sourceId: string,
     result: SyncResult,
   ): Promise<{ raw: IngestReport; normalized: NormalizeReport }> {
-    this.getSource(sourceId);
-    const seen = new Set<string>();
-    const raw = this.ingestPage(sourceId, result, seen);
-    if (result.complete?.sourceTypes.length)
-      raw.deleted += this.stores.raw.markMissingDeleted(
-        sourceId,
-        result.complete.sourceTypes,
-        seen,
-      ).length;
-    const normalized = await this.normalizePending(sourceId, { emitCreates: true });
-    return { raw, normalized };
+    const source = this.getSource(sourceId);
+    return this.withSourceLock(sourceId, async () => {
+      this.ensureRawSource(source);
+      const seen = new Set<string>();
+      const raw = this.ingestPage(sourceId, result, seen);
+      if (result.complete?.sourceTypes.length)
+        raw.deleted += this.stores.raw.markMissingDeleted(
+          sourceId,
+          result.complete.sourceTypes,
+          seen,
+        ).length;
+      const normalized = await this.normalizePending(sourceId, { emitCreates: true });
+      return { raw, normalized };
+    });
   }
 
   /** Re-run normalization from the raw store without contacting the source (§6). */
   async reprocess(sourceId?: string): Promise<NormalizeReport> {
-    this.stores.raw.resetNormalization(sourceId);
-    const ids = sourceId ? [sourceId] : this.sources().map((s) => s.sourceId);
+    const ids = sourceId
+      ? [this.getSource(sourceId).sourceId]
+      : this.sources().map((s) => s.sourceId);
     const total = emptyNormalize();
     for (const id of ids) {
-      const r = await this.normalizePending(id, { emitCreates: true, runPostProcessors: false });
+      // Reset inside the source's lock so a running sync is not normalizing the same items.
+      const r = await this.withSourceLock(id, () => {
+        this.stores.raw.resetNormalization(id);
+        return this.normalizePending(id, { emitCreates: true, runPostProcessors: false });
+      });
       mergeReport(total, r);
     }
     await this.runPostProcessors(sourceId, total.changedEntityIds);
@@ -377,11 +420,14 @@ export class SyncEngine {
     const source = this.getSource(sourceId);
     const report = emptyNormalize();
     const pending = this.stores.raw.list({ sourceId, pendingOnly: true });
+    // Events of this call only, committed per raw item once its transaction succeeded.
+    const pendingEvents: ChangeEvent[] = [];
     for (const item of pending) {
       report.items++;
+      const itemEvents: ChangeEvent[] = [];
       try {
         if (item.deletedAt) {
-          this.db.transaction(() => this.applyDeletion(source, item, report));
+          this.db.transaction(() => this.applyDeletion(source, item, report, itemEvents));
         } else if (handlesType(source.normalizer, item.sourceType)) {
           const ctx = createNormalizeContext({
             sourceId,
@@ -408,7 +454,7 @@ export class SyncEngine {
           };
           const output = await source.normalizer.normalize(view, ctx);
           this.db.transaction(() =>
-            this.applyOutput(source, item, output, report, options.emitCreates ?? true),
+            this.applyOutput(source, item, output, report, options.emitCreates ?? true, itemEvents),
           );
           if (output.drift?.length) {
             const fresh = this.stores.drift.record(
@@ -423,9 +469,8 @@ export class SyncEngine {
             this.logger.warn('normalizer warning', { sourceId, rawItemId: item.id, warning: w });
         }
         this.stores.raw.markNormalized(item.id, { version: source.normalizer.version });
-        this.pendingEvents.push(...this.itemEvents.splice(0));
+        pendingEvents.push(...itemEvents);
       } catch (e) {
-        this.itemEvents = [];
         report.failed++;
         this.logger.error('normalize failed', {
           sourceId,
@@ -435,11 +480,11 @@ export class SyncEngine {
         });
         this.stores.raw.markNormalized(item.id, {
           version: source.normalizer.version,
-          error: errorMessage(e),
+          error: safeMessage(e),
         });
       }
     }
-    for (const ev of this.pendingEvents.splice(0)) await this.bus.emit('change', ev);
+    for (const ev of pendingEvents) await this.bus.emit('change', ev);
     if (options.runPostProcessors !== false)
       await this.runPostProcessors(sourceId, report.changedEntityIds);
     return report;
@@ -485,6 +530,7 @@ export class SyncEngine {
     output: NormalizeOutput,
     report: NormalizeReport,
     emitCreates: boolean,
+    events: ChangeEvent[],
   ): void {
     const now = this.clock.now().toISOString();
     const observedAt = item.sourceUpdatedAt ?? item.fetchedAt;
@@ -548,6 +594,7 @@ export class SyncEngine {
         (res.status === 'created' && emitCreates)
       ) {
         this.appendEvent(
+          events,
           buildChangeEvent({
             type: res.status,
             entity,
@@ -593,7 +640,7 @@ export class SyncEngine {
     // Entities this raw item used to produce but no longer does (e.g. fewer chunks).
     for (const ref of this.stores.sourceRefs.byRawItem(item.id)) {
       if (!ref.entityId || keptEntities.has(ref.entityId)) continue;
-      this.deleteIfOrphaned(ref.entityId, item.id, eventSource, now, report);
+      this.deleteIfOrphaned(ref.entityId, item.id, eventSource, now, report, events);
     }
   }
 
@@ -601,6 +648,7 @@ export class SyncEngine {
     source: RegisteredSource,
     item: RawItemRecord,
     report: NormalizeReport,
+    events: ChangeEvent[],
   ): void {
     const now = this.clock.now().toISOString();
     const eventSource = {
@@ -610,7 +658,8 @@ export class SyncEngine {
     };
     report.facts.retracted += this.facts.retract(this.facts.activeIdsForRawItem(item.id), now);
     for (const ref of this.stores.sourceRefs.byRawItem(item.id)) {
-      if (ref.entityId) this.deleteIfOrphaned(ref.entityId, item.id, eventSource, now, report);
+      if (ref.entityId)
+        this.deleteIfOrphaned(ref.entityId, item.id, eventSource, now, report, events);
     }
   }
 
@@ -621,6 +670,7 @@ export class SyncEngine {
     eventSource: { sourceId: string; sourceSystem: string; rawItemId: string },
     now: string,
     report: NormalizeReport,
+    events: ChangeEvent[],
   ): void {
     const others = this.stores.sourceRefs
       .forEntity(entityId)
@@ -635,6 +685,7 @@ export class SyncEngine {
     report.entities.deleted++;
     report.changedEntityIds.push(entityId);
     this.appendEvent(
+      events,
       buildChangeEvent({
         type: 'deleted',
         entity: prev,
@@ -649,9 +700,9 @@ export class SyncEngine {
     report.changeEvents++;
   }
 
-  private appendEvent(ev: ChangeEvent): void {
+  private appendEvent(events: ChangeEvent[], ev: ChangeEvent): void {
     this.stores.changes.append(ev);
-    this.itemEvents.push(ev);
+    events.push(ev);
   }
 
   private async setHealth(
@@ -734,7 +785,7 @@ export class SyncEngine {
     await this.setHealth(sourceId, {
       state,
       checkedAt: now.toISOString(),
-      message: errorMessage(error),
+      message: safeMessage(error),
       lastFailureAt: now.toISOString(),
       consecutiveFailures: failures,
       ...(retryAfter ? { retryAfter } : {}),
@@ -750,6 +801,7 @@ export class SyncEngine {
       const prev = this.stores.health.get(sourceId);
       return await this.setHealth(sourceId, {
         ...h,
+        ...(h.message ? { message: redact(h.message) as string } : {}),
         consecutiveFailures: prev?.consecutiveFailures ?? 0,
       });
     } catch (e) {
@@ -768,7 +820,23 @@ export class SyncEngine {
     return this.stores.health.list();
   }
 
-  async dispose(): Promise<void> {
+  /**
+   * Wait (bounded) for in-flight syncs/ingests, then dispose adapters. Closing the database under a
+   * running sync fails it halfway, and adapters must not be torn down while they are in use.
+   */
+  async dispose(options: { waitMs?: number } = {}): Promise<void> {
+    const inFlight = [...this.running.values(), ...this.locks.values()];
+    if (inFlight.length > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled(inFlight),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, options.waitMs ?? 30_000);
+          timer.unref?.();
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+    }
     for (const s of this.registry.values()) await s.adapter.dispose();
     this.registry.clear();
   }

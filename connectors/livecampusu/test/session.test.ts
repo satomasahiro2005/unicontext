@@ -65,6 +65,12 @@ describe('hard-coded request policy (denylist)', () => {
     ['GET', 'SC_10004B00_01'],
     ['POST', 'SC_15005B00_01/init'],
     ['GET', 'SC_17001B00_01/../SC_14002B00_03'],
+    // servlet-style path parameters and encoded separators do not hide a denied screen/action
+    ['POST', 'SC_14002B00_03;x=1/init'],
+    ['POST', 'SC_14002B00_03%2Finit'],
+    ['POST', 'SC_07002B00_01%5Cinit'],
+    ['POST', 'SC_17001B00_01/toDoIcon;x=1'],
+    ['POST', 'SC_17001B00_01/readMark%3Bv=1'],
   ];
   for (const [method, path] of denied) {
     it(`denies ${method} ${path}`, () => {
@@ -190,6 +196,16 @@ describe('LcuSession', () => {
     const last = server.log.at(-1);
     expect(last?.headerCsrf).toBe(csrf);
     expect(last?.csrf).toBe(csrf);
+  });
+
+  it('never sends a request outside the deployment base URL', async () => {
+    const { server, session } = setup();
+    await session.bootstrap();
+    const before = server.log.length;
+    await expect(session.getPage('https://attacker.example/SC_01002B00_00')).rejects.toThrow(
+      PolicyViolationError,
+    );
+    expect(server.log).toHaveLength(before);
   });
 
   it('handles ;jsessionid= in redirect locations', async () => {

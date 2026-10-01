@@ -74,7 +74,7 @@ export function commandExists(command: string, env: NodeJS.ProcessEnv = process.
 
 /**
  * SourceAdapter for an external CLI that prints JSON (§29). Each mapping resource is one
- * invocation (`call.args`), spawned with `shell: false`, bounded by a timeout and an output cap.
+ * invocation (`call.args`), spawned without a shell (cross-spawn), bounded by a timeout and an output cap.
  */
 export class CliSourceAdapter extends MappedSourceAdapter implements VersionAwareAdapter {
   private readonly options: CliAdapterOptions;

@@ -133,6 +133,8 @@ export function isConnectorModule(value: unknown): value is ConnectorModule<unkn
   return (
     typeof value === 'object' &&
     value !== null &&
+    typeof (value as Partial<ConnectorModule>).metadata === 'object' &&
+    (value as Partial<ConnectorModule>).metadata !== null &&
     typeof (value as Partial<ConnectorModule>).createAdapter === 'function' &&
     typeof (value as Partial<ConnectorModule>).createNormalizer === 'function'
   );

@@ -81,9 +81,10 @@ Conventions every package follows (new packages should too):
 - `src/` compiles to `dist/`; package `exports` points at `dist`. Tests live in `<pkg>/test/*.test.ts`
   and are excluded from the build. Root `vitest.config.ts` aliases `@unicontext/<dir>` (and
   `@unicontext/<dir>/<sub>`) to `<group>/<dir>/src/...`, so tests never need a build.
-- A new package: copy an existing `package.json`/`tsconfig.json` (or add it to
-  `scripts/scaffold.mjs` and run `node scripts/scaffold.mjs`, which rewrites every package.json and the
-  root `tsconfig.json` references), add `references` for each workspace dependency.
+- A new package: copy an existing `package.json`/`tsconfig.json`, add `references` for each
+  workspace dependency and add the package to the root `tsconfig.json` references. (The one-off
+  scaffolding script that generated the first package stubs was removed after the packages became
+  real; rerunning it would have overwritten them.)
 - No `any` in public APIs. Validation with zod 4. Times are ISO-8601 strings; "local date" means
   `YYYY-MM-DD` in the profile timezone (default `Asia/Tokyo`).
 - Logs go to stderr as JSON lines (stdout is free for MCP stdio).
@@ -528,10 +529,20 @@ candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `Task
 - `@unicontext/daemon` (apps/daemon): `createRuntime` (config + profile + dynamic connector loading + secrets, shared by
   the CLI and MCP stdio), `startDaemon` (lock file, scheduler, notifications, Fastify on 127.0.0.1: REST `/api/v1`, Web
   UI static files, `/mcp`), `DaemonClient`, service install helpers and `api-types` (wire types, type-only subpath).
+  Sources: `effectiveSources(config.sources, profile)` — every profile source (keyed by its product name, e.g.
+  `livecampusu`, `lcu-public-cancellations`) plus every config.yaml source; a config entry named like a profile role
+  or product is merged over that profile entry (so it keeps `connector`/`module`/`mapping`), `enabled: false` turns
+  a profile source off, and listing a profile source that is off (EdStem) turns it on.
   Connector packages are resolved by name in `src/registry.ts`: the source key or `connector:` gives
-  `@unicontext/<name>`, `adapter: mcp|cli|rest|browser` gives `@unicontext/adapter-<kind>`. A package exports a
-  `ConnectorModule` as `default` or `connector`, or a factory `({sourceId, config, profile}) => ConnectorModule`. A
-  missing package marks only that source `failed`.
+  `@unicontext/<name>`, `adapter: mcp|cli|rest|browser` gives `@unicontext/adapter-<kind>`. The package entry
+  (`default`, else `connector`) goes through the SDK's `resolveConnectorExport` — a `ConnectorModule` or a
+  `ConnectorFactory` that receives the effective source config. A missing package marks only that source `failed`.
+  Every connector/adapter package is an optional dependency of the daemon.
+  `src/wiring.ts`: `wireCourseProviders` feeds LiveCampusU's enrolled CourseOfferings (current academic year) to the
+  public 休講 module (`courseProvider`, so own-course 休講 become cancelled class sessions on Today) and to the
+  syllabus module (`targetProvider`); `startWatchers` runs `watch()` of WatchableAdapters (local-files,
+  chatgpt-record) into `SyncEngine.ingest` while the scheduler runs. `unicontext login` calls `authenticate()` and,
+  when that is not enough, the adapter's interactive `login()` (InteractiveAuthAdapter).
 - `@unicontext/cli` (apps/cli, bin `unicontext`) and `@unicontext/web` (apps/web: React, Vite, TanStack Router, built
   to `apps/web/dist` and served by the daemon).
 - Config additions in core (`ConfigSchema`): `daemon.port` (default 17878) and `notifications` (enabled, minPriority,

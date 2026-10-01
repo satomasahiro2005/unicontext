@@ -145,6 +145,18 @@ sync: { background: true }
         .blobs,
     ).toBe('/data/blobs');
     expect(dataPathsFromRoot('/r', '/r', 'linux').logs).toBe('/r/logs');
+    // XDG: empty or relative values are invalid and ignored (else the DB lands in the cwd)
+    const bad = resolveDataPaths({
+      platform: 'linux',
+      env: { XDG_DATA_HOME: '', XDG_CONFIG_HOME: 'relative/cfg' },
+      homedir: '/home/s',
+    });
+    expect(bad.root).toBe('/home/s/.local/share/unicontext');
+    expect(bad.configDir).toBe('/home/s/.config/unicontext');
+    expect(
+      resolveDataPaths({ platform: 'win32', env: { LOCALAPPDATA: '' }, homedir: 'C:\\Users\\s' })
+        .root,
+    ).toBe('C:\\Users\\s\\AppData\\Local\\unicontext');
   });
 });
 
