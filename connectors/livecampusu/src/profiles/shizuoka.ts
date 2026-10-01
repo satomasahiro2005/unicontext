@@ -45,6 +45,8 @@ export const SHIZUOKA_DEPLOYMENT = {
     noticeDetailBack: 'SC_17001B00_02/back',
     rowIndexField: 'rowIndex',
     assignmentSearch: 'SC_14002B00_01/search',
+    // 出欠状況一覧 defaults to the current semester; the search form switches year/semester.
+    attendanceSearch: 'SC_13002B00_01/search',
     // Spelling as served by LCU ("grede").
     gradesFromDashboard: 'SC_15005B00_01/gredeInformation',
   },
@@ -69,6 +71,13 @@ export const SHIZUOKA_DEPLOYMENT = {
       ['title', ''],
       ['subjectInfomationSearch.startYear', '{year}'],
       ['subjectInfomationSearch.startSemester', ''],
+      ['subjectInfomationSearch.classSubject', ''],
+    ],
+    // 出欠状況一覧 search form SC_13002B00_01_SearchConditionForm (observed 2026-10-01: year and
+    // semester selects, class subject select, 「警告ありのみ」 checkbox `category` left unchecked).
+    attendanceSearch: [
+      ['subjectInfomationSearch.startYear', '{year}'],
+      ['subjectInfomationSearch.startSemester', '{semester}'],
       ['subjectInfomationSearch.classSubject', ''],
     ],
     classSubjectList: {

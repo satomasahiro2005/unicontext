@@ -132,6 +132,9 @@ export class FakeLcuServer {
   openedRows: number[] = [];
   timetableSemester = '1';
   examSemester = '1';
+  attendanceSemester = '2';
+  /** Simulate a semester switch that does not take effect (the page keeps showing 前期). */
+  ignoreSemesterSwitch = false;
   lastRowIndex = 0;
   options: FakeLcuOptions;
   importantNotice: unknown[];
@@ -330,13 +333,16 @@ ${body}</body></html>`;
       case 'POST SC_18001B00_01/timeTable':
         return this.redirect('SC_18001B00_13');
       case 'POST SC_18001B00_13/change':
-        this.timetableSemester = form?.get('selectSemesterTermCode') ?? '1';
+        if (!this.ignoreSemesterSwitch)
+          this.timetableSemester = form?.get('selectSemesterTermCode') ?? '1';
         return this.redirect('SC_18001B00_13');
       case 'GET SC_18001B00_13':
         return this.html(
-          this.timetableSemester === '1'
-            ? fixture('lcu-timetable-SC_18001B00_13.html')
-            : '<table class="schedule-table"><tbody><tr class="week"><th></th><th id="week1">月</th></tr></tbody></table>',
+          fixture(
+            this.timetableSemester === '1'
+              ? 'lcu-timetable-full-SC_18001B00_13.synthetic.html'
+              : 'lcu-timetable-empty-SC_18001B00_13.synthetic.html',
+          ),
           '時間割参照',
         );
       case 'POST SC_18001B00_13/testTimeTable':
@@ -366,8 +372,17 @@ ${body}</body></html>`;
         const list = jsonFixture<{ response: unknown[] }>('lcu-getClassSubjectList.json').response;
         return this.json(sem === '1' ? list : []);
       }
+      case 'POST SC_13002B00_01/search':
+        this.attendanceSemester = form?.get('subjectInfomationSearch.startSemester') ?? '2';
+        return this.redirect('SC_13002B00_01');
       case 'GET SC_13002B00_01':
-        return this.html(fixture('lcu-attendance-SC_13002B00_01.synthetic.html'), '出欠');
+        // Opens on the current semester (後期, nothing yet); the search switches semesters.
+        return this.html(
+          this.attendanceSemester === '1'
+            ? fixture('lcu-attendance-SC_13002B00_01.synthetic.html')
+            : '<main><table id="dataTable01" class="c-table"><thead><tr><th id="classSubjectName"><p>講義名</p></th></tr></thead><tbody></tbody></table></main>',
+          '出欠',
+        );
       case 'GET SC_17001B00_01':
         return this.html(this.noticeListHtml(), '連絡一覧');
       case 'POST SC_17001B00_01/rowSelect': {

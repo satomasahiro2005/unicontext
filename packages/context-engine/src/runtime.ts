@@ -13,6 +13,7 @@ import {
   errorMessage,
   type Logger,
   loadProfile,
+  type StudentScope,
   silentLogger,
   systemClock,
   type UniversityProfile,
@@ -48,6 +49,8 @@ export interface UniContextOptions {
   embeddings?: EmbeddingIndex;
   /** Per-source schedules for the scheduler (§36). */
   schedules?: Record<string, string>;
+  /** Campus/faculty of the student (config.yaml `student:`) for scoped calendar exceptions. */
+  student?: StudentScope;
 }
 
 export interface PipelineReport {
@@ -121,7 +124,16 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
     canonicalSubject: (id) => identity.canonical(id),
   });
   const expandCourse = (id: string): string[] => identity.expand(id);
-  const tasks = new TaskEngine({ db: database, clock, timezone, resolver, expandCourse });
+  const tasks = new TaskEngine({
+    db: database,
+    clock,
+    timezone,
+    resolver,
+    expandCourse,
+    canonicalCourse: (id) => identity.canonical(id),
+    ...(profile ? { profile } : {}),
+    ...(options.student ? { student: options.student } : {}),
+  });
   const search = new SearchService({
     db: database,
     clock,

@@ -15,6 +15,10 @@ import type {
   DeadlineContext,
   DeadlineItem,
   LectureBundle,
+  PaceCourseItem,
+  PaceItem,
+  PaceOverview,
+  PaceSlotView,
   SourceStatus,
   TodayContext,
   TomorrowContext,
@@ -48,6 +52,10 @@ export type {
   DeadlineItem,
   LectureBundle,
   Notification,
+  PaceCourseItem,
+  PaceItem,
+  PaceOverview,
+  PaceSlotView,
   ResolvedValue,
   SearchResponse,
   SourceStatus,
@@ -84,14 +92,33 @@ export interface CourseSummary {
   instructors: string[];
   academicYear: number | undefined;
   term: string | undefined;
+  /** Profile term id (e.g. "2026-2") when the term is in the academic calendar. */
+  termId: string | undefined;
+  /** regular = weekly timetable; unscheduled = 時間割外; intensive = 集中講義. */
+  scheduleType: 'regular' | 'unscheduled' | 'intensive';
+  /** Registered by the student (the academic system lists it). */
+  enrolled: boolean;
+  /** 再履修 class. */
+  retake: boolean;
   schedule: { dayOfWeek: number; period: number | undefined; room: string | undefined }[];
   room: ResolvedValue<string>;
   linkedIds: string[];
   openConflicts: number;
 }
-/** GET /api/v1/courses */
+/** A term of the academic calendar and how many of the student's courses fall in it. */
+export interface TermSummary {
+  id: string;
+  name: string;
+  current: boolean;
+  courses: number;
+}
+/** GET /api/v1/courses[?term=<id|前期|all>] (default: the current term's registered courses) */
 export interface CoursesResponse {
   courses: CourseSummary[];
+  /** The term shown; undefined when every term is shown (term=all) or no calendar is known. */
+  term?: { id: string; name: string; current: boolean } | undefined;
+  /** Terms with the student's courses, for switching (empty without an academic calendar). */
+  terms?: TermSummary[];
 }
 
 export interface AssignmentItem {
@@ -221,6 +248,30 @@ export interface SettingsResponse {
   telemetry: boolean;
   secretBackend: string;
   config: Record<string, unknown>;
+}
+
+/** GET /api/v1/pace: every enrolled course of the current term and any course with self-study slots. */
+export type PaceResponse = PaceOverview;
+
+/** One weekly self-study slot: `dayOfWeek` 0 = Sunday … 6 = Saturday, times "HH:MM". */
+export interface PaceSlotInput {
+  dayOfWeek: number;
+  startTime?: string;
+  endTime?: string;
+  period?: number;
+}
+/**
+ * PUT /api/v1/courses/:id/pace  body { slots } (replaces the set; [] clears). A slot is text such as
+ * "土 10:00-11:30" / "土2限", or a PaceSlotInput. :id = course offering id, course code or title.
+ * DELETE /api/v1/courses/:id/pace clears the slots. Both answer with PaceSetResponse.
+ */
+export interface PaceSetBody {
+  slots: (string | PaceSlotInput)[];
+}
+export interface PaceSetResponse {
+  course: CourseRef;
+  slots: PaceSlotView[];
+  fact: Fact;
 }
 
 /** GET /api/v1/lectures/:id */

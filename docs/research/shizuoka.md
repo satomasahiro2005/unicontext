@@ -151,6 +151,16 @@
 
 ---
 
+### 1.9 初回の実データ同期（2026-10-01 18:24 と 18:27、本人のアカウント、後期の履修登録前）
+`unicontext sync livecampusu` が読んだもの（raw 400 件）と形の確認。個人のデータはリポジトリに入れていない（数と形だけ）。
+- **内訳**: 連絡 279（連絡一覧 280 行と `importantNotice` 154 件を合わせたもの。同じ日時・種別・題名の 2 行は 1 件にまとまる）、課題 62（課題・アンケートリスト。すべて前期で締切済み）、カレンダー 45、科目 13（前期の時間割 12 ＋ 時間割外 1）、締切の警告 1（履修登録期限）。試験・出欠・未提出課題 JSON・成績は 0 件 [観測]
+- **時間割** `SC_18001B00_13`: 年度（`p.year`「2026年度」）と学期の切り替え（`.c-half-btn a.is-active`）がページに出る。`change` なしで開くと**今の学期（後期）**、後期は何も登録されていない。前期の画面には一般・抽選講義の格子のほかに **時間割外講義**（`#lecture2`、`li.stady-lecture-list-item`、`p.lecture-ttl`・担当・単位とナンバリング・教室。`displayPopup('1','2',…)` の 2 番目の引数が講義種別 2）があり、週の枠を持たない科目（再履修クラスなど。クラス名に「再履修」、クラスコードは英字）がここに出る。集中講義（`#lecture3`）は「対象の科目はありません」。`displayPopup` の 1 番目の引数は学期コード [観測]
+- **試験時間割** `SC_18001B00_19`: 前期・後期とも「対象の科目はありません」。学期の表示は `<a class="is-active">前期</a>`（href なし）[観測]
+- **出欠** `SC_13002B00_01`: 見出しの id は `classSubjectName`・`semesterWeekHourName`・`attendancePublicName`・`attendCnt`・`absentCnt`・`lateCnt`・`leaveEarlyCnt`・`publicVacancyCnt`・`invalidCnt` と隠し列 `classSubjectCode`・`semesterWeekHourCode`。画面は今の学期（後期）で開く。検索フォーム `SC_13002B00_01_SearchConditionForm`（年度・学期・授業科目の select と「警告ありのみ」`category`）を `SC_13002B00_01/search` に送ると学期が切り替わる（選択が前期になったことを確認）。前期・後期とも行は 0 件 [観測]。行の中身の形は未観測
+- **連絡**: 280 行すべてが未読（`tr.is-unread`）なので、方針どおり本文は 1 件も開いていない。`importanceCategory` は 154 件すべて `1`、一覧の隠し列 `contactTypeOrder` もほぼ `U051` 型で、重要度の手がかりにならない。重要度は題名と種別から決める（`classifyNoticeImportance`）[観測]
+- **JSON の形**: `importantNotice`・`warningNoticeInformation`（日付リストを含む）・`getClassSubjectList`（`label`/`value`/`optGroupflg`、後期は `[]`）のキーは見本（`samples/`）と同じ。schema drift は記録されなかった。`submissionInformation?mode=web` は今回も `[]` [観測]
+- **カレンダー**（スケジュールの `events`）: 2025〜2027 年の祝日（`listType: Holiday`）45 件。2026 年度の授業の行事（`teachingevent`）は入っていない。授業期間・補講日・振替授業日は LCU からは取れないので、**令和8年度 行事予定表**（https://www.shizuoka.ac.jp/education/affairs/schedule/document/r08_schedule.pdf 、2026-02-09 版、昼間コース）から profile の `academicCalendar` に書き写した: 前学期 4/1〜9/30（授業 4/13〜7/24、試験 7/27〜7/31・予備日 8/3、5/7 は水曜授業、7/17 は月曜授業、7/20 は補講日）、後学期 10/1〜3/31（授業 10/1〜1/28、試験 1/29・2/1〜2/4・予備日 2/5、11/25 は月曜授業、10/30 は静岡地区のみ・11/6 は浜松地区のみ休講、12/22〜25 は集中講義、12/28〜1/3 は休業、1/7 は対面授業なし、1/15 は情報学部の 7・8 限以降の専門科目が休講、1/21 は補講日）[観測（PDF）]
+
 ## 2. 公開の休講案内（LCU）
 - URL: `GET https://gakujo.shizuoka.ac.jp/lcu-web/SC_90002szu_01`（学生教務ポータルの「休講情報」リンク）[観測]
 - 認証なし。全学の休講が出る（本人の分だけではない）[観測]
@@ -240,7 +250,7 @@
 ## 8. 未解決
 1. 授業参考情報 `SC_12001B00_01`、掲示板 `SC_19003B00_01`、学内共有ファイル `SC_19001B00_01` の中身（未観測）
 2. IdP の SSO セッションの寿命（LCU のアイドル時間は 60 分と観測済み）。同意フォームの実物（§1.8）と、同意を覚えない理由
-2a. `submissionInformation` の項目の形（調査時点では空）と `mode` の値ごとの違い。公式アプリ用の API の有無
+2a. `submissionInformation` の項目の形（調査時点でも初回の実データ同期でも空）と `mode` の値ごとの違い。公式アプリ用の API の有無。出欠の行の形（前期・後期とも 0 行）
 3. IdP の上流が本当に Entra か（SAML プロキシの宛先）。`/idp/profile/Authn/SAML2/POST/SSO` を通ることまでは観測済み
 4. Entra のユーザー同意ポリシー（Graph Explorer／自前アプリ）。本人が試す
 5. 静大専用 Google アカウントでの Classroom の利用状況

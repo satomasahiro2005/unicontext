@@ -12,6 +12,7 @@ import {
 import { Citations } from '../components/Citations';
 import { ConflictBanner } from '../components/ConflictBanner';
 import { ConflictSummary } from '../components/ConflictCard';
+import { PaceSection } from '../components/PaceSection';
 import { PendingLinks } from '../components/PendingLinks';
 import { Async, Badge, Empty, PageHeader, Section } from '../components/ui';
 import { useApi, usePageTitle } from '../hooks';
@@ -67,6 +68,12 @@ function CourseBody({ course, onChanged }: { course: CourseContext; onChanged: (
           </ul>
         ) : null}
       </div>
+
+      {course.enrolled || course.paceSlots.length > 0 ? (
+        <Section title="自習時間" count={course.paceSlots.length}>
+          <PaceSection course={course} onChanged={onChanged} />
+        </Section>
+      ) : null}
 
       <Section title="今後の授業" count={course.upcomingClasses.length}>
         {course.upcomingClasses.length === 0 ? (

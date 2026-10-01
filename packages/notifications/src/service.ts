@@ -15,6 +15,7 @@ import {
   redact,
   sha256,
   silentLogger,
+  startOfZonedWeek,
   type TimerHandle,
   zonedDateString,
 } from '@unicontext/core';
@@ -236,8 +237,40 @@ export class NotificationService {
     ]);
   }
 
-  /** Polls `context.deadline()` and fires `deadline_approaching` for tasks inside a lead window. */
+  /**
+   * Polls `context.deadline()` and fires `deadline_approaching` for tasks inside a lead window,
+   * and `pace_behind` for offerings the student is falling behind in.
+   */
   async checkDeadlines(): Promise<Notification[]> {
+    const drafts = [...this.paceDrafts(), ...this.deadlineDrafts()];
+    return this.publish(drafts);
+  }
+
+  /**
+   * 時間割外 / 集中講義 courses whose weekly 「今週分」 tasks are not done. One notification per
+   * (course, week, weeks behind), so it fires again only when the student falls one week further.
+   */
+  private paceDrafts(): Draft[] {
+    const now = this.uc.clock.now();
+    const weekStart = zonedDateString(startOfZonedWeek(now, this.uc.timezone), this.uc.timezone);
+    const drafts: Draft[] = [];
+    for (const item of this.uc.context.pacing()) {
+      if (item.behindWeeks < 1) continue;
+      const slots = item.slots.length > 0 ? ` 自習時間: ${item.slots.join('、')}` : '';
+      drafts.push({
+        kind: 'pace_behind',
+        priority: item.behindWeeks >= 2 ? 'critical' : 'high',
+        title: item.message,
+        body: `${item.course.title}の「今週分」が${item.behindWeeks}週続けて終わっていません。${slots}`.trim(),
+        dedupeKey: `pace_behind:${item.course.id}:${weekStart}:${item.behindWeeks}`,
+        entityId: item.course.id,
+        courseOfferingId: item.course.id,
+      });
+    }
+    return drafts;
+  }
+
+  private deadlineDrafts(): Draft[] {
     if (this.leads.length === 0) return [];
     const maxHours = Math.max(...this.leads.map((l) => l.hours));
     const days = Math.max(3, Math.ceil(maxHours / 24) + 1);
@@ -272,7 +305,7 @@ export class NotificationService {
         citations: item.citations,
       });
     }
-    return this.publish(drafts);
+    return drafts;
   }
 
   // ---- rules: change events ---------------------------------------------------------------

@@ -43,6 +43,7 @@ Create the config file (path per OS: Linux `~/.config/unicontext/config.yaml`, m
 
 ```yaml
 profile: shizuoka-university
+student: { campus: 浜松, faculty: 情報学部 } # optional: campus/faculty-only 休講日 in the 学年暦
 sources:
   livecampusu: { enabled: true }
   microsoft365: { enabled: true }
@@ -63,6 +64,8 @@ pnpm unicontext today
 pnpm unicontext changes --since yesterday
 pnpm unicontext conflicts
 ```
+
+`today` / `week` list the classes of the courses you registered for the current term, generated from the timetable and the profile's academic calendar (授業期間, 祝日, 振替授業日) with stored changes (休講・教室変更) applied; `courses` shows the current term (`--term 2026-1` / `--term 前期` for another one, `--all` for everything) with 時間割外・集中講義 listed separately.
 
 Every command accepts `--json`. Try it without any university access: `pnpm unicontext --dev today` runs against synthetic seed data.
 
@@ -136,7 +139,7 @@ ChatGPT connects to remote MCP servers over public HTTPS. UniContext deliberatel
 
 ## REST API
 
-`GET /api/v1/today | tomorrow | week | courses | courses/:id | assignments | deadlines | changes | search?q= | conflicts | sources`, and writes `POST /api/v1/sources/:id/sync | facts/:id/correct | identity/confirm | tasks/:id/status`. Writes need `Authorization: Bearer <token>` (the token lives in the OS keychain under `daemon/api-token`; with no keychain it is a 0600 file `daemon.token` in the data directory) or, for the Web UI, a CSRF token plus a same-origin `Origin`.
+`GET /api/v1/today | tomorrow | week | courses[?term=<id|前期|all>] | courses/:id | assignments | deadlines | changes | search?q= | conflicts | sources`, and writes `POST /api/v1/sources/:id/sync | facts/:id/correct | identity/confirm | tasks/:id/status`. Writes need `Authorization: Bearer <token>` (the token lives in the OS keychain under `daemon/api-token`; with no keychain it is a 0600 file `daemon.token` in the data directory) or, for the Web UI, a CSRF token plus a same-origin `Origin`.
 
 ## Backup, export, delete
 

@@ -1,5 +1,6 @@
 import type { IdentityLink } from '@unicontext/canonical-model';
 import { entityLabel } from '@unicontext/canonical-model';
+import { formatPaceSlot, type PaceSlot } from '@unicontext/context-engine';
 import { NotFoundError } from '@unicontext/core';
 import type { Runtime } from '@unicontext/daemon/lib';
 import { applyProposal, type Proposal } from '@unicontext/mcp/proposals';
@@ -18,12 +19,24 @@ const PROPOSAL_STATUS_LABELS: Record<Proposal['status'], string> = {
   expired: '期限切れ',
 };
 
+function proposalValueText(p: Proposal): string {
+  const v = p.value;
+  if (p.predicate === 'pace_slots' && v && typeof v === 'object' && !Array.isArray(v)) {
+    const slots = (v as { slots?: unknown }).slots;
+    if (Array.isArray(slots))
+      return slots.length > 0
+        ? slots.map((s) => formatPaceSlot(s as PaceSlot)).join('、')
+        : '（解除）';
+  }
+  return valueText(v);
+}
+
 function printProposal(ctx: CliContext, rt: Runtime, p: Proposal): void {
   const s = ctx.style;
   ctx.out(s.bold(`提案「${p.id}」`) + s.dim(`（${PROPOSAL_STATUS_LABELS[p.status]}）`));
   ctx.out(`  内容: ${ctx.text(p.preview)}`);
   ctx.out(`  対象: ${ctx.text(subjectLabel(rt, p.subject))}の${predicateLabel(p.predicate)}`);
-  ctx.out(`  新しい値: ${ctx.text(valueText(p.value))}`);
+  ctx.out(`  新しい値: ${ctx.text(proposalValueText(p))}`);
   if (p.note) ctx.out(`  理由: ${ctx.text(p.note)}`);
   ctx.out(`  提案元: ${ctx.text(p.createdBy)}`);
   ctx.out(`  有効期限: ${shortTime(p.expiresAt, rt.uc.timezone)}`);

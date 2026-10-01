@@ -203,6 +203,57 @@ describe('TaskEngine (§19)', () => {
     expect(engine.list().find((t) => t.taskKind === 'extracted')?.status).toBe('pending');
   });
 
+  it('only personal/actionable notice deadlines become tasks; expired general ones do not', () => {
+    const uni = (key: string, title: string, body: string, extra: Record<string, unknown> = {}) =>
+      put(
+        {
+          id: stableId('announcement', key),
+          kind: 'announcement',
+          title,
+          body,
+          scope: 'university',
+          importance: 'normal',
+          publishedAt: '2026-09-01T00:00:00Z',
+          ...extra,
+        } as CanonicalEntityInput,
+        'academic-system',
+      );
+    // expired, general (履修登録 for everyone): no overdue task
+    uni('u1', '抽選履修登録期間のご案内(9月25日(金)12:00まで)', '');
+    // upcoming, general: a task while it is ahead
+    uni('u2', '後期履修登録期間について', '10月7日(水)17時までに登録してください。');
+    // campaign (low importance): never a task
+    uni('u3', '【試読キャンペーンは10月20日まで】電子ブックのご案内', '', { importance: 'low' });
+    // informational without an action: no task
+    uni('u4', '図書館の開館時間', '10月10日まで短縮開館です。');
+    // the academic system's personal deadline widget: a task even when overdue
+    uni('u5', '履修登録期限', '履修登録期限（一般）: 9月30日まで（未）', {
+      category: '期限',
+      importance: 'high',
+    });
+    engine.derive();
+    const titles = engine
+      .list({ statuses: ['pending'] })
+      .filter((t) => t.taskKind === 'extracted')
+      .map((t) => t.title);
+    expect(titles).toHaveLength(2);
+    expect(titles.some((t) => t.includes('10月7日'))).toBe(true);
+    expect(titles.some((t) => t.includes('9月30日'))).toBe(true);
+    expect(engine.deadlineActionability(stableId('announcement', 'u3'), {})).toBe('informational');
+    expect(engine.deadlineActionability(stableId('announcement', 'u4'), {})).toBe('informational');
+    expect(engine.deadlineActionability(stableId('announcement', 'u2'), {})).toBe('general');
+    expect(engine.deadlineActionability(stableId('announcement', 'u5'), {})).toBe('personal');
+
+    // Once the general deadline passes, its task is withdrawn (cancelled by the system), not
+    // shown as 期限切れ; the personal one stays pending.
+    clock.set(new Date('2026-10-08T00:00:00Z'));
+    engine.derive();
+    const pending = engine
+      .list({ statuses: ['pending'] })
+      .filter((t) => t.taskKind === 'extracted');
+    expect(pending.map((t) => t.title)).toEqual([expect.stringContaining('9月30日')]);
+  });
+
   it('cancels derived tasks whose assignment disappeared', () => {
     engine.derive();
     new EntityStore(db).softDelete(a1);

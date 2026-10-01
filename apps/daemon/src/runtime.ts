@@ -156,6 +156,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
     clock,
     ...(profile ? { profile } : {}),
     ...(config.timezone ? { timezone: config.timezone } : {}),
+    ...(config.student ? { student: config.student } : {}),
     schedules: config.sync.schedules,
   });
   const proposals = new ProposalStore(path.join(paths.root, 'proposals'), { clock });

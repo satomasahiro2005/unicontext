@@ -87,6 +87,7 @@ const REQUIRED_TOOLS = [
   'get_conflicts',
   'get_tasks',
   'correct_fact',
+  'propose_pace_slot',
 ];
 
 describe('MCP contract: tools listing', () => {
@@ -95,10 +96,11 @@ describe('MCP contract: tools listing', () => {
     expect(names).toEqual(expect.arrayContaining(REQUIRED_TOOLS));
   });
 
-  it('marks read tools readOnly and correct_fact as the only write-capable tool', async () => {
+  it('marks read tools readOnly; only the two propose tools are write-capable', async () => {
     const { tools } = await client.listTools();
     for (const t of tools) {
-      if (t.name === 'correct_fact') expect(t.annotations?.readOnlyHint).toBe(false);
+      if (t.name === 'correct_fact' || t.name === 'propose_pace_slot')
+        expect(t.annotations?.readOnlyHint).toBe(false);
       else expect(t.annotations?.readOnlyHint, t.name).toBe(true);
       expect(t.description, t.name).toBeTruthy();
       expect(t.inputSchema.type).toBe('object');
@@ -487,6 +489,75 @@ describe('correct_fact is propose-only (§50, §74)', () => {
     expect((await call('correct_fact', { subject: dbCourse, predicate: 'room' })).isError).toBe(
       true,
     );
+    expect(proposals.list().length).toBe(before);
+  });
+});
+
+describe('propose_pace_slot is propose-only (§50)', () => {
+  const slotsOf = (): string[] =>
+    uc.tasks.schedule.paceSlots([dbCourse]).map((s) => `${s.dayOfWeek}:${s.startTime}`);
+
+  it('creates a pace_slots proposal that confirm applies as a user fact', async () => {
+    const before = uc.resolver.facts.history(dbCourse, 'pace_slots').length;
+    const r = await call('propose_pace_slot', {
+      course: dbCourse,
+      slots: ['土 10:00-11:30', '水2限'],
+    });
+    expect(r.isError, r.text).toBe(false);
+    const data = r.envelope.data as {
+      proposalId: string;
+      status: string;
+      applied: boolean;
+      preview: string;
+      howToConfirm: string;
+    };
+    expect(data).toMatchObject({ status: 'pending', applied: false });
+    expect(data.preview).toContain('土 10:00-11:30');
+    expect(data.howToConfirm).toContain('unicontext confirm');
+    expect(r.envelope.answerHint).toContain('何も変更されていません');
+
+    // nothing is written until the user confirms
+    expect(uc.resolver.facts.history(dbCourse, 'pace_slots').length).toBe(before);
+    expect(slotsOf()).toEqual([]);
+    const proposal = proposals.get(data.proposalId);
+    expect(proposal).toMatchObject({
+      status: 'pending',
+      kind: 'correct_fact',
+      subject: dbCourse,
+      predicate: 'pace_slots',
+    });
+    expect(proposal?.createdBy).toBe('mcp:contract-test');
+
+    // pace_slots is not high-risk: the user's confirmation applies it
+    const applied = applyProposal(uc, proposals, data.proposalId);
+    expect(applied.proposal.status).toBe('confirmed');
+    expect(applied.fact.origin).toBe('user');
+    expect(slotsOf()).toEqual(['3:10:20', '6:10:00']);
+    expect(uc.tasks.schedule.paceSlots([dbCourse]).map((s) => s.period)).toEqual([2, undefined]);
+  });
+
+  it('an empty list proposes clearing the slots', async () => {
+    const r = await call('propose_pace_slot', { course: '線形代数', slots: [] });
+    expect(r.isError, r.text).toBe(false);
+    const data = r.envelope.data as { proposalId: string; preview: string };
+    expect(data.preview).toContain('解除');
+    expect(proposals.get(data.proposalId)?.value).toEqual({ slots: [] });
+    proposals.reject(data.proposalId);
+  });
+
+  it('rejects unreadable slots and unknown courses without creating a proposal', async () => {
+    const before = proposals.list().length;
+    expect((await call('propose_pace_slot', { course: dbCourse, slots: ['いつか'] })).isError).toBe(
+      true,
+    );
+    expect(
+      (
+        await call('propose_pace_slot', {
+          course: 'courseOffering:nope',
+          slots: ['土 10:00-11:30'],
+        })
+      ).isError,
+    ).toBe(true);
     expect(proposals.list().length).toBe(before);
   });
 });

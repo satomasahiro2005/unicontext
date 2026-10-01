@@ -58,7 +58,7 @@ export const TaskSchema = z.object({
   dueAt: IsoDateTimeSchema.optional(),
   status: TaskStatusSchema,
   createdBy: z.enum(['system', 'user', 'extractor']),
-  taskKind: z.enum(['assignment', 'exam_preparation', 'extracted', 'manual']),
+  taskKind: z.enum(['assignment', 'exam_preparation', 'extracted', 'manual', 'weekly_pace']),
   origin: FactOriginSchema,
   /** Who last changed status: user, submission-system, or system defaults. */
   statusSetBy: z.enum(['system', 'user', 'submission-system']).default('system'),

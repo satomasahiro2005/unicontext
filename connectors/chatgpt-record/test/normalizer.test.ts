@@ -256,7 +256,9 @@ describe('period and academic year helpers', () => {
   it('takes the term word only from the profile term definitions', () => {
     expect(academicTermOf(ctx, '2026-10-01T01:40:00.000Z')).toBe('後期');
     expect(academicTermOf(ctx, '2026-05-01T01:40:00.000Z')).toBe('前期');
-    expect(academicTermOf(ctx, '2026-08-20T01:40:00.000Z')).toBeUndefined(); // summer break
+    // 学年暦: 前期 runs 4/1–9/30 (summer break included); no term defined yet for 2027
+    expect(academicTermOf(ctx, '2026-08-20T01:40:00.000Z')).toBe('前期');
+    expect(academicTermOf(ctx, '2027-04-10T01:40:00.000Z')).toBeUndefined();
     expect(
       academicTermOf({ profile: undefined, timezone: 'Asia/Tokyo' }, '2026-10-01T01:40:00.000Z'),
     ).toBeUndefined();

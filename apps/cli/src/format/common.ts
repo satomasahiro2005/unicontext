@@ -47,6 +47,7 @@ export const PREDICATE_LABELS: Record<string, string> = {
   grade: '成績',
   grade_letter: '成績評価',
   deadline: '締切',
+  pace_slots: '自習時間',
 };
 
 export const KIND_LABELS: Record<string, string> = {

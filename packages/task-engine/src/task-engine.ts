@@ -4,17 +4,26 @@ import {
   type EntityId,
   type Exam,
   type Fact,
+  type Material,
   type Message,
   stableId,
   type Task,
   type TaskStatus,
 } from '@unicontext/canonical-model';
 import {
+  addLocalDays,
+  classWindow,
   type Clock,
   DEFAULT_TIMEZONE,
+  formatShortJa,
   NotFoundError,
+  parseZonedDate,
   PolicyViolationError,
+  type StudentScope,
   systemClock,
+  type UniversityProfile,
+  zonedDateString,
+  zonedTime,
 } from '@unicontext/core';
 import {
   EntityStore,
@@ -26,7 +35,9 @@ import {
 } from '@unicontext/database';
 import { type ConflictResolver, factId, FactStore } from '@unicontext/provenance';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { ClassSchedule } from './class-schedule.js';
 import { extractDeadlines } from './deadline-extractor.js';
+import { paceStatus, type PaceStatus, weekStartOf, weekStartOfDue } from './pace.js';
 
 export const DEADLINE_PREDICATE = 'deadline';
 export const EXTRACTOR_ID = 'ja-deadline-rules';
@@ -44,7 +55,26 @@ export interface TaskEngineOptions {
   expandCourse?: (id: string) => string[];
   /** Authority that may confirm submissions. Default "submission-system". */
   submissionAuthority?: string;
+  /** Academic calendar (terms, periods, class days) for generated class sessions. */
+  profile?: UniversityProfile;
+  /** Campus/faculty of the student for scoped calendar exceptions. */
+  student?: StudentScope;
+  /** Canonical id of a course offering (§14). */
+  canonicalCourse?: (id: string) => string;
 }
+
+/**
+ * How a deadline found in free text relates to the student:
+ * - personal: about the student's own course, the academic system's personal deadline widget, or a
+ *   message addressed to them → a task, kept (and shown overdue) after the deadline;
+ * - general: a university-wide notice that asks every student to do something (履修登録, 申請 …) →
+ *   a task only while the deadline is ahead; it is not kept as an overdue task;
+ * - informational: campaigns and general information → no task (the fact stays searchable).
+ */
+export type DeadlineActionability = 'personal' | 'general' | 'informational';
+
+const ACTION_WORDS =
+  /履修|登録|申請|申込|申し込|提出|手続|納付|納入|受取|受け取|回答|返却|更新|予約|届出|届け出|確認してください|必ず/;
 
 export interface DeriveReport {
   created: number;
@@ -69,6 +99,8 @@ export class TaskEngine {
   private readonly resolver: ConflictResolver | undefined;
   private readonly expandCourse: (id: string) => string[];
   private readonly submissionAuthority: string;
+  /** Class sessions (stored + generated from the timetable and academic calendar). */
+  readonly schedule: ClassSchedule;
 
   constructor(options: TaskEngineOptions) {
     this.db = options.db;
@@ -80,6 +112,16 @@ export class TaskEngine {
     this.resolver = options.resolver;
     this.expandCourse = options.expandCourse ?? ((id) => [id]);
     this.submissionAuthority = options.submissionAuthority ?? 'submission-system';
+    this.schedule = new ClassSchedule({
+      db: this.db,
+      clock: this.clock,
+      timezone: this.tz,
+      facts: this.facts,
+      expand: this.expandCourse,
+      ...(options.canonicalCourse ? { canonical: options.canonicalCourse } : {}),
+      ...(options.profile ? { profile: options.profile } : {}),
+      ...(options.student ? { student: options.student } : {}),
+    });
   }
 
   get(id: string): Task | undefined {
@@ -194,7 +236,13 @@ export class TaskEngine {
   /** Start of the next non-cancelled class of a course after `after` (for 「次回まで」). */
   nextClassAt(courseOfferingId: string, after: Date): Date | undefined {
     const ids = this.expandCourse(courseOfferingId);
-    const sessions = this.entities.list('classSession', { where: { courseOfferingId: ids } });
+    const from = zonedDateString(after, this.tz);
+    const sessions = [
+      ...this.entities.list('classSession', { where: { courseOfferingId: ids } }),
+      ...this.schedule
+        .generated(from, addLocalDays(from, 120), [courseOfferingId])
+        .filter((s) => s.sessionKind !== 'self_study'),
+    ];
     const starts = sessions
       .filter((s) => s.status !== 'cancelled' && s.startsAt)
       .map((s) => new Date(s.startsAt as string))
@@ -264,6 +312,22 @@ export class TaskEngine {
     return added;
   }
 
+  /** See {@link DeadlineActionability}. `subject` is the announcement/message the deadline is in. */
+  deadlineActionability(
+    subject: string,
+    value: { phrase?: string; courseOfferingId?: string },
+  ): DeadlineActionability {
+    const e = this.entities.get(subject);
+    if (!e || e.kind === 'message') return 'personal';
+    if (e.kind !== 'announcement') return 'personal';
+    if (e.courseOfferingId || value.courseOfferingId || e.scope === 'course') return 'personal';
+    // Deadlines the academic system tracks for this student (LiveCampusU 警告/期限 widget).
+    if (e.category === '期限') return 'personal';
+    if (e.importance === 'low') return 'informational';
+    const text = `${e.title}\n${value.phrase ?? ''}`.normalize('NFKC');
+    return ACTION_WORDS.test(text) ? 'general' : 'informational';
+  }
+
   private submissionEvidence(assignmentIds: string[]): Fact | undefined {
     const subs = this.entities.list('submission', { where: { assignmentId: assignmentIds } });
     const facts = this.facts.withSources(
@@ -290,6 +354,145 @@ export class TaskEngine {
     }
     const facts = this.facts.active({ subjects: [a.id], predicate: 'assignment_due' });
     return { dueAt: a.dueAt, factIds: facts.map((f) => f.id) };
+  }
+
+  /** How far behind the student is in an offering (any linked id). */
+  paceStatusOf(offeringId: string): PaceStatus {
+    return paceStatus(this.list({ courseOfferingId: offeringId }), this.clock.now(), this.tz);
+  }
+
+  /**
+   * One 「<科目> 今週分」 task per local week for offerings without a weekly class time (時間割外 /
+   * 集中講義) that have self-study slots or any activity: the current week and the 2 before it,
+   * limited to the offering's class weeks through its exams and to weeks ending after the offering
+   * was first seen. Tasks of older weeks are kept as they are (the student may still owe them).
+   */
+  private deriveWeeklyPace(
+    assignmentTasks: readonly Task[],
+    derivedIds: Set<string>,
+    revived: (prev: Task | undefined) => TaskStatus,
+  ): ('created' | 'updated' | 'unchanged')[] {
+    const results: ('created' | 'updated' | 'unchanged')[] = [];
+    const nowDate = this.clock.now();
+    const now = nowDate.toISOString();
+    const currentWeek = weekStartOf(nowDate, this.tz);
+    const windowStart = addLocalDays(currentWeek, -14);
+    const weeks = [windowStart, addLocalDays(currentWeek, -7), currentWeek];
+    for (const e of this.schedule.enrolledOfferings()) {
+      if (e.scheduleType === 'regular') continue;
+      const term = e.term ?? this.schedule.currentTerm();
+      if (!term) continue;
+      const classes = classWindow(term);
+      const range = { start: classes.start, end: term.exams?.end ?? classes.end };
+      const where = { courseOfferingId: e.ids };
+      const assignments = this.entities.list('assignment', { where });
+      const announcements = this.entities.list('announcement', { where });
+      const materials = this.entities.list('material', { where });
+      const slots = this.schedule.paceSlots(e.ids);
+      if (slots.length === 0 && assignments.length + announcements.length + materials.length === 0)
+        continue;
+      const firstSeen = this.entities.meta(e.offering.id)?.createdAt;
+      const idSet = new Set<string>(e.ids);
+      for (const ws of weeks) {
+        const sunday = addLocalDays(ws, 6);
+        if (ws > range.end || sunday < range.start) continue;
+        const [y, m, d] = sunday.split('-').map(Number) as [number, number, number];
+        const dueAt = zonedTime({ year: y, month: m, day: d, hour: 23, minute: 59 }, this.tz);
+        if (firstSeen && dueAt.getTime() <= Date.parse(firstSeen)) continue;
+        const id = stableId('task', 'weekly_pace', e.offering.id, ws);
+        derivedIds.add(id);
+        const prev = this.get(id);
+        const notes = this.weeklyNotes({
+          from: parseZonedDate(ws, this.tz),
+          to: parseZonedDate(addLocalDays(ws, 7), this.tz),
+          assignments,
+          announcements,
+          materials,
+          tasks: assignmentTasks.filter(
+            (t) => t.courseOfferingId !== undefined && idSet.has(t.courseOfferingId),
+          ),
+        });
+        // Once the student has worked on the task its notes are theirs.
+        const text = prev?.statusSetBy === 'user' && prev.notes !== undefined ? prev.notes : notes;
+        results.push(
+          this.save({
+            id,
+            title: `${e.offering.title} 今週分`,
+            courseOfferingId: e.offering.id,
+            sourceFactIds: [],
+            dueAt: dueAt.toISOString(),
+            status: revived(prev),
+            createdBy: 'system',
+            taskKind: 'weekly_pace',
+            origin: 'inferred',
+            statusSetBy: prev?.statusSetBy ?? 'system',
+            ...(text ? { notes: text } : {}),
+            createdAt: prev?.createdAt ?? now,
+            updatedAt: now,
+          }).status,
+        );
+      }
+    }
+    // Weekly tasks outside the window stay as they are; inside it, only those whose offering no
+    // longer qualifies are left to the sweep (and never one the student worked on).
+    for (const t of this.list()) {
+      if (t.taskKind !== 'weekly_pace' || derivedIds.has(t.id)) continue;
+      const week = t.dueAt ? weekStartOfDue(t.dueAt, this.tz) : undefined;
+      if (t.statusSetBy === 'user' || !week || week < windowStart) derivedIds.add(t.id);
+    }
+    return results;
+  }
+
+  /** "新着: …" / "未提出: …" lines for one week of a course. */
+  private weeklyNotes(input: {
+    from: Date;
+    to: Date;
+    assignments: readonly Assignment[];
+    announcements: readonly Announcement[];
+    materials: readonly Material[];
+    tasks: readonly Task[];
+  }): string | undefined {
+    const inWeek = (iso: string | undefined): boolean => {
+      if (!iso) return false;
+      const t = Date.parse(iso);
+      return t >= input.from.getTime() && t < input.to.getTime();
+    };
+    const label = (kind: string, title: string): string =>
+      `${kind}「${title.length > 28 ? `${title.slice(0, 28)}…` : title}」`;
+    const MAX = 4;
+    const list = (items: string[]): string =>
+      items.length > MAX
+        ? `${items.slice(0, MAX).join('、')} ほか${items.length - MAX}件`
+        : items.join('、');
+    const fresh: string[] = [];
+    const freshAssignments = new Set<string>();
+    for (const a of input.announcements)
+      if (inWeek(a.publishedAt)) fresh.push(label('お知らせ', a.title));
+    for (const m of input.materials) if (inWeek(m.publishedAt)) fresh.push(label('資料', m.title));
+    for (const a of input.assignments) {
+      if (inWeek(a.availableFrom ?? this.entities.meta(a.id)?.createdAt)) {
+        fresh.push(label('課題', a.title));
+        freshAssignments.add(a.id);
+      }
+    }
+    const pending = input.tasks
+      .filter(
+        (t) =>
+          t.taskKind === 'assignment' &&
+          (t.status === 'pending' || t.status === 'in_progress' || t.status === 'unknown') &&
+          t.dueAt !== undefined &&
+          Date.parse(t.dueAt) >= input.from.getTime() &&
+          !(t.assignmentId && freshAssignments.has(t.assignmentId)),
+      )
+      .map(
+        (t) =>
+          `${label('課題', t.title)}（${formatShortJa(new Date(t.dueAt as string), this.tz)}締切）`,
+      );
+    const lines = [
+      ...(fresh.length ? [`新着: ${list(fresh)}`] : []),
+      ...(pending.length ? [`未提出: ${list(pending)}`] : []),
+    ];
+    return lines.length ? lines.join('\n') : undefined;
   }
 
   /** Recompute all derived tasks. User-set statuses are preserved. */
@@ -404,8 +607,16 @@ export class TaskEngine {
         continue;
       }
       const id = stableId('task', 'extracted', f.id);
-      derivedIds.add(id);
       const prev = this.get(id);
+      const userTouched = prev?.statusSetBy === 'user';
+      const kind = this.deadlineActionability(f.subject, v);
+      // Informational deadlines never become tasks; general ones only while still ahead. A task the
+      // user already worked on is kept either way. Dropped tasks are cancelled by the sweep below.
+      if (!userTouched) {
+        if (kind === 'informational') continue;
+        if (kind === 'general' && Date.parse(v.dueAt) < this.clock.now().getTime()) continue;
+      }
+      derivedIds.add(id);
       const evidence = f.evidence ?? v.phrase ?? '';
       count(
         this.save({
@@ -428,6 +639,8 @@ export class TaskEngine {
     }
 
     for (const t of assignmentTasks) count(this.save(t).status);
+
+    for (const status of this.deriveWeeklyPace(assignmentTasks, derivedIds, revived)) count(status);
 
     // Derived tasks whose origin disappeared are cancelled (never deleted: the user may have notes).
     for (const t of this.list()) {

@@ -36,6 +36,11 @@ export type EmbeddingProviderId = z.infer<typeof EmbeddingProviderIdSchema>;
 export const ConfigSchema = z.object({
   profile: z.string().optional(),
   timezone: z.string().optional(),
+  /**
+   * Who the student is, for campus/faculty-specific calendar exceptions in the profile (e.g. 静岡地区のみ
+   * 休講). Free text matched against the profile's `noClassDays[].campus/faculty` (substring).
+   */
+  student: z.object({ campus: z.string().optional(), faculty: z.string().optional() }).optional(),
   sources: z
     .record(
       z.string(),

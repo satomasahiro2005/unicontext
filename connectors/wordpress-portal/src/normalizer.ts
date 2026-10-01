@@ -7,7 +7,7 @@ import {
   type RawItemView,
 } from '@unicontext/connector-sdk';
 import type { JsonValue } from '@unicontext/canonical-model';
-import { zonedTime } from '@unicontext/core';
+import { classifyNoticeImportance, zonedTime } from '@unicontext/core';
 import { decodeEntities, extractLinks, htmlToText } from './html.js';
 import {
   WP_CATEGORY,
@@ -79,7 +79,7 @@ export function createPortalNormalizer(options: PortalNormalizerOptions = {}): N
   const label = options.label;
   return {
     id: 'wordpress-portal-normalizer',
-    version: '1',
+    version: '2',
     sourceTypes: [WP_POST, WP_CATEGORY, WP_PDF],
     normalize(item: RawItemView, ctx: NormalizeContext): NormalizeOutput {
       const refBase = { authority: PORTAL_AUTHORITY, ...(label ? { sourceLabel: label } : {}) };
@@ -111,7 +111,7 @@ export function createPortalNormalizer(options: PortalNormalizerOptions = {}): N
                 title,
                 body: postBody(p),
                 ...(publishedAt ? { publishedAt } : {}),
-                importance: title.includes('【重要】') ? 'high' : 'normal',
+                importance: classifyNoticeImportance({ title }).importance,
                 scope: 'university',
                 ...(category ? { category } : {}),
                 url: p.link,

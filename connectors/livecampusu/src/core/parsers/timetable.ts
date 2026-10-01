@@ -9,6 +9,8 @@ export interface TimetableEntry {
   /** LCU period pair index: 1 = 1・2 … 7 = 13・14. */
   period: number;
   year?: number;
+  /** Semester code from the cell (displayPopup's first argument), e.g. "1" = 前期. */
+  semesterCode?: string;
   subjectCode: string;
   classCode: string;
   title: string;
@@ -85,6 +87,7 @@ export function parseTimetable(html: string): TimetableEntry[] {
               week,
               period,
               ...(Number.isInteger(year) && year > 1900 ? { year } : {}),
+              ...(args[0] ? { semesterCode: args[0] } : {}),
               subjectCode,
               classCode,
               title,
@@ -100,4 +103,95 @@ export function parseTimetable(html: string): TimetableEntry[] {
       });
   });
   return out;
+}
+
+/** A course of the 時間割外講義 (#lecture2) or 集中講義 (#lecture3) list: no weekly slot. */
+export interface OffGridEntry {
+  kind: 'unscheduled' | 'intensive';
+  year?: number;
+  semesterCode?: string;
+  subjectCode: string;
+  classCode: string;
+  title: string;
+  teacher?: string;
+  credits?: number;
+  numbering?: string;
+  campus?: string;
+  room?: string;
+  flags: string[];
+  selector: string;
+}
+
+export interface TimetablePage {
+  /** Weekly grid cells (一般・抽選講義). */
+  entries: TimetableEntry[];
+  /** 時間割外講義 and 集中講義. */
+  offGrid: OffGridEntry[];
+  /** Semester shown, from the active 前期/後期 switch (label as displayed). */
+  activeSemesterLabel?: string;
+  /** "2026年度" header. */
+  year?: number;
+}
+
+/** Parse the whole 時間割参照 page: grid, off-grid lists and which semester is shown. */
+export function parseTimetablePage(html: string): TimetablePage {
+  const $ = load(html);
+  const entries = parseTimetable(html);
+  const offGrid: OffGridEntry[] = [];
+  const sections: [string, OffGridEntry['kind']][] = [
+    ['#lecture2', 'unscheduled'],
+    ['#lecture3', 'intensive'],
+  ];
+  for (const [sel, kind] of sections) {
+    $(sel)
+      .find('li.stady-lecture-list-item')
+      .each((_, li) => {
+        const args = quotedArgs($(li).attr('onclick') ?? '');
+        const subjectCode = args[7] ?? '';
+        const classCode = args[8] ?? '';
+        const title = cleanText($(li).find('p.lecture-ttl').first().text());
+        if (!title || !subjectCode) return;
+        const ps = $(li).children('p').not('.lecture-ttl');
+        const teacher = cleanText(ps.eq(0).text());
+        const cn = splitCreditsNumbering(ps.eq(1).text());
+        const cr = splitCampusRoom(ps.eq(2).text());
+        const year = Number(args[6]);
+        offGrid.push({
+          kind,
+          ...(Number.isInteger(year) && year > 1900 ? { year } : {}),
+          ...(args[0] ? { semesterCode: args[0] } : {}),
+          subjectCode,
+          classCode,
+          title,
+          ...(teacher ? { teacher } : {}),
+          ...cn,
+          ...cr,
+          flags: ($(li).attr('class') ?? '')
+            .split(/\s+/)
+            .filter((c) => c && c !== 'stady-lecture-list-item'),
+          selector: `${sel} li.stady-lecture-list-item[subject=${subjectCode}][class=${classCode}]`,
+        });
+      });
+  }
+  const active = cleanText($('.c-half-btn a.is-active').first().text());
+  const ym = /(\d{4})\s*年度/.exec(cleanText($('p.year').first().text()));
+  return {
+    entries,
+    offGrid,
+    ...(active ? { activeSemesterLabel: active } : {}),
+    ...(ym ? { year: Number(ym[1]) } : {}),
+  };
+}
+
+/**
+ * The semester a page shows (前期/後期 switch with `a.is-active`, used by 時間割 and 試験時間割), as a
+ * label; undefined when the page has no switch.
+ */
+export function activeSemesterLabel(html: string): string | undefined {
+  const $ = load(html);
+  const labels = $('a.is-active')
+    .map((_, a) => cleanText($(a).text()))
+    .get()
+    .filter((t) => /^(前期|後期|通年|前学期|後学期|第[1-4１-４]クォーター|[1-4１-４]Q)$/.test(t));
+  return labels[0];
 }

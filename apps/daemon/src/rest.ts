@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import { type JsonValue, type TaskStatus, TASK_STATUSES } from '@unicontext/canonical-model';
-import { getView } from '@unicontext/context-engine';
+import { getView, setPaceSlots } from '@unicontext/context-engine';
 import {
   isUniContextError,
   NotFoundError,
@@ -13,7 +13,13 @@ import {
   ValidationError,
   errorMessage,
 } from '@unicontext/core';
-import { applyProposal, buildAssignments, handleMcpHttp, type Proposal } from '@unicontext/mcp';
+import {
+  applyProposal,
+  buildAssignments,
+  handleMcpHttp,
+  resolveCourse,
+  type Proposal,
+} from '@unicontext/mcp';
 import type { NotificationService } from '@unicontext/notifications';
 import { toCitation } from '@unicontext/provenance';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
@@ -24,6 +30,8 @@ import type {
   CoursesResponse,
   HealthResponse,
   NotificationsResponse,
+  PaceResponse,
+  PaceSetResponse,
   ProposalsResponse,
   ProposalView,
   SessionResponse,
@@ -31,7 +39,7 @@ import type {
   SourceRefResponse,
   SourcesResponse,
 } from './api-types.js';
-import { buildCourseSummaries } from './courses.js';
+import { listCourses } from './courses.js';
 import type { Runtime } from './runtime.js';
 import { requireSource } from './runtime.js';
 import {
@@ -82,6 +90,15 @@ const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 const CorrectBodySchema = z.object({
   value: JsonValueSchema,
   note: z.string().max(2000).optional(),
+});
+const PaceSlotSchema = z.object({
+  dayOfWeek: z.number().int().min(0).max(6),
+  startTime: z.string().optional(),
+  endTime: z.string().optional(),
+  period: z.number().int().positive().optional(),
+});
+const PaceBodySchema = z.object({
+  slots: z.array(z.union([z.string().min(1).max(100), PaceSlotSchema])).max(14),
 });
 const IdentityBodySchema = z.object({ leftId: z.string().min(1), rightId: z.string().min(1) });
 const TaskStatusBodySchema = z.object({
@@ -291,13 +308,17 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
   app.get('/api/v1/week', async () => getView(uc.context, 'week', {}));
   app.get('/api/v1/admin', async () => getView(uc.context, 'admin', {}));
 
-  app.get('/api/v1/courses', async (): Promise<CoursesResponse> => ({
-    courses: buildCourseSummaries(uc),
-  }));
+  app.get<{ Querystring: { term?: string } }>(
+    '/api/v1/courses',
+    async (request): Promise<CoursesResponse> =>
+      listCourses(uc, { term: request.query.term || undefined }),
+  );
 
   app.get<{ Params: { id: string } }>('/api/v1/courses/:id', async (request) =>
     getView(uc.context, 'course', { courseOfferingId: request.params.id }),
   );
+
+  app.get('/api/v1/pace', async (): Promise<PaceResponse> => uc.context.paceOverview());
 
   app.get<{ Params: { id: string } }>('/api/v1/lectures/:id', async (request) => {
     const bundle = uc.context.lecture({ lectureId: request.params.id });
@@ -480,6 +501,23 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
       uc.identity.invalidate();
       return { fact: result.fact, conflict: result.conflict };
     },
+  );
+
+  const storePace = (idOrName: string, input: (string | z.infer<typeof PaceSlotSchema>)[]) => {
+    const { ref } = resolveCourse(uc, idOrName);
+    const { slots, fact } = setPaceSlots(uc, ref, input);
+    return { course: ref, slots: slots.map((s) => uc.context.paceSlotView(s)), fact };
+  };
+  app.put<{ Params: { id: string }; Body: unknown }>(
+    '/api/v1/courses/:id/pace',
+    write,
+    async (request): Promise<PaceSetResponse> =>
+      storePace(request.params.id, parse(PaceBodySchema, request.body).slots),
+  );
+  app.delete<{ Params: { id: string } }>(
+    '/api/v1/courses/:id/pace',
+    write,
+    async (request): Promise<PaceSetResponse> => storePace(request.params.id, []),
   );
 
   app.post<{ Body: unknown }>('/api/v1/identity/confirm', write, async (request) => {

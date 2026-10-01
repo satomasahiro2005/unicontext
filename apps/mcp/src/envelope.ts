@@ -27,6 +27,7 @@ const PREDICATE_LABELS: Record<string, string> = {
   submission_status: '提出状況',
   grade: '成績',
   grade_letter: '成績評価',
+  pace_slots: '自習時間',
 };
 
 export function predicateLabel(predicate: string): string {

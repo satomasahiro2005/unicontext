@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { PACE_SLOT_EXAMPLE } from '@unicontext/context-engine';
 import {
   ConfigError,
   defaultConfig,
@@ -208,6 +209,23 @@ async function checkSources(
     }
   }
   return out;
+}
+
+/** Enrolled 時間割外 / 集中講義 courses of the current term without self-study slots (warnings). */
+function checkPace(ctx: CliContext, rt: Runtime): DoctorCheck[] {
+  try {
+    return rt.uc.context.admin().unscheduledWithoutPace.map(({ course }) => {
+      const arg = course.courseCode ?? `"${course.title}"`;
+      return check(
+        `pace:${course.id}`,
+        '自習時間',
+        'warn',
+        `時間割外の科目に自習時間が未設定: ${ctx.text(course.title)}（unicontext pace set ${ctx.text(arg)} --slot "${PACE_SLOT_EXAMPLE}"）`,
+      );
+    });
+  } catch {
+    return [];
+  }
 }
 
 /** Run every check. Never throws: failures become NG entries. */
@@ -475,6 +493,8 @@ export async function runDoctor(ctx: CliContext): Promise<DoctorCheck[]> {
       ),
     );
   }
+
+  if (rt) checks.push(...checkPace(ctx, rt));
 
   // 7. keychain
   if (ctx.dev) {

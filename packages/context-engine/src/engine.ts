@@ -43,7 +43,15 @@ import {
   uniqueCitations,
 } from '@unicontext/provenance';
 import type { SearchService } from '@unicontext/search';
-import type { TaskEngine } from '@unicontext/task-engine';
+import {
+  type EnrolledOffering,
+  formatPaceSlot,
+  PACE_PREDICATE,
+  type PaceSlot,
+  type TaskEngine,
+  weekStartOf,
+  weekStartOfDue,
+} from '@unicontext/task-engine';
 import type {
   AdminContext,
   AnnouncementItem,
@@ -63,6 +71,10 @@ import type {
   FactItem,
   LectureBundle,
   MaterialItem,
+  PaceCourseItem,
+  PaceItem,
+  PaceOverview,
+  PaceSlotView,
   PreparationItem,
   QuestionItem,
   ResolvedValue,
@@ -220,12 +232,15 @@ export class ContextEngine {
       session.status,
     );
     const cancelled = status.status === 'resolved' && status.value === 'cancelled';
+    const selfStudy = session.sessionKind === 'self_study';
     const time = session.period
       ? `${session.period}限`
       : session.startsAt
         ? formatShortJa(new Date(session.startsAt), this.timezone)
         : session.date;
-    const summary = `${formatDateJa(parseZonedDate(session.date, this.timezone), this.timezone)} ${time} ${course.title}${cancelled ? '（休講）' : ''} / 教室: ${this.describeValue(room)}`;
+    const summary = selfStudy
+      ? `${formatDateJa(parseZonedDate(session.date, this.timezone), this.timezone)} ${time} ${course.title}（自習・本人が設定した時間）`
+      : `${formatDateJa(parseZonedDate(session.date, this.timezone), this.timezone)} ${time} ${course.title}${cancelled ? '（休講）' : ''} / 教室: ${this.describeValue(room)}`;
     return {
       sessionId: session.id,
       course,
@@ -237,6 +252,7 @@ export class ContextEngine {
       status,
       cancelled,
       note: session.note,
+      sessionKind: selfStudy ? 'self_study' : 'class',
       summary,
       citations: uniqueCitations([
         ...this.citationsFor([session.id]),
@@ -245,28 +261,12 @@ export class ContextEngine {
     };
   }
 
-  /** Sessions on a local date, one per (canonical course, period/start), sorted by time. */
+  /**
+   * Sessions on a local date, one per (canonical course, period/start), sorted by time: stored
+   * sessions merged over the ones generated from the timetable and the academic calendar.
+   */
   sessionsOn(date: string): ClassSession[] {
-    const next = zonedDateString(
-      addZonedDays(parseZonedDate(date, this.timezone), 1, this.timezone),
-      this.timezone,
-    );
-    const all = this.entities.listByDateRange('classSession', 'date', date, next);
-    const seen = new Map<string, ClassSession>();
-    for (const s of all) {
-      const key = `${this.identity.canonical(s.courseOfferingId)}|${s.period ?? s.startsAt ?? s.id}`;
-      const prev = seen.get(key);
-      if (
-        !prev ||
-        (prev.courseOfferingId !== this.identity.canonical(s.courseOfferingId) &&
-          s.courseOfferingId === this.identity.canonical(s.courseOfferingId))
-      )
-        seen.set(key, s);
-    }
-    return [...seen.values()].sort(
-      (a, b) =>
-        (a.period ?? 99) - (b.period ?? 99) || (a.startsAt ?? '').localeCompare(b.startsAt ?? ''),
-    );
+    return this.tasks.schedule.sessionsOn(date);
   }
 
   private taskCitations(t: Task): Citation[] {
@@ -503,12 +503,20 @@ export class ContextEngine {
     const importantAnnouncements = this.announcementsBetween(
       new Date(now.getTime() - 3 * DAY),
       new Date(now.getTime() + 1),
-      (a) => a.importance === 'critical' || a.importance === 'high' || a.scope === 'university',
+      // General campaigns (importance low: 就活, メルマガ, 調査 …) stay out of the daily view.
+      (a) =>
+        a.importance === 'critical' ||
+        a.importance === 'high' ||
+        (a.scope === 'university' && a.importance !== 'low'),
     );
     const preparation = classes.filter((c) => !c.cancelled).map((c) => this.preparationFor(c));
+    const term = this.tasks.schedule.currentTerm(date);
+    const reason = classes.length === 0 ? this.tasks.schedule.noClassesReason(date) : undefined;
     return {
       ...this.base(view),
       date,
+      ...(term ? { term: { id: term.id, name: term.name } } : {}),
+      ...(reason ? { noClassesReason: reason } : {}),
       classes,
       changes,
       deadlines,
@@ -519,9 +527,119 @@ export class ContextEngine {
     };
   }
 
-  /** getTodayContext() → {classes, changes, deadlines, tasks, importantAnnouncements, preparation, conflicts} (§17). */
+  /** getTodayContext() → {classes, changes, deadlines, tasks, importantAnnouncements, preparation, conflicts, pacing} (§17). */
   today(): TodayContext {
-    return this.day('today', 0);
+    return { ...this.day('today', 0), pacing: this.pacing() };
+  }
+
+  paceSlotView(slot: PaceSlot): PaceSlotView {
+    return {
+      dayOfWeek: slot.dayOfWeek,
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      period: slot.period,
+      text: formatPaceSlot(slot),
+    };
+  }
+
+  /**
+   * Enrolled offerings of the current term (all of them when the profile has no academic
+   * calendar; none outside every term).
+   */
+  private currentTermOfferings(): EnrolledOffering[] {
+    const schedule = this.tasks.schedule;
+    const all = schedule.enrolledOfferings();
+    const cal = schedule.profile?.academicCalendar;
+    if (!cal || cal.terms.length === 0) return all;
+    const current = schedule.currentTerm();
+    return current ? all.filter((e) => e.term?.id === current.id) : [];
+  }
+
+  /** Offerings without a weekly class time that the student is falling behind in. */
+  pacing(): PaceItem[] {
+    const out: PaceItem[] = [];
+    for (const e of this.currentTermOfferings()) {
+      if (e.scheduleType === 'regular') continue;
+      const course = this.courseRef(e.offering.id);
+      if (!course) continue;
+      const st = this.tasks.paceStatusOf(e.offering.id);
+      if (st.behindWeeks === 0 && st.unsubmitted === 0) continue;
+      const message =
+        st.behindWeeks === 1
+          ? `${course.title} 先週分が未完了`
+          : st.behindWeeks >= 2
+            ? `${course.title} ${st.behindWeeks}週分遅れています`
+            : `${course.title} 未提出の課題 ${st.unsubmitted}件`;
+      out.push({
+        course,
+        behindWeeks: st.behindWeeks,
+        unsubmitted: st.unsubmitted,
+        slots: this.tasks.schedule.paceSlots(e.ids).map(formatPaceSlot),
+        message,
+      });
+    }
+    return out.sort(
+      (a, b) =>
+        b.behindWeeks - a.behindWeeks ||
+        b.unsubmitted - a.unsubmitted ||
+        a.course.title.localeCompare(b.course.title, 'ja'),
+    );
+  }
+
+  /**
+   * Pacing overview: every enrolled course of the current term plus any course that has
+   * self-study slots, with this week's 「今週分」 task.
+   */
+  paceOverview(): PaceOverview {
+    const schedule = this.tasks.schedule;
+    const refs = new Map<string, CourseRef>();
+    for (const e of this.currentTermOfferings()) {
+      const ref = this.courseRef(e.offering.id);
+      if (ref) refs.set(ref.id, ref);
+    }
+    const subjects = new Set(
+      this.resolver.facts
+        .activePairs()
+        .filter((p) => p.predicate === PACE_PREDICATE)
+        .map((p) => p.subject),
+    );
+    for (const subject of subjects) {
+      const ref = this.courseRef(subject);
+      if (ref && !refs.has(ref.id) && this.entities.getOfKind('courseOffering', ref.id))
+        refs.set(ref.id, ref);
+    }
+    const enrolledAnyTerm = schedule.enrolledOfferings();
+    const currentWeek = weekStartOf(this.now(), this.timezone);
+    const courses: PaceCourseItem[] = [];
+    for (const ref of refs.values()) {
+      const tasks = this.tasks.list({ courseOfferingId: ref.id });
+      const weekly = tasks.find(
+        (t) =>
+          t.taskKind === 'weekly_pace' &&
+          t.dueAt !== undefined &&
+          weekStartOfDue(t.dueAt, this.timezone) === currentWeek,
+      );
+      const st = this.tasks.paceStatusOf(ref.id);
+      courses.push({
+        course: ref,
+        scheduleType: schedule.scheduleTypeOf(ref.linkedIds),
+        enrolled: enrolledAnyTerm.some((e) => e.ids.includes(ref.id)),
+        slots: schedule.paceSlots(ref.linkedIds).map((s) => this.paceSlotView(s)),
+        thisWeek:
+          weekly && weekly.dueAt
+            ? { taskId: weekly.id, status: weekly.status, dueAt: weekly.dueAt }
+            : undefined,
+        behindWeeks: st.behindWeeks,
+        unsubmitted: st.unsubmitted,
+      });
+    }
+    return {
+      courses: courses.sort(
+        (a, b) =>
+          Number(b.enrolled) - Number(a.enrolled) ||
+          a.course.title.localeCompare(b.course.title, 'ja'),
+      ),
+    };
   }
 
   tomorrow(): TomorrowContext {
@@ -534,11 +652,15 @@ export class ContextEngine {
     const to = addZonedDays(from, 7, this.timezone);
     const days = Array.from({ length: 7 }, (_, i) => {
       const date = zonedDateString(addZonedDays(from, i, this.timezone), this.timezone);
-      return { date, classes: this.sessionsOn(date).map((s) => this.classItem(s)) };
+      const classes = this.sessionsOn(date).map((s) => this.classItem(s));
+      const reason = classes.length === 0 ? this.tasks.schedule.noClassesReason(date) : undefined;
+      return { date, classes, ...(reason ? { noClassesReason: reason } : {}) };
     });
+    const term = this.tasks.schedule.currentTerm(zonedDateString(now, this.timezone));
     const all = this.deadlines(from, to);
     return {
       ...this.base('week'),
+      ...(term ? { term: { id: term.id, name: term.name } } : {}),
       from: from.toISOString(),
       to: to.toISOString(),
       days,
@@ -560,11 +682,19 @@ export class ContextEngine {
       .map((id) => this.entities.getOfKind('courseOffering', id))
       .filter((o): o is CourseOffering => o !== undefined);
     const today = zonedDateString(now, this.timezone);
-    const sessions = this.entities
-      .list('classSession', { where: { courseOfferingId: ids }, orderBy: 'date' })
-      .filter((s) => s.date >= today)
+    const sessions = this.tasks.schedule
+      .sessionsBetween(
+        today,
+        zonedDateString(addZonedDays(now, 120, this.timezone), this.timezone),
+        [c.id],
+      )
       .slice(0, 5)
       .map((s) => this.classItem(s));
+    const schedule = this.tasks.schedule;
+    const scheduleType = schedule.scheduleTypeOf(ids);
+    const termOffering =
+      offerings.find((o) => o.id === c.id && o.term) ?? offerings.find((o) => o.term);
+    const enrolled = schedule.enrolledOfferings().some((e) => e.ids.includes(c.id));
     const lectures = this.entities
       .list('lecture', { where: { courseOfferingId: ids }, orderBy: 'date' })
       .filter((l) => l.date <= today)
@@ -575,11 +705,21 @@ export class ContextEngine {
       ...this.base('course'),
       course: { id: c.id, title: c.title, courseCode: c.courseCode, linkedIds: c.linkedIds },
       instructors: [...new Set(offerings.flatMap((o) => o.instructorNames))],
-      schedule: c.offering.schedule.map((s) => ({
-        dayOfWeek: s.dayOfWeek,
-        period: s.period,
-        room: s.room,
-      })),
+      schedule:
+        scheduleType === 'regular'
+          ? c.offering.schedule.map((s) => ({
+              dayOfWeek: s.dayOfWeek,
+              period: s.period,
+              room: s.room,
+            }))
+          : [],
+      scheduleType,
+      academicYear: termOffering?.academicYear ?? c.offering.academicYear,
+      term: termOffering?.term ?? c.offering.term,
+      termId: termOffering ? schedule.termOf(termOffering)?.id : undefined,
+      enrolled,
+      retake: offerings.some((o) => (o.extra as { retake?: unknown } | undefined)?.retake === true),
+      paceSlots: schedule.paceSlots(ids).map((x) => this.paceSlotView(x)),
       room: this.resolvedValue<string>(this.resolver.resolve(ids, 'room'), c.offering.room),
       sources: ids.map((id) => ({
         id,
@@ -997,6 +1137,12 @@ export class ContextEngine {
       sources,
       conflicts: this.openConflicts(),
       pendingLinks: this.identity.listLinks({ status: 'suggested' }),
+      unscheduledWithoutPace: this.currentTermOfferings().flatMap((e) => {
+        if (e.scheduleType === 'regular' || this.tasks.schedule.paceSlots(e.ids).length > 0)
+          return [];
+        const course = this.courseRef(e.offering.id);
+        return course ? [{ course, scheduleType: e.scheduleType }] : [];
+      }),
     };
   }
 

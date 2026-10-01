@@ -131,10 +131,28 @@ roots?}` plus any connector-specific keys (passthrough). `~` in `roots` is expan
   rejected — secrets go to the SecretStore; config only names them (`apiKeyRef`).
 - Profile (§54): `loadProfile(id, {searchPaths})` looks for `<dir>/<id>/profile.yaml` in
   searchPaths then the repo `profiles/`; `parseProfile`, `findPeriod(profile, n)`. Shape:
-  `{id, name?, locale, academicCalendar: {timezone, periods: [{period, start, end}], terms},
-sources: Record<role, {product}>, products: Record<product, settings>, authorityRules?,
-privacy: {studentIdPattern?}}`. Connectors read their deployment settings from
-  `profile.products[<product>]` (e.g. `livecampusu.auth = entra`).
+  `{id, name?, locale, academicCalendar: {timezone, periods: [{period, start, end}], terms,
+noClassDays, substituteDays, source?}, sources: Record<role, {product}>, products: Record<product,
+settings>, authorityRules?, privacy: {studentIdPattern?}}`. A term is `{id, name, year, termCode?
+(前期/後期, matches CourseOffering.term), start, end (学年暦), classes?: {start, end} (授業開始 … last
+regular class), exams?: {start, end} (定期試験 incl. 予備日)}`. `noClassDays: [{date, note, campus?,
+faculty?, fromPeriod?}]` are weekdays without regular classes (holidays, 大学祭, 補講日 …; `campus` /
+  `faculty` limit them to students whose config names that campus/faculty, `fromPeriod` makes them
+  partial); `substituteDays: [{date, dayOfWeek, note?}]` follow another weekday's timetable (月曜授業).
+  Connectors read their deployment settings from `profile.products[<product>]` (e.g.
+  `livecampusu.auth = entra`). Config `student: {campus?, faculty?}` names the student's own
+  campus/faculty for the scoped exceptions.
+- Academic calendar (`academic-calendar.ts`, pure, local `YYYY-MM-DD` dates): `termForDate(cal,
+date)`, `findTerm(cal, year, label)` (id, termCode, name or a label containing the termCode, e.g.
+  前学期), `classWindow(term)`, `classDay(cal, date, {holidays?, student?}) → {dayOfWeek (after
+substitution), noClasses?, cancelledFrom?, note?, scopedNotes}`, `expandWeeklySlots(slots, window,
+{from, to}, cal, {holidays?, student?, exams?})`, `dayOfWeekOfDate`, `addLocalDays`.
+- Notice importance (`importance.ts`): `classifyNoticeImportance({title, body?, kind?, courseLinked?,
+flaggedImportant?}) → {importance, rule}`. Rule-based, no AI: class changes (休講・補講・教室変更・
+  試験), course-linked notices, reminders and personal procedures (履修登録, 学生証, 授業料納付 …)
+  are `high`; career/marketing campaigns (就活, メルマガ …) and general invitations (調査, 説明会,
+  イベント …) are `low`; optional applications (奨学金, 授業料免除, 単位互換 …) and everything else
+  `normal`; 【重要】 is `high`. Used by the LiveCampusU and portal normalizers.
 - Secrets contract: `interface SecretStore {backend; get(key); set(key, value); delete(key)}`,
   `secretKey(sourceId, name)` → `"<sourceId>/<name>"`.
 - AI (§47, §48): `AiProvider {id, available, complete({task, instructions, input, maxTokens?})}`,
@@ -427,7 +445,11 @@ updated, unchanged, restored, deleted}, normalized: NormalizeReport, health}`. N
     `incremental` (§35). `authenticate()` runs first; `auth_required` aborts the run.
   - `ingest(sourceId, SyncResult)` for pushed data (file watchers §23, manual transcript import
     §22) — stores raw items and normalizes immediately.
-  - `reprocess(sourceId?)` re-normalizes from raw (§6). `normalizePending(sourceId)`.
+  - `reprocess(sourceId?)` re-normalizes from raw (§6). `normalizePending(sourceId)` also picks up
+    live raw items last normalized by a different `normalizer.version`, so bumping a normalizer's
+    version re-normalizes its existing data on the next sync without refetching. Such a
+    reinterpretation of unchanged raw content emits no `updated` ChangeEvents (the source did not
+    change); `reprocess()` still does.
   - `checkHealth(sourceId)` (adapter.health()), `health(sourceId)`, `healthAll()`, `nextMode`,
     `isRunning`, `dispose()`; `stores` (database stores) and `facts` (FactStore) are exposed.
   - Health (§38): success → `healthy` (or `degraded` for an untested product version or
@@ -471,24 +493,52 @@ initialDelayMs?})` (§36): `start()`, `stop()`, `trigger(sourceId)`, `status()`.
     submitted/late/graded/returned. `setStatus(id, status, {actor: user|ai|system, note?})` —
     `ai` cannot set `submitted`/`completed`, `system` cannot set `submitted`
     (`PolicyViolationError`). User-set statuses survive `derive()`.
+  - Notice-derived deadlines are classified by `deadlineActionability(subject, value)`:
+    `personal` (course-linked, a message, or the academic system's personal deadline widget —
+    announcement category `期限`) → a task that stays and shows overdue; `general` (a
+    university-wide notice asking every student to act: 履修登録, 申請, 提出 …) → a task only while
+    the deadline is ahead (afterwards it is withdrawn, not shown as 期限切れ); `informational`
+    (importance `low` or no action word) → no task, the fact stays searchable. Tasks the user
+    already touched are kept either way.
   - `list({statuses?, dueFrom?, dueTo?, courseOfferingId?, includeUndated?})`, `get`,
-    `createManualTask({title, dueAt?, courseOfferingId?, notes?})`, `nextClassAt(courseId, after)`.
+    `createManualTask({title, dueAt?, courseOfferingId?, notes?})`, `nextClassAt(courseId, after)`
+    (stored and generated classes, self-study excluded).
+  - `schedule: ClassSchedule` (`class-schedule.ts`; options `profile`, `student`, `canonicalCourse`
+    on TaskEngine): class sessions of the student's own offerings (an active student `enrollment`,
+    identity-collapsed) = stored ClassSessions (休講・補講・教室変更 from notices) merged over sessions
+    **generated** (not stored) from the offering's weekly `schedule`, its term's class weeks and the
+    academic calendar (profile `noClassDays`/`substituteDays`, all-day calendar events of category
+    `Holiday`, the exam period). Generated ids are `stableId('classSession', 'timetable', offering,
+date, period)`. A stored session with a period replaces the generated one; one without a
+    period/time (e.g. a room change "on 7/24") is applied to every generated class of that course
+    that day. Offerings whose `scheduleType` is `unscheduled` (時間割外) or `intensive` (集中講義) —
+    on any linked offering, so a syllabus timetable of the regular class does not count — get no
+    class sessions; the student's own weekly slots (user fact `pace_slots`, value `{slots:
+[{dayOfWeek, startTime?, endTime?, period?}]}`) add `sessionKind: 'self_study'` sessions.
+    `sessionsOn(date)`, `sessionsBetween(from, to, courseIds?)`, `generated(…)`,
+    `enrolledOfferings()`, `scheduleTypeOf(ids)`, `termOf(offering)`, `currentTerm(date?)`,
+    `paceSlots(ids)`, `noClassesReason(date)` (学期外 / nothing registered for the term / exam
+    period / outside the class weeks / the no-class day's note).
 
 ### 3.11 `@unicontext/context-engine`
 
 - `createUniContext({db? | dataDir?, clock?, logger?, profile? (object or id), timezone?,
-authorityRules?, embeddings?, schedules?}) → UniContext {db, clock, profile, timezone, sync,
+authorityRules?, embeddings?, schedules?, student?}) → UniContext {db, clock, profile, timezone, sync,
 scheduler, bus, identity, resolver, tasks, search, context, runPipeline(), close()}`. It wires
   identity-aware conflict resolution, the task engine, search and the post-sync pipeline
   (identity → conflicts (+ `conflict_detected`/`conflict_resolved` ChangeEvents and `conflict`
   events) → tasks). `dataDir` opens `<dataDir>/unicontext.db` with blobs in `<dataDir>/blobs`.
 - `ContextEngine` views (§17, §18) — all return plain JSON-serializable objects with `view`,
   `generatedAt`, `timezone`, and items that each carry `citations: Citation[]`:
-  - `today()` / `tomorrow()` → `{date, classes, changes, deadlines, tasks, importantAnnouncements,
-preparation, conflicts}` (changes = since start of yesterday; deadlines = overdue ≤7 days and
-    due in the next 15 days; important = critical/high or university scope, last 3 days).
-  - `week()` → `{from, to, days: [{date, classes}], deadlines, exams, changes, conflicts}`.
-  - `course(courseOfferingId)` (identity-expanded) → instructors, schedule, resolved room,
+  - `today()` / `tomorrow()` → `{date, term?, classes, noClassesReason?, changes, deadlines, tasks,
+importantAnnouncements, preparation, conflicts}` (classes from `TaskEngine.schedule`; changes =
+    since start of yesterday; deadlines = overdue ≤7 days and due in the next 15 days; important =
+    critical/high, or university scope unless importance `low`, last 3 days).
+  - `week()` → `{from, to, term?, days: [{date, classes, noClassesReason?}], deadlines, exams,
+changes, conflicts}`.
+  - `course(courseOfferingId)` (identity-expanded) → instructors, schedule (empty unless
+    `scheduleType` is regular), `scheduleType`, `academicYear`, `term`, `termId`, `enrolled`,
+    `retake`, resolved room,
     per-source ids, upcoming classes, recent lectures, deadlines, announcements, materials,
     changes, conflicts, `pendingLinks` (suggested identity links to confirm).
   - `deadline({days?, courseOfferingId?})` → `{overdue, upcoming}`.

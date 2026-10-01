@@ -130,8 +130,17 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
       string,
       unknown
     >;
-    expect(intro).toMatchObject({ title: 'コンピュータ入門', className: '再履修（情）１' });
-    expect(intro.timetable).toBeUndefined();
+    // 時間割外講義 (retake class): no weekly slot, teacher/room from the off-grid list.
+    expect(intro).toMatchObject({
+      title: 'コンピュータ入門',
+      className: '再履修（情）１',
+      semesterCode: '1',
+      termName: '前期',
+      scheduleType: 'unscheduled',
+      retake: true,
+      timetable: { teacher: '教員 花子', credits: 2, room: '共通講義棟２１', slots: [] },
+    });
+    expect(sec.scheduleType).toBe('regular');
   });
 
   it('incremental sync fetches details only for read notices whose row changed', async () => {
@@ -312,6 +321,34 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
     expect(r.warnings?.some((w) => w.startsWith('attendance:'))).toBe(true);
     expect(r.complete?.sourceTypes).not.toContain('lcu.attendance');
     expect(r.complete?.sourceTypes).toContain('lcu.notice');
+  });
+
+  it('skips a semester whose switch did not take effect (no false 後期 courses)', async () => {
+    const { server, adapter } = setup();
+    server.ignoreSemesterSwitch = true; // every timetable/exam page keeps showing 前期
+    const r = await adapter.sync({ mode: 'initial' });
+    expect(r.warnings?.some((w) => /semester 後期 but the page shows 前期/.test(w))).toBe(true);
+    const courses = byType(r)['lcu.course']?.map((i) => i.payload as Record<string, unknown>);
+    expect(courses?.every((c) => c.semesterCode === '1')).toBe(true);
+    // Without a verified listing of every semester, courses/exams are not marked complete.
+    expect(r.complete?.sourceTypes).not.toContain('lcu.course');
+    expect(r.complete?.sourceTypes).not.toContain('lcu.exam');
+  });
+
+  it('searches attendance per semester (the screen opens on the current one)', async () => {
+    const { server, adapter } = setup();
+    const r = await adapter.sync({ mode: 'initial' });
+    const searches = server.log.filter((l) => l.path.endsWith('SC_13002B00_01/search'));
+    expect(searches).toHaveLength(2);
+    const rows = byType(r)['lcu.attendance']?.map((i) => i.payload as Record<string, unknown>);
+    expect(rows).toHaveLength(2);
+    expect(rows?.[0]).toMatchObject({
+      subject: '情報理論',
+      subjectCode: '77401100',
+      semesterCode: '1',
+      context: { offeringKey: '2026-77401100-61' },
+    });
+    expect(r.complete?.sourceTypes).toContain('lcu.attendance');
   });
 
   it('login/logout delegate to the strategy', async () => {

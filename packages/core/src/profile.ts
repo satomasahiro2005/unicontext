@@ -14,13 +14,47 @@ export const PeriodSchema = z.object({
 });
 export type PeriodDefinition = z.infer<typeof PeriodSchema>;
 
+const YMD = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD');
+const DateRangeSchema = z.object({ start: YMD, end: YMD });
+
 export const TermDefinitionSchema = z.object({
   id: z.string(),
   name: z.string(),
+  /** Academic year the term belongs to (April start in Japan). */
   year: z.number().int(),
-  start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** Term label as the academic system writes it (e.g. 前期 / 後期); matches CourseOffering.term. */
+  termCode: z.string().optional(),
+  /** Whole term (学年暦), inclusive. */
+  start: YMD,
+  end: YMD,
+  /** Weeks with regular classes, inclusive (授業開始 … last regular class). Defaults to start/end. */
+  classes: DateRangeSchema.optional(),
+  /** Exam period (定期試験 incl. 予備日), inclusive. No regular classes are generated in it. */
+  exams: DateRangeSchema.optional(),
 });
+export type TermDefinition = z.infer<typeof TermDefinitionSchema>;
+
+/**
+ * A weekday without regular classes (holiday, 大学祭, 補講日, 対面授業なし …). `campus` / `faculty`
+ * limit it to students whose config names that campus / faculty; `fromPeriod` makes it partial.
+ */
+export const NoClassDaySchema = z.object({
+  date: YMD,
+  note: z.string(),
+  campus: z.string().optional(),
+  faculty: z.string().optional(),
+  fromPeriod: z.number().int().positive().optional(),
+});
+export type NoClassDay = z.infer<typeof NoClassDaySchema>;
+
+/** A day that follows another weekday's timetable (e.g. 11/25(水) 月曜授業). Also marks it a class day. */
+export const SubstituteDaySchema = z.object({
+  date: YMD,
+  /** Timetable followed: 0 = Sunday … 6 = Saturday. */
+  dayOfWeek: z.number().int().min(0).max(6),
+  note: z.string().optional(),
+});
+export type SubstituteDay = z.infer<typeof SubstituteDaySchema>;
 
 /**
  * University deployment profile (§54). Settings only: product code lives in connectors.
@@ -34,6 +68,10 @@ export const ProfileSchema = z.object({
     timezone: z.string().default('Asia/Tokyo'),
     periods: z.array(PeriodSchema).default([]),
     terms: z.array(TermDefinitionSchema).default([]),
+    noClassDays: z.array(NoClassDaySchema).default([]),
+    substituteDays: z.array(SubstituteDaySchema).default([]),
+    /** Where these dates come from (document title / URL), shown in provenance. */
+    source: z.string().optional(),
   }),
   sources: z.record(z.string(), z.object({ product: z.string() }).passthrough()).default({}),
   products: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),

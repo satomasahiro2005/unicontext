@@ -190,6 +190,16 @@ export function scopeLabel(scope: string): string {
   return SCOPE_LABELS[scope] ?? scope;
 }
 
+const SCHEDULE_TYPE_LABELS: Record<string, string> = {
+  regular: '時間割',
+  unscheduled: '時間割外',
+  intensive: '集中講義',
+};
+
+export function scheduleTypeLabel(type: string): string {
+  return SCHEDULE_TYPE_LABELS[type] ?? type;
+}
+
 const MATERIAL_KIND_LABELS: Record<string, string> = {
   slide: 'スライド',
   slides: 'スライド',
@@ -221,6 +231,7 @@ const NOTIFICATION_KIND_LABELS: Record<string, string> = {
   new_assignment: '新しい課題',
   deadline_changed: '締切の変更',
   deadline_approaching: '締切が近い',
+  pace_behind: 'ペースの遅れ',
   exam_announced: '試験の告知',
   important_announcement: '重要なお知らせ',
   auth_expired: 'ログイン切れ',

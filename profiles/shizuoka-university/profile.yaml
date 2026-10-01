@@ -19,11 +19,62 @@ academicCalendar:
     - { period: 5, start: '16:05', end: '17:35' }
     - { period: 6, start: '17:50', end: '19:20' }
     - { period: 7, start: '19:30', end: '21:00' }
-  # Term dates are approximate; the authoritative 行事予定表 is a PDF on the 学生教務ポータル
-  # (ingested by the wordpress-portal source as a document).
+  # 学年暦 and class days from the university's 令和8年度 行事予定表 (昼間コース, version 2026-02-09):
+  # https://www.shizuoka.ac.jp/education/affairs/schedule/document/r08_schedule.pdf
+  # Each weekday has 15 meetings + 1 exam (16) per term. `classes` = 授業開始 … last regular class,
+  # `exams` = 定期試験 incl. 予備日. 夜間主コース (Saturday classes, other dates) is not modelled.
+  source: 令和8年度 行事予定表（静岡大学, 2026-02-09版）
   terms:
-    - { id: '2026-1', name: '2026年度 前期', year: 2026, start: '2026-04-08', end: '2026-08-10' }
-    - { id: '2026-2', name: '2026年度 後期', year: 2026, start: '2026-10-01', end: '2027-02-10' }
+    - id: '2026-1'
+      name: '2026年度 前期'
+      termCode: 前期
+      year: 2026
+      start: '2026-04-01'
+      end: '2026-09-30'
+      classes: { start: '2026-04-13', end: '2026-07-24' }
+      exams: { start: '2026-07-27', end: '2026-08-03' }
+    - id: '2026-2'
+      name: '2026年度 後期'
+      termCode: 後期
+      year: 2026
+      start: '2026-10-01'
+      end: '2027-03-31'
+      classes: { start: '2026-10-01', end: '2027-01-28' }
+      exams: { start: '2027-01-29', end: '2027-02-05' }
+  # Weekdays inside the class weeks without regular classes. `campus`/`faculty` entries apply only
+  # when config.yaml names that campus/faculty under `student:`; otherwise they are shown as notes.
+  noClassDays:
+    - { date: '2026-04-29', note: 昭和の日 }
+    - { date: '2026-05-04', note: みどりの日 }
+    - { date: '2026-05-05', note: こどもの日 }
+    - { date: '2026-05-06', note: 振替休日 }
+    - { date: '2026-07-20', note: 海の日（補講日） }
+    - { date: '2026-10-12', note: スポーツの日 }
+    - { date: '2026-10-30', note: 大学祭（静岡地区休講）, campus: 静岡 }
+    - { date: '2026-11-03', note: 文化の日 }
+    - { date: '2026-11-06', note: 大学祭準備（浜松地区休講）, campus: 浜松 }
+    - { date: '2026-11-23', note: 勤労感謝の日 }
+    - { date: '2026-12-22', note: 集中講義期間 }
+    - { date: '2026-12-23', note: 集中講義期間 }
+    - { date: '2026-12-24', note: 集中講義期間 }
+    - { date: '2026-12-25', note: 集中講義期間 }
+    - { date: '2026-12-28', note: 冬季一斉休業 }
+    - { date: '2026-12-29', note: 冬季休業 }
+    - { date: '2026-12-30', note: 冬季休業 }
+    - { date: '2026-12-31', note: 冬季休業 }
+    - { date: '2027-01-01', note: 元日 }
+    - { date: '2027-01-07', note: 大学入学共通テスト監督者説明会（対面授業等なし） }
+    - { date: '2027-01-11', note: 成人の日 }
+    - date: '2027-01-15'
+      note: 大学入学共通テスト設営（7・8限以降の専門科目は休講）
+      faculty: 情報学部
+      fromPeriod: 4
+    - { date: '2027-01-21', note: 補講日 }
+  substituteDays:
+    - { date: '2026-05-07', dayOfWeek: 3, note: 水曜授業 }
+    - { date: '2026-06-01', dayOfWeek: 1, note: 創立記念日（授業あり） }
+    - { date: '2026-07-17', dayOfWeek: 1, note: 月曜授業 }
+    - { date: '2026-11-25', dayOfWeek: 1, note: 月曜授業 }
 
 # Role → product (+ how to connect). `connector` = package dir; `module` picks one of several modules
 # in a package (docs/connectors/README.md).

@@ -1,4 +1,4 @@
-import type { Importance, ScheduleSlot } from '@unicontext/canonical-model';
+import type { ScheduleSlot } from '@unicontext/canonical-model';
 import {
   detectSchemaDrift,
   type DriftFinding,
@@ -10,7 +10,7 @@ import {
   type RawItemView,
   type SourceRefSpec,
 } from '@unicontext/connector-sdk';
-import { findPeriod, zonedTime } from '@unicontext/core';
+import { classifyNoticeImportance, findPeriod, zonedTime } from '@unicontext/core';
 import type { z } from 'zod';
 import { type ContactKind, type LcuDeploymentProfile, lcuUrl } from './deployment.js';
 import {
@@ -41,7 +41,7 @@ import {
   uniquePeriodOnDay,
 } from './text.js';
 
-export const NORMALIZER_VERSION = '1';
+export const NORMALIZER_VERSION = '3';
 export const SELF_PERSON_KEY = 'self';
 
 export interface LiveCampusUNormalizerOptions {
@@ -92,11 +92,6 @@ function nextDay(date: string, tz: string): string | undefined {
 
 function prefixDrift(findings: DriftFinding[], prefix: string): DriftFinding[] {
   return findings.map((f) => ({ ...f, path: f.path === '$' ? prefix : `${prefix}.${f.path}` }));
-}
-
-function importanceOf(digit: string | undefined, kind: ContactKind): Importance {
-  if (kind === 'cancellation' || kind === 'exam' || kind === 'roomChange') return 'high';
-  return digit === '1' ? 'high' : 'normal';
 }
 
 function splitNames(s: string | undefined): string[] {
@@ -180,6 +175,7 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
               courseCode: p.subjectCode,
               instructorNames: splitNames(tt?.teacher),
               schedule,
+              ...(p.scheduleType ? { scheduleType: p.scheduleType } : {}),
               ...(room ? { room } : {}),
               url: lcuUrl(d, p.source.screen),
               extra: {
@@ -190,6 +186,7 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
                 ...(credits !== undefined ? { credits } : {}),
                 ...(tt?.campus ? { campus: tt.campus } : {}),
                 ...(tt?.flags.length ? { flags: tt.flags } : {}),
+                ...(p.retake ? { retake: true } : {}),
               },
             },
             ref: refFor(p.source.screen, p.source.selector),
@@ -246,7 +243,11 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
               body: p.detail?.body ?? '',
               ...(publishedAt ? { publishedAt } : {}),
               ...(p.detail?.sender ? { authorName: p.detail.sender } : {}),
-              importance: importanceOf(imp?.importanceCategory ?? row?.importanceDigit, kind),
+              importance: classifyNoticeImportance({
+                title,
+                kind,
+                courseLinked: coId !== undefined || subject !== undefined,
+              }).importance,
               scope: subject || coId ? 'course' : 'university',
               ...(category ? { category } : {}),
               ...(coId ? { courseOfferingId: coId } : {}),

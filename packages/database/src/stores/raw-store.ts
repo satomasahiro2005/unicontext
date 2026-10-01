@@ -284,12 +284,15 @@ export class RawStore {
   }
 
   /**
-   * List raw items. pendingOnly = never normalized, or changed/deleted since the last normalization.
+   * List raw items. pendingOnly = never normalized, or changed/deleted since the last normalization,
+   * or (with `normalizerVersion`) live items last normalized by another normalizer version.
    */
   list(
     options: {
       sourceId?: string;
       pendingOnly?: boolean;
+      /** With pendingOnly: also items normalized by a different normalizer version. */
+      normalizerVersion?: string;
       includeDeleted?: boolean;
       sourceTypes?: string[];
     } = {},
@@ -303,6 +306,17 @@ export class RawStore {
           isNull(rawItems.normalizedAt),
           isNull(rawItems.normalizedHash),
           ne(rawItems.normalizedHash, rawItems.contentHash),
+          ...(options.normalizerVersion !== undefined
+            ? [
+                and(
+                  isNull(rawItems.deletedAt),
+                  or(
+                    isNull(rawItems.normalizerVersion),
+                    ne(rawItems.normalizerVersion, options.normalizerVersion),
+                  ),
+                ),
+              ]
+            : []),
         ),
       );
     else if (!options.includeDeleted) conds.push(isNull(rawItems.deletedAt));

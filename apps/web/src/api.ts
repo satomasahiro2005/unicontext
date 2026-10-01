@@ -68,25 +68,43 @@ async function getCsrfToken(refresh: boolean): Promise<string> {
   return csrfInFlight;
 }
 
-async function post(path: string, body: unknown, refresh: boolean): Promise<Response> {
+type WriteMethod = 'POST' | 'PUT' | 'DELETE';
+
+async function write(
+  method: WriteMethod,
+  path: string,
+  body: unknown,
+  refresh: boolean,
+): Promise<Response> {
   const token = await getCsrfToken(refresh);
-  return send(path, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'X-CSRF-Token': token,
-    },
-    body: JSON.stringify(body ?? {}),
-  });
+  const headers: Record<string, string> = { Accept: 'application/json', 'X-CSRF-Token': token };
+  const init: RequestInit = { method, headers };
+  // A DELETE has no body (and must not claim a JSON one).
+  if (method !== 'DELETE') {
+    headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body ?? {});
+  }
+  return send(path, init);
+}
+
+async function apiWrite<T>(method: WriteMethod, path: string, body?: unknown): Promise<T> {
+  let res = await write(method, path, body, false);
+  if (res.status === 403) res = await write(method, path, body, true);
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as T;
 }
 
 /** POST with the CSRF token from /api/v1/session; on a 403 the token is refetched once and the call retried. */
-export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  let res = await post(path, body, false);
-  if (res.status === 403) res = await post(path, body, true);
-  if (!res.ok) throw await parseError(res);
-  return (await res.json()) as T;
+export function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  return apiWrite<T>('POST', path, body);
+}
+
+export function apiPut<T>(path: string, body?: unknown): Promise<T> {
+  return apiWrite<T>('PUT', path, body);
+}
+
+export function apiDelete<T>(path: string): Promise<T> {
+  return apiWrite<T>('DELETE', path);
 }
 
 export function errorMessage(error: unknown): string {

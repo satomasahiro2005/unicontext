@@ -82,8 +82,16 @@ export class DaemonClient {
     return this.request<T>('POST', path, body ?? {});
   }
 
+  put<T>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>('PUT', path, body ?? {});
+  }
+
+  delete<T>(path: string): Promise<T> {
+    return this.request<T>('DELETE', path);
+  }
+
   private async request<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,
     body?: unknown,
     query?: Record<string, string | number | undefined>,
@@ -93,7 +101,7 @@ export class DaemonClient {
       if (v !== undefined) url.searchParams.set(k, String(v));
     const headers: Record<string, string> = { accept: 'application/json' };
     if (body !== undefined) headers['content-type'] = 'application/json';
-    if (method === 'POST') {
+    if (method !== 'GET') {
       if (!this.token)
         throw new DaemonApiError(
           'デーモンの書き込みトークンが見つかりません（unicontext doctor で確認してください）',

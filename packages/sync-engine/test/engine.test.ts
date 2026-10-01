@@ -191,6 +191,42 @@ describe('SyncEngine', () => {
     );
   });
 
+  it('a new normalizer version re-normalizes unchanged raw items on the next sync, silently', async () => {
+    await engine.sync('lms');
+    const before = engine.stores.changes.list({}).length;
+    const patched: Normalizer = {
+      ...fake.normalizer,
+      version: `${fake.normalizer.version}-next`,
+      normalize: async (item, ctx) => {
+        const out = await fake.normalizer.normalize(item, ctx);
+        return {
+          ...out,
+          entities: out.entities.map((e) =>
+            e.entity.kind === 'assignment'
+              ? { ...e, entity: { ...e.entity, title: `${e.entity.title} (v2)` } }
+              : e,
+          ),
+        };
+      },
+    };
+    engine.register({
+      sourceId: 'lms',
+      adapter: fake.adapter,
+      normalizer: patched,
+      metadata: fake.metadata,
+    });
+    const r = await engine.sync('lms', { mode: 'full' });
+    expect(r.raw.unchanged).toBe(5);
+    expect(r.normalized.items).toBe(5);
+    expect(engine.stores.entities.getOfKind('assignment', id('assignment', 'a1'))?.title).toBe(
+      '課題1 (v2)',
+    );
+    // The source did not change: no change events for the reinterpretation.
+    expect(engine.stores.changes.list({}).length).toBe(before);
+    // Normalized with the new version: nothing pending on the run after.
+    expect((await engine.sync('lms', { mode: 'full' })).normalized.items).toBe(0);
+  });
+
   it('skips unchanged raw items on the next run', async () => {
     await engine.sync('lms');
     const r = await engine.sync('lms', { mode: 'full' });

@@ -181,16 +181,63 @@ describe('normalizer: notices', () => {
     expect(out.facts?.[0]?.ref?.location?.messageId).toBe('100003');
   });
 
-  it('university notices have scope university', async () => {
+  it('university notices have scope university; a survey is low importance', async () => {
+    // LCU marks every notice importanceCategory 1, so importance comes from the rules (a 調査).
     const out = await norm(
       find('lcu.notice', (p) => (p as NoticePayload).important?.contactSeq === '100001'),
     );
     expect(entityOf(out, 'announcement')).toMatchObject({
       scope: 'university',
-      importance: 'high',
+      importance: 'low',
       body: '',
     });
     expect(out.entities).toHaveLength(1);
+  });
+
+  it('importance is rule-based: campaigns low, personal procedures high, class notices high', async () => {
+    const uni = (contactSeq: string, title: string): RawItem =>
+      notice({
+        kind: 'notice',
+        context: {},
+        important: {
+          ...baseImportant,
+          contactSeq,
+          contactTypeCode: 'U05',
+          contactTypeTitle: '学内連絡',
+          subjectClassSemesterWeekHour: '',
+          targetDate: '',
+          title,
+        },
+      });
+    const imp = async (item: RawItem) => entityOf(await norm(item), 'announcement')?.importance;
+    expect(await imp(uni('400001', '10/8（木）開催！就活対策講座【就職支援室 No.1】'))).toBe('low');
+    expect(await imp(uni('400002', '就職支援室発刊メルマガ【vol.1】'))).toBe('low');
+    expect(await imp(uni('400003', '県教員採用試験ガイダンスのご案内'))).toBe('low');
+    expect(await imp(uni('400004', '後期の履修登録期間について'))).toBe('high');
+    expect(await imp(uni('400005', '後期授業料免除申請、奨学金の申込みについて'))).toBe('normal');
+    expect(await imp(uni('400006', '【重要】台風接近に伴う授業の取扱いについて'))).toBe('high');
+    // Course-linked teacher notices are about the student's own class.
+    const course = notice({
+      kind: 'notice',
+      important: { ...baseImportant, contactSeq: '400007', contactTypeCode: 'U06', title: '連絡' },
+    });
+    expect(await imp(course)).toBe('high');
+  });
+
+  it('時間割外 retake course → offering with scheduleType unscheduled and no slots', async () => {
+    const out = await norm(find('lcu.course', (p) => p.key === '2026-77301020-RW'));
+    expect(entityOf(out, 'courseOffering')).toMatchObject({
+      title: 'コンピュータ入門',
+      term: '前期',
+      academicYear: 2026,
+      scheduleType: 'unscheduled',
+      schedule: [],
+      room: '共通講義棟２１',
+      instructorNames: ['教員 花子'],
+      extra: { classCode: 'RW', retake: true },
+    });
+    const regular = await norm(find('lcu.course', (p) => p.key === '2026-77401100-61'));
+    expect(entityOf(regular, 'courseOffering')?.scheduleType).toBe('regular');
   });
 
   it('U01 休講 → cancelled classSession with the unambiguous period', async () => {

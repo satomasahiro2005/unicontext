@@ -60,6 +60,8 @@ export const LcuActionsSchema = z.object({
   /** Form field holding the DataTables row index for row transitions. */
   rowIndexField: z.string().default('rowIndex'),
   assignmentSearch: relPath,
+  /** 出欠状況一覧 search (per year/semester); without it only the default (current) semester is read. */
+  attendanceSearch: relPath.optional(),
   gradesFromDashboard: relPath,
 });
 export type LcuActions = z.infer<typeof LcuActionsSchema>;
@@ -105,6 +107,8 @@ export const LcuDeploymentProfileSchema = z.object({
     .object({
       /** Fields of the assignment search (besides tokens); "{year}" is replaced. */
       assignmentSearch: formFields.default([]),
+      /** Fields of the attendance search; "{year}" and "{semester}" are replaced. */
+      attendanceSearch: formFields.default([]),
       classSubjectList: z
         .object({
           yearField: z.string().default('startYear'),

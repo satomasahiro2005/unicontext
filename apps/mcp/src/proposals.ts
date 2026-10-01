@@ -262,5 +262,10 @@ export function applyProposal(
     value: proposal.value,
     ...(proposal.note ? { note: proposal.note } : {}),
   });
+  // Self-study slots (pace_slots) decide which weekly 「今週分」 tasks exist.
+  if (proposal.predicate === 'pace_slots') {
+    uc.identity.invalidate();
+    uc.tasks.derive();
+  }
   return { proposal: store.markConfirmed(id), fact };
 }

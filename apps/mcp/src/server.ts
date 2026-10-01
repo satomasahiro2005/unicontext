@@ -10,7 +10,10 @@ import {
 } from '@unicontext/canonical-model';
 import {
   CONTEXT_VIEWS,
+  formatPaceSlot,
   getView,
+  normalizePaceSlots,
+  PACE_PREDICATE,
   type ContextViewName,
   type UniContext,
 } from '@unicontext/context-engine';
@@ -475,6 +478,24 @@ export function createMcpServer(deps: McpDeps): McpServer {
     (a) => proposeCorrection(a),
   );
 
+  tool(
+    'propose_pace_slot',
+    {
+      title: '自習時間の設定を提案',
+      readOnly: false,
+      description:
+        '【提案のみ・何も書き換えない】時間割外・集中講義の科目に、本人の毎週の自習時間を設定する「提案」を保存する。slots は "土 10:00-11:30" / "土2限" のような文字列の配列（空配列で解除の提案）。返ってくる proposalId をユーザーに伝え、ユーザー本人が `unicontext confirm <id>` または Web UI で承認して初めて反映される。 / PROPOSE-ONLY: creates a pending proposal for the weekly self-study slots of a course; nothing changes until the user confirms it.',
+    },
+    {
+      course: courseIdField,
+      slots: z
+        .array(z.string().min(1).max(60))
+        .max(14)
+        .describe('例: ["土 10:00-11:30", "水2限"]。空配列で自習時間の解除 / Slots; [] clears'),
+    },
+    (a) => proposePaceSlot(a),
+  );
+
   function subjectEntity(input: string): { id: string; label: string } {
     const text = input.trim();
     const colon = text.indexOf(':');
@@ -558,6 +579,42 @@ export function createMcpServer(deps: McpDeps): McpServer {
           value: current.value ?? null,
           candidates,
         },
+      },
+      options: {
+        hint: 'この時点では何も変更されていません。承認の方法（howToConfirm）をユーザーに伝えてください。',
+      },
+    };
+  }
+
+  function proposePaceSlot(a: { course: string; slots: string[] }): ToolOutput {
+    const { ref } = resolveCourse(uc, a.course);
+    const slots = normalizePaceSlots(a.slots, uc.profile);
+    const value: JsonValue = { slots: slots.map((s) => ({ ...s })) };
+    const was = uc.tasks.schedule.paceSlots(ref.linkedIds).map(formatPaceSlot);
+    const shown = slots.map(formatPaceSlot);
+    const preview = `「${ref.title}」の自習時間を${
+      shown.length > 0 ? `「${shown.join('、')}」に設定` : '解除'
+    }（現在: ${was.length > 0 ? was.join('、') : '未設定'}）。承認すると毎週の自習として予定に載り、「今週分」のタスクが作られます。`;
+    const clientName = server.server.getClientVersion()?.name;
+    const proposal = proposals.create({
+      kind: 'correct_fact',
+      subject: ref.id,
+      predicate: PACE_PREDICATE,
+      value,
+      createdBy: clientName ? `mcp:${clientName}` : 'mcp',
+      preview,
+    });
+    logger.info('mcp proposal created', { proposalId: proposal.id, predicate: PACE_PREDICATE });
+    return {
+      data: {
+        proposalId: proposal.id,
+        status: 'pending',
+        preview: proposal.preview,
+        howToConfirm: HOW_TO_CONFIRM,
+        expiresAt: proposal.expiresAt,
+        applied: false,
+        current: { subject: ref.id, subjectLabel: ref.title, slots: was },
+        proposed: { slots: shown },
       },
       options: {
         hint: 'この時点では何も変更されていません。承認の方法（howToConfirm）をユーザーに伝えてください。',

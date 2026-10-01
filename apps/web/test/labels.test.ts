@@ -11,6 +11,7 @@ import {
   needsLoginCommand,
   notificationKindLabel,
   originLabel,
+  scheduleTypeLabel,
   taskStatusLabel,
 } from '../src/lib/labels.js';
 
@@ -65,6 +66,10 @@ describe('other labels', () => {
     expect(originLabel('extracted')).toBe('抽出');
     expect(taskStatusLabel('pending')).toBe('未提出');
     expect(notificationKindLabel('room_change')).toBe('教室変更');
+    expect(notificationKindLabel('pace_behind')).toBe('ペースの遅れ');
     expect(notificationKindLabel('future_kind')).toBe('future_kind');
+    expect(scheduleTypeLabel('unscheduled')).toBe('時間割外');
+    expect(scheduleTypeLabel('intensive')).toBe('集中講義');
+    expect(scheduleTypeLabel('regular')).toBe('時間割');
   });
 });

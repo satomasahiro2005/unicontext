@@ -78,6 +78,12 @@ export const CourseOfferingSchema = z.object({
   instructorIds: z.array(idSchema('person')).default([]),
   instructorNames: z.array(z.string()).default([]),
   schedule: z.array(ScheduleSlotSchema).default([]),
+  /**
+   * regular = weekly timetable slots; unscheduled = 時間割外 (no fixed weekly class, e.g. on-demand
+   * or retake classes); intensive = 集中講義 (block dates). Only regular offerings get weekly
+   * class sessions; absent means regular when `schedule` is non-empty.
+   */
+  scheduleType: z.enum(['regular', 'unscheduled', 'intensive']).optional(),
   room: z.string().optional(),
   url: z.string().optional(),
 });
@@ -276,6 +282,8 @@ export const ClassSessionSchema = z.object({
   status: ClassSessionStatusSchema.default('scheduled'),
   number: z.number().int().positive().optional(),
   note: z.string().optional(),
+  /** class = a meeting of the course; self_study = a study slot the student set (自習, origin user). */
+  sessionKind: z.enum(['class', 'self_study']).optional(),
 });
 
 export const LocationSchema = z.object({

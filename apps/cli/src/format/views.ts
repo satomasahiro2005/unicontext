@@ -4,6 +4,7 @@ import type {
   ClassItem,
   ConflictItem,
   DeadlineItem,
+  PaceItem,
   PreparationItem,
   TaskItem,
 } from '@unicontext/context-engine';
@@ -12,6 +13,7 @@ import type {
   AssignmentItem,
   ChangesContext,
   CourseSummary,
+  CoursesResponse,
   DeadlineContext,
   SearchResponse,
   SourceInfo,
@@ -94,10 +96,15 @@ function classColumns(ctx: CliContext, tz: string): TableColumn<ClassItem>[] {
       header: '時間',
       value: (c) => (c.startsAt ? `${clockTime(c.startsAt, tz)}-${clockTime(c.endsAt, tz)}` : '-'),
     },
-    { header: '科目', value: (c) => ctx.text(c.course.title), max: 28 },
+    {
+      header: '科目',
+      value: (c) =>
+        ctx.text(`${c.course.title}${c.sessionKind === 'self_study' ? '（自習）' : ''}`),
+      max: 28,
+    },
     {
       header: '教室',
-      value: (c) => ctx.text(resolvedText(c.room)),
+      value: (c) => (c.sessionKind === 'self_study' ? '-' : ctx.text(resolvedText(c.room))),
       style: (padded, c) => (c.room.status === 'conflict' ? ctx.style.red(padded) : padded),
     },
     {
@@ -109,8 +116,17 @@ function classColumns(ctx: CliContext, tz: string): TableColumn<ClassItem>[] {
   ];
 }
 
-export function printClasses(ctx: CliContext, classes: readonly ClassItem[], tz: string): void {
-  if (classes.length === 0) return none(ctx);
+export function printClasses(
+  ctx: CliContext,
+  classes: readonly ClassItem[],
+  tz: string,
+  emptyReason?: string,
+): void {
+  if (classes.length === 0) {
+    if (emptyReason) ctx.out(`  なし（${ctx.text(emptyReason)}）`);
+    else none(ctx);
+    return;
+  }
   printTable(ctx, classColumns(ctx, tz), classes);
 }
 
@@ -200,6 +216,20 @@ function printPreparation(ctx: CliContext, items: readonly PreparationItem[], tz
   }
 }
 
+/** 「ペース（遅れ）」: only when the student is behind in a 時間割外 / 集中講義 course. */
+function printPacing(ctx: CliContext, items: readonly PaceItem[]): void {
+  if (items.length === 0) return;
+  ctx.out('');
+  ctx.out(ctx.style.bold('ペース（遅れ）'));
+  for (const p of items) {
+    const line = ctx.text(p.message);
+    ctx.out(
+      `  ${p.behindWeeks >= 2 ? ctx.style.red(ctx.style.bold(line)) : ctx.style.yellow(line)}`,
+    );
+    if (p.slots.length > 0) ctx.out(`    ${ctx.style.dim(`自習時間: ${p.slots.join('、')}`)}`);
+  }
+}
+
 // ---- views -------------------------------------------------------------------------------------
 
 export function printDay(
@@ -213,12 +243,13 @@ export function printDay(
       ctx.style.dim(`  （${shortTime(b.generatedAt, tz)}時点）`),
   );
   printSection(ctx, '授業', b.classes.length);
-  printClasses(ctx, b.classes, tz);
+  printClasses(ctx, b.classes, tz, b.noClassesReason);
   printConflicts(ctx, b.conflicts);
   printSection(ctx, '昨日からの変更', b.changes.length);
   printChanges(ctx, b.changes, tz);
   printSection(ctx, '締切', b.deadlines.length);
   printDeadlines(ctx, b.deadlines, tz);
+  if ('pacing' in b) printPacing(ctx, b.pacing);
   const listed = new Set(b.deadlines.map((d) => d.taskId));
   const others = b.tasks.filter((t) => !listed.has(t.taskId));
   printSection(ctx, 'その他のタスク', others.length);
@@ -243,7 +274,7 @@ export function printWeek(ctx: CliContext, b: WeekContext): void {
   ctx.out(ctx.style.bold(`今週（${fromText}〜${toText}）`));
   for (const day of b.days) {
     printSection(ctx, formatDateJa(parseZonedDate(day.date, tz), tz), day.classes.length);
-    printClasses(ctx, day.classes, tz);
+    printClasses(ctx, day.classes, tz, day.noClassesReason);
   }
   printSection(ctx, '締切', b.deadlines.length);
   printDeadlines(ctx, b.deadlines, tz);
@@ -256,24 +287,34 @@ export function printWeek(ctx: CliContext, b: WeekContext): void {
 
 const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
 
-export function printCourses(ctx: CliContext, courses: readonly CourseSummary[]): void {
-  if (courses.length === 0) {
-    ctx.out('科目はまだありません');
-    return;
-  }
+const SCHEDULE_TYPE_LABEL: Record<CourseSummary['scheduleType'], string> = {
+  regular: '時間割',
+  unscheduled: '時間割外',
+  intensive: '集中講義',
+};
+
+function courseTable(ctx: CliContext, courses: readonly CourseSummary[], regular: boolean): void {
   printTable(
     ctx,
     [
-      { header: '科目', value: (c) => ctx.text(c.title), max: 30 },
-      { header: 'コード', value: (c) => c.courseCode ?? '-' },
-      { header: '担当', value: (c) => ctx.text(c.instructors.join('、')), max: 20 },
       {
-        header: '時間割',
-        value: (c) =>
-          c.schedule
-            .map((s) => `${DAY_NAMES[s.dayOfWeek % 7] ?? '?'}${s.period ? `${s.period}限` : ''}`)
-            .join(' '),
+        header: '科目',
+        value: (c) => ctx.text(`${c.title}${c.retake ? '（再履修）' : ''}`),
+        max: 30,
       },
+      { header: 'コード', value: (c) => c.courseCode ?? '-' },
+      { header: '担当', value: (c) => ctx.text(c.instructors.join('、')) || '-', max: 20 },
+      regular
+        ? {
+            header: '時間割',
+            value: (c: CourseSummary) =>
+              c.schedule
+                .map(
+                  (s) => `${DAY_NAMES[s.dayOfWeek % 7] ?? '?'}${s.period ? `${s.period}限` : ''}`,
+                )
+                .join(' ') || '-',
+          }
+        : { header: '種別', value: (c: CourseSummary) => SCHEDULE_TYPE_LABEL[c.scheduleType] },
       {
         header: '教室',
         value: (c) => ctx.text(resolvedText(c.room)),
@@ -288,6 +329,48 @@ export function printCourses(ctx: CliContext, courses: readonly CourseSummary[])
     ],
     courses,
   );
+}
+
+export function printCourses(ctx: CliContext, body: CoursesResponse): void {
+  const { courses, term, terms = [] } = body;
+  if (term) ctx.out(ctx.style.bold(`${term.name}${term.current ? '（今の学期）' : ''}`));
+  const others = terms.filter((t) => t.id !== term?.id && t.courses > 0);
+  const hint = others.length
+    ? `他の学期: ${others.map((t) => `${t.name} ${t.courses}件（--term ${t.id}）`).join('、')}。すべて: --all`
+    : undefined;
+  if (courses.length === 0) {
+    ctx.out(
+      term
+        ? `${term.name}に登録した科目はまだありません（履修登録の後に同期すると表示されます）`
+        : '科目はまだありません',
+    );
+    if (hint) ctx.out(ctx.style.dim(hint));
+    return;
+  }
+  // Group by term when several terms are shown (--all), then weekly vs off-timetable.
+  const groups = new Map<string, CourseSummary[]>();
+  for (const c of courses) {
+    const key = term ? '' : `${c.academicYear ?? ''} ${c.term ?? ''}`.trim();
+    groups.set(key, [...(groups.get(key) ?? []), c]);
+  }
+  let first = true;
+  for (const [label, list] of groups) {
+    if (!first) ctx.out('');
+    first = false;
+    if (label) ctx.out(ctx.style.bold(label.replace(/^(\d{4}) /, '$1年度 ')));
+    const regular = list.filter((c) => c.scheduleType === 'regular');
+    const off = list.filter((c) => c.scheduleType !== 'regular');
+    if (regular.length) courseTable(ctx, regular, true);
+    if (off.length) {
+      if (regular.length) ctx.out('');
+      ctx.out(`時間割外・集中講義（${off.length}件）`);
+      courseTable(ctx, off, false);
+    }
+  }
+  if (hint) {
+    ctx.out('');
+    ctx.out(ctx.style.dim(hint));
+  }
 }
 
 export function printAssignments(

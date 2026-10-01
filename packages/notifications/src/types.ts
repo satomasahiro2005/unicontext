@@ -9,6 +9,7 @@ export const NOTIFICATION_KINDS = [
   'new_assignment',
   'deadline_changed',
   'deadline_approaching',
+  'pace_behind',
   'exam_announced',
   'important_announcement',
   'auth_expired',

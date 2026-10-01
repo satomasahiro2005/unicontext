@@ -19,7 +19,9 @@ import {
   parseSubjectKey,
   parseSubjectText,
   parseTermRange,
+  activeSemesterLabel,
   parseTimetable,
+  parseTimetablePage,
   periodFromLabel,
   pluginFingerprint,
   screenIdFromUrl,
@@ -31,6 +33,41 @@ import {
 import { fixture, jsonFixture, kadaiListHtml } from './helpers.js';
 
 const CLASSIFY = { loginFormId: 'SC_01001B00_01_Login_Form', ssoStartSelector: '#btnSsoStart' };
+
+describe('timetable page: semester switch and off-grid lists', () => {
+  it('reads the shown semester, the year and the 時間割外講義 list', () => {
+    const page = parseTimetablePage(fixture('lcu-timetable-full-SC_18001B00_13.synthetic.html'));
+    expect(page.activeSemesterLabel).toBe('前期');
+    expect(page.year).toBe(2026);
+    expect(page.entries).toHaveLength(6);
+    expect(page.entries[0]?.semesterCode).toBe('1');
+    expect(page.offGrid).toEqual([
+      expect.objectContaining({
+        kind: 'unscheduled',
+        year: 2026,
+        semesterCode: '1',
+        subjectCode: '77301020',
+        classCode: 'RW',
+        title: 'コンピュータ入門',
+        teacher: '教員 花子',
+        credits: 2,
+        numbering: 'IN002160040',
+        room: '共通講義棟２１',
+      }),
+    ]);
+  });
+
+  it('an empty 後期 (nothing registered yet) has no entries and says 後期', () => {
+    const html = fixture('lcu-timetable-empty-SC_18001B00_13.synthetic.html');
+    const page = parseTimetablePage(html);
+    expect(page).toMatchObject({ entries: [], offGrid: [], activeSemesterLabel: '後期' });
+    expect(activeSemesterLabel(html)).toBe('後期');
+  });
+
+  it('pages without a semester switch report no active semester', () => {
+    expect(activeSemesterLabel(fixture('lcu-timetable-SC_18001B00_13.html'))).toBeUndefined();
+  });
+});
 
 describe('timetable SC_18001B00_13', () => {
   const entries = parseTimetable(fixture('lcu-timetable-SC_18001B00_13.html'));
@@ -340,12 +377,14 @@ describe('attendance SC_13002B00_01', () => {
     expect(rows).toEqual([
       {
         subject: '情報理論',
+        subjectCode: '77401100',
         schedule: '前期/木3・4',
         published: '公開中',
         counts: { attended: 12, absent: 1, late: 0, earlyLeave: 0, excused: 0, invalid: 0 },
       },
       {
         subject: 'モデリング',
+        subjectCode: '77451100',
         schedule: '前期後半/水1・2',
         published: '公開中',
         counts: { attended: 7, absent: 0, late: 1, earlyLeave: 0, excused: 0, invalid: 0 },

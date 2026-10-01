@@ -8,7 +8,7 @@ import type {
 } from '@unicontext/daemon/api-types';
 import { buildAssignments } from '@unicontext/mcp/assignments';
 import { resolveCourse } from '@unicontext/mcp/courses';
-import { buildCourseSummaries } from '@unicontext/daemon/lib';
+import { listCourses } from '@unicontext/daemon/lib';
 import type { Command } from 'commander';
 import type { CliContext } from '../context.js';
 import { UsageError } from '../errors.js';
@@ -72,13 +72,23 @@ export function registerViewCommands(program: Command, h: Harness): void {
 
   program
     .command('courses')
-    .description('科目の一覧 / List courses (identity-resolved across sources)')
+    .description(
+      '科目の一覧（既定は今の学期に登録した科目） / Courses of the current term (identity-resolved)',
+    )
+    .option('--term <term>', '学期（2026-1・前期・後期など） / term id or label, e.g. 2026-1, 前期')
+    .option(
+      '--all',
+      'すべての学期と未登録の科目（シラバスのみ）も表示 / every term and unregistered offerings',
+    )
     .action(
-      action(h, async (ctx) => {
+      action<{ term?: string; all?: boolean }>(h, async (ctx, { opts }) => {
         const { uc } = await ctx.runtime();
-        const body: CoursesResponse = { courses: buildCourseSummaries(uc) };
+        if (opts.all && opts.term) throw new UsageError('--termと--allは同時に指定できません');
+        const body: CoursesResponse = listCourses(uc, {
+          term: opts.all ? 'all' : opts.term,
+        });
         if (ctx.json) ctx.printJson(body);
-        else printCourses(ctx, body.courses);
+        else printCourses(ctx, body);
       }),
     );
 

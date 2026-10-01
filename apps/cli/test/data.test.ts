@@ -88,8 +88,10 @@ describe('backup / export / import', () => {
       expect(imported.code, imported.stderr).toBe(0);
       expect(imported.stdout).toContain('件を取り込みました');
       expect(imported.stdout).toContain('エンティティ');
-      const original = json<CoursesResponse>(await dev('--json', 'courses'));
-      const copy = json<CoursesResponse>(await exec(['--data-dir', fresh, '--json', 'courses']));
+      const original = json<CoursesResponse>(await dev('--json', 'courses', '--all'));
+      const copy = json<CoursesResponse>(
+        await exec(['--data-dir', fresh, '--json', 'courses', '--all']),
+      );
       // the canonical title of a linked course depends on which connectors are registered, so
       // compare the number of courses and a course that has one name everywhere
       expect(copy.courses).toHaveLength(original.courses.length);

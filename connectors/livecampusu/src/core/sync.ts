@@ -22,7 +22,12 @@ import {
   parseExamTimetable,
   parseGrades,
 } from './parsers/records.js';
-import { parseTimetable, type TimetableEntry } from './parsers/timetable.js';
+import {
+  activeSemesterLabel,
+  type OffGridEntry,
+  parseTimetablePage,
+  type TimetableEntry,
+} from './parsers/timetable.js';
 import {
   type ClassSubject,
   type CoursePayload,
@@ -124,6 +129,8 @@ interface OfferingRec {
   semesterCode?: string;
   subjectList?: ClassSubject;
   entries: TimetableEntry[];
+  /** From the 時間割外講義 / 集中講義 lists. */
+  offGrid?: OffGridEntry;
 }
 
 /** Title → offering resolution inside this source (deterministic, best effort). */
@@ -136,9 +143,17 @@ class OfferingIndex {
     }
   }
 
-  resolve(title: string | undefined, className?: string): OfferingRec | undefined {
+  resolve(
+    title: string | undefined,
+    className?: string,
+    semesterCode?: string,
+  ): OfferingRec | undefined {
     if (!title) return undefined;
-    const list = this.byTitle.get(titleKey(title)) ?? [];
+    let list = this.byTitle.get(titleKey(title)) ?? [];
+    if (list.length > 1 && semesterCode) {
+      const sameTerm = list.filter((r) => r.semesterCode === semesterCode);
+      if (sameTerm.length) list = sameTerm;
+    }
     if (list.length === 1) return list[0];
     if (list.length > 1 && className) {
       const hits = list.filter((r) => r.className && titleKey(r.className) === titleKey(className));
@@ -153,8 +168,12 @@ class OfferingIndex {
     return s ? this.resolve(s.title, s.className) : undefined;
   }
 
-  bySubjectCode(code: string): OfferingRec | undefined {
-    const hits = this.recs.filter((r) => r.subjectCode === code);
+  bySubjectCode(code: string, semesterCode?: string): OfferingRec | undefined {
+    let hits = this.recs.filter((r) => r.subjectCode === code);
+    if (hits.length > 1 && semesterCode) {
+      const sameTerm = hits.filter((r) => r.semesterCode === semesterCode);
+      if (sameTerm.length) hits = sameTerm;
+    }
     return hits.length === 1 ? hits[0] : undefined;
   }
 }
@@ -280,13 +299,30 @@ export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise
   // 2. スケジュール → 時間割 (both semesters) → 試験時間割.
   const calendar: Record<string, unknown>[] = [];
   const timetable = new Map<string, TimetableEntry[]>();
+  const offGrid = new Map<string, OffGridEntry[]>();
   const exams = new Map<string, ExamRow[]>();
   let examsOk = false;
+  let semestersVerified = true;
+  const semesterName = (code: string | undefined): string | undefined =>
+    d.semesters.find((s) => s.code === code)?.name;
+  /** False when the page shows another semester than the one requested (switch did not apply). */
+  const showsSemester = (html: string, sem: string, screen: string): boolean => {
+    const shown = activeSemesterLabel(html);
+    const want = semesterName(sem);
+    if (!shown || !want || shown === want) return true;
+    semestersVerified = false;
+    warnings.push(
+      `${screen}: asked for semester ${want} but the page shows ${shown}; its rows were skipped`,
+    );
+    return false;
+  };
   await step('timetable', async () => {
     calendar.length = 0;
     timetable.clear();
+    offGrid.clear();
     exams.clear();
     examsOk = false;
+    semestersVerified = true;
     const sched = await session.open(d.screens.scheduler);
     const cal = parseCalendarEvents(sched.html);
     if (cal.error) warnings.push(`calendar events: ${cal.error}`);
@@ -296,7 +332,10 @@ export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise
       const page = await session.post(d.actions.timetableChangeSemester, [
         [d.actions.semesterField, sem],
       ]);
-      timetable.set(sem, parseTimetable(page.html));
+      if (!showsSemester(page.html, sem, 'timetable')) continue;
+      const parsed = parseTimetablePage(page.html);
+      timetable.set(sem, parsed.entries);
+      offGrid.set(sem, parsed.offGrid);
     }
     try {
       await session.post(d.actions.timetableToExams);
@@ -304,15 +343,16 @@ export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise
         const page = await session.post(d.actions.examChangeSemester, [
           [d.actions.semesterField, sem],
         ]);
+        if (!showsSemester(page.html, sem, 'examTimetable')) continue;
         exams.set(sem, parseExamTimetable(page.html));
       }
-      examsOk = true;
+      examsOk = semestersVerified;
     } catch (e) {
       if (e instanceof SessionRestartedError || isFatal(e)) throw e;
       warnings.push(`examTimetable: ${errorMessage(e)}`);
     }
   });
-  const timetableOk = steps.timetable === 'ok';
+  const timetableOk = steps.timetable === 'ok' && semestersVerified;
 
   // 3. 課題・アンケートリスト (full list) + getClassSubjectList (JSON, X-CSRF-TOKEN).
   let assignmentRows: ReturnType<typeof parseAssignmentList> = [];
@@ -347,11 +387,9 @@ export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise
   });
   const assignmentsOk = steps.assignments === 'ok';
 
-  // Courses: union of timetable cells and enrolled class subjects.
-  const offerings = buildOfferings(o, timetable, subjectLists);
+  // Courses: union of timetable cells, off-grid lists and enrolled class subjects.
+  const offerings = buildOfferings(o, timetable, offGrid, subjectLists);
   const index = new OfferingIndex([...offerings.values()]);
-  const semesterName = (code: string | undefined): string | undefined =>
-    d.semesters.find((s) => s.code === code)?.name;
   for (const rec of offerings.values()) {
     add({
       sourceType: RAW_TYPES.course,
@@ -413,11 +451,28 @@ export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise
   if (o.attendance) {
     const rows = await step('attendance', async () => {
       const page = await session.open(d.screens.attendance);
-      return parseAttendance(page.html);
+      const action = d.actions.attendanceSearch;
+      const form = d.forms.attendanceSearch;
+      // The screen opens on the current semester only; search each configured semester.
+      if (!action || form.length === 0)
+        return parseAttendance(page.html).map((r) => ({ r, sem: undefined }));
+      const out: { r: AttendanceRow; sem: string | undefined }[] = [];
+      for (const sem of o.semesters) {
+        const fields = form.map(
+          ([k, v]) =>
+            [
+              k,
+              v.replaceAll('{year}', String(o.academicYear)).replaceAll('{semester}', sem),
+            ] as const,
+        );
+        const res = await session.post(action, fields);
+        out.push(...parseAttendance(res.html).map((r) => ({ r, sem })));
+      }
+      return out;
     });
     if (rows) {
       attendanceOk = true;
-      for (const r of rows) add(attendanceItem(d, r, index));
+      for (const { r, sem } of rows) add(attendanceItem(d, r, index, sem));
     }
   } else steps.attendance = 'skipped';
 
@@ -518,6 +573,7 @@ async function detectVersion(
 function buildOfferings(
   o: LcuSyncOptions,
   timetable: Map<string, TimetableEntry[]>,
+  offGrid: Map<string, OffGridEntry[]>,
   subjectLists: Map<string, ClassSubject[]>,
 ): Map<string, OfferingRec> {
   const out = new Map<string, OfferingRec>();
@@ -533,8 +589,15 @@ function buildOfferings(
   for (const [sem, entries] of timetable) {
     for (const e of entries) {
       const rec = get(e.year ?? o.academicYear, e.subjectCode, e.classCode, e.title);
-      rec.semesterCode ??= sem;
+      rec.semesterCode ??= e.semesterCode ?? sem;
       if (!rec.entries.some((x) => x.week === e.week && x.period === e.period)) rec.entries.push(e);
+    }
+  }
+  for (const [sem, list] of offGrid) {
+    for (const e of list) {
+      const rec = get(e.year ?? o.academicYear, e.subjectCode, e.classCode, e.title);
+      rec.semesterCode ??= e.semesterCode ?? sem;
+      rec.offGrid ??= e;
     }
   }
   for (const [sem, list] of subjectLists) {
@@ -559,7 +622,11 @@ function coursePayload(
   termName: string | undefined,
 ): CoursePayload {
   const first = rec.entries[0];
+  const og = rec.offGrid;
   const rooms = [...new Set(rec.entries.map((e) => e.room).filter((r): r is string => !!r))];
+  const scheduleType: CoursePayload['scheduleType'] = first ? 'regular' : og ? og.kind : undefined;
+  const retake = /再履修/.test(rec.className ?? '') || undefined;
+  const info = first ?? og;
   return {
     key: rec.key,
     year: rec.year,
@@ -570,15 +637,23 @@ function coursePayload(
     title: rec.title,
     ...(rec.className ? { className: rec.className } : {}),
     ...(rec.subjectList ? { subjectList: rec.subjectList } : {}),
-    ...(first
+    ...(scheduleType ? { scheduleType } : {}),
+    ...(retake ? { retake } : {}),
+    ...(info
       ? {
           timetable: {
-            ...(first.teacher ? { teacher: first.teacher } : {}),
-            ...(first.credits !== undefined ? { credits: first.credits } : {}),
-            ...(first.numbering ? { numbering: first.numbering } : {}),
-            ...(first.campus ? { campus: first.campus } : {}),
-            ...(rooms.length === 1 && rooms[0] ? { room: rooms[0] } : {}),
-            flags: first.flags,
+            ...(info.teacher ? { teacher: info.teacher } : {}),
+            ...(info.credits !== undefined ? { credits: info.credits } : {}),
+            ...(info.numbering ? { numbering: info.numbering } : {}),
+            ...(info.campus ? { campus: info.campus } : {}),
+            ...(first
+              ? rooms.length === 1 && rooms[0]
+                ? { room: rooms[0] }
+                : {}
+              : og?.room
+                ? { room: og.room }
+                : {}),
+            flags: info.flags,
             slots: rec.entries.map((e) => ({
               week: e.week,
               period: e.period,
@@ -589,8 +664,8 @@ function coursePayload(
           },
         }
       : {}),
-    source: first
-      ? { screen: d.screens.timetable, selector: first.selector }
+    source: info
+      ? { screen: d.screens.timetable, selector: info.selector }
       : {
           screen: d.screens.assignmentList,
           selector: `getClassSubjectList[value=${rec.subjectCode}_${rec.classCode}]`,
@@ -606,7 +681,7 @@ function examItem(
   index: OfferingIndex,
 ): RawItem {
   const tc = splitTitleClass(r.subject);
-  const off = index.resolve(tc.title, tc.className);
+  const off = index.resolve(tc.title, tc.className, sem);
   return {
     sourceType: RAW_TYPES.exam,
     externalId: `x-${shortHash(sem, r.subject, r.date ?? '', r.period ?? '', r.time ?? '')}`,
@@ -626,14 +701,23 @@ function examItem(
   };
 }
 
-function attendanceItem(d: LcuDeploymentProfile, r: AttendanceRow, index: OfferingIndex): RawItem {
+function attendanceItem(
+  d: LcuDeploymentProfile,
+  r: AttendanceRow,
+  index: OfferingIndex,
+  sem: string | undefined,
+): RawItem {
   const tc = splitTitleClass(r.subject);
-  const off = index.resolve(tc.title, tc.className);
+  const off =
+    (r.subjectCode ? index.bySubjectCode(r.subjectCode, sem) : undefined) ??
+    index.resolve(tc.title, tc.className, sem);
   return {
     sourceType: RAW_TYPES.attendance,
     externalId: `a-${shortHash(r.subject, r.schedule)}`,
     payload: {
       subject: r.subject,
+      ...(r.subjectCode ? { subjectCode: r.subjectCode } : {}),
+      ...(sem ? { semesterCode: sem } : {}),
       schedule: r.schedule,
       ...(r.published ? { published: r.published } : {}),
       counts: r.counts,

@@ -419,7 +419,12 @@ export class SyncEngine {
   ): Promise<NormalizeReport> {
     const source = this.getSource(sourceId);
     const report = emptyNormalize();
-    const pending = this.stores.raw.list({ sourceId, pendingOnly: true });
+    // A new normalizer version re-normalizes what the previous one produced (no refetch needed).
+    const pending = this.stores.raw.list({
+      sourceId,
+      pendingOnly: true,
+      normalizerVersion: source.normalizer.version,
+    });
     // Events of this call only, committed per raw item once its transaction succeeded.
     const pendingEvents: ChangeEvent[] = [];
     for (const item of pending) {
@@ -534,6 +539,10 @@ export class SyncEngine {
   ): void {
     const now = this.clock.now().toISOString();
     const observedAt = item.sourceUpdatedAt ?? item.fetchedAt;
+    // Unchanged raw content normalized again (a new normalizer version): the source did not
+    // change, so updated entities are not reported as changes (no ChangeEvent / notification).
+    const reinterpretation =
+      item.normalizedHash !== undefined && item.normalizedHash === item.contentHash;
     const keptFacts = new Set<string>();
     const keptEntities = new Set<string>();
     const eventSource = {
@@ -589,7 +598,7 @@ export class SyncEngine {
       report.entities[res.status]++;
       if (res.status !== 'unchanged') report.changedEntityIds.push(entity.id);
       if (
-        res.status === 'updated' ||
+        (res.status === 'updated' && !reinterpretation) ||
         res.status === 'restored' ||
         (res.status === 'created' && emitCreates)
       ) {

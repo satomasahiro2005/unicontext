@@ -120,6 +120,10 @@ export const CoursePayloadSchema = z.object({
   title: str,
   className: str.optional(),
   subjectList: ClassSubjectSchema.optional(),
+  /** regular = weekly grid; unscheduled = 時間割外講義; intensive = 集中講義 (timetable screen sections). */
+  scheduleType: z.enum(['regular', 'unscheduled', 'intensive']).optional(),
+  /** 再履修 class (class name 「再履修…」). */
+  retake: z.boolean().optional(),
   timetable: z
     .object({
       teacher: str.optional(),
@@ -233,6 +237,8 @@ export const ExamPayloadSchema = z.object({
 
 export const AttendancePayloadSchema = z.object({
   subject: str,
+  subjectCode: str.optional(),
+  semesterCode: str.optional(),
   schedule: str,
   published: str.optional(),
   counts: z.record(z.string(), z.number()),

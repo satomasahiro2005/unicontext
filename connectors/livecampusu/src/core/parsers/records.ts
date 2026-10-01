@@ -75,6 +75,8 @@ function labelCells(
 /** 出欠 (SC_13002B00_01): counts per course. */
 export interface AttendanceRow {
   subject: string;
+  /** Subject code from the hidden classSubjectCode column, when present. */
+  subjectCode?: string;
   /** 学期/曜日・時限 text. */
   schedule: string;
   published?: string;
@@ -124,7 +126,9 @@ export function parseAttendance(html: string): AttendanceRow[] {
       if (n !== undefined) counts[key] = n;
     }
     const published = nonEmpty(byLabel(row, '公開状況'));
+    const code = /^(?:\d{4})?(\d{8})(?:\D|$)/.exec(cleanText(row.cells.classSubjectCode))?.[1];
     out.push({
+      ...(code ? { subjectCode: code } : {}),
       subject: (byLabel(row, '講義名') ?? subject).split('\n')[0]?.trim() ?? subject,
       schedule: cleanText(byLabel(row, '学期/曜日・時限') ?? pick(row, '曜日・時限') ?? ''),
       ...(published ? { published } : {}),

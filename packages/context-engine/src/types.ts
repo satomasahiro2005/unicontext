@@ -55,13 +55,15 @@ export interface ClassItem extends Cited {
   status: ResolvedValue<string>;
   cancelled: boolean;
   note: string | undefined;
+  /** class = a meeting of the course; self_study = the student's own study slot (自習). */
+  sessionKind: 'class' | 'self_study';
   /** One-line explanation with the source, e.g. "2限 データベースシステム論 / 教室: 21教室（根拠: 学務情報システム 10/1 09:42取得）". */
   summary: string;
 }
 
 export interface DeadlineItem extends Cited {
   taskId: string;
-  kind: 'assignment' | 'exam_preparation' | 'extracted' | 'manual';
+  kind: 'assignment' | 'exam_preparation' | 'extracted' | 'manual' | 'weekly_pace';
   title: string;
   course: CourseRef | undefined;
   dueAt: string;
@@ -194,14 +196,61 @@ export interface DayContext<V extends 'today' | 'tomorrow'> extends BundleBase<V
   importantAnnouncements: AnnouncementItem[];
   preparation: PreparationItem[];
   conflicts: ConflictItem[];
+  /** Current term of the academic calendar, if the date is inside one. */
+  term?: { id: string; name: string } | undefined;
+  /** Why there are no classes (学期外, 未登録, 祝日 …) when `classes` is empty. */
+  noClassesReason?: string | undefined;
 }
-export type TodayContext = DayContext<'today'>;
+/** The student's own weekly self-study slot of an offering (自習), as stored and as text. */
+export interface PaceSlotView {
+  /** 0 = Sunday … 6 = Saturday */
+  dayOfWeek: number;
+  startTime: string | undefined;
+  endTime: string | undefined;
+  period: number | undefined;
+  /** "土 10:00-11:30" / "土2限" */
+  text: string;
+}
+
+/** An offering the student is falling behind in (時間割外・集中講義 without a weekly class). */
+export interface PaceItem {
+  course: CourseRef;
+  /** Consecutive past weeks whose 「今週分」 task is not completed. */
+  behindWeeks: number;
+  /** Past-due assignments that are still open. */
+  unsubmitted: number;
+  /** Self-study slots, "土 10:00-11:30". */
+  slots: string[];
+  message: string;
+}
+
+/** One row of the pacing overview (`unicontext pace list`, GET /api/v1/pace). */
+export interface PaceCourseItem {
+  course: CourseRef;
+  scheduleType: 'regular' | 'unscheduled' | 'intensive';
+  enrolled: boolean;
+  slots: PaceSlotView[];
+  /** This week's 「今週分」 task, if there is one. */
+  thisWeek: { taskId: string; status: TaskStatus; dueAt: string } | undefined;
+  behindWeeks: number;
+  unsubmitted: number;
+}
+
+export interface PaceOverview {
+  courses: PaceCourseItem[];
+}
+
+export interface TodayContext extends DayContext<'today'> {
+  /** Offerings the student is behind in; empty when on track. */
+  pacing: PaceItem[];
+}
 export type TomorrowContext = DayContext<'tomorrow'>;
 
 export interface WeekContext extends BundleBase<'week'> {
   from: string;
   to: string;
-  days: { date: string; classes: ClassItem[] }[];
+  days: { date: string; classes: ClassItem[]; noClassesReason?: string | undefined }[];
+  term?: { id: string; name: string } | undefined;
   deadlines: DeadlineItem[];
   exams: DeadlineItem[];
   changes: ChangeItem[];
@@ -212,6 +261,18 @@ export interface CourseContext extends BundleBase<'course'> {
   course: CourseRef;
   instructors: string[];
   schedule: { dayOfWeek: number; period: number | undefined; room: string | undefined }[];
+  /** regular (weekly), unscheduled (時間割外) or intensive (集中講義). */
+  scheduleType: 'regular' | 'unscheduled' | 'intensive';
+  /** Academic year / term label and the profile term id when known. */
+  academicYear: number | undefined;
+  term: string | undefined;
+  termId: string | undefined;
+  /** The student is enrolled (the academic system lists it as theirs). */
+  enrolled: boolean;
+  /** 再履修 class. */
+  retake: boolean;
+  /** The student's own self-study slots (pace_slots). */
+  paceSlots: PaceSlotView[];
   room: ResolvedValue<string>;
   sources: { id: string; sourceId: string | undefined; citations: Citation[] }[];
   upcomingClasses: ClassItem[];
@@ -275,4 +336,6 @@ export interface AdminContext extends BundleBase<'admin'> {
   sources: SourceStatus[];
   conflicts: ConflictItem[];
   pendingLinks: IdentityLink[];
+  /** Enrolled 時間割外 / 集中講義 courses of the current term without self-study slots. */
+  unscheduledWithoutPace: { course: CourseRef; scheduleType: 'unscheduled' | 'intensive' }[];
 }

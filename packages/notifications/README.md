@@ -31,6 +31,7 @@ notifications.markRead(id);
 | `new_assignment`         | `change`: assignment created                                                     | normal                                                        |
 | `deadline_changed`       | `change`: assignment `dueAt` updated                                             | high, critical if the new due date is less than 24 hours away |
 | `deadline_approaching`   | poll of `context.deadline()`                                                     | normal at the 24h lead, high at 3h, critical at 1h            |
+| `pace_behind`            | poll of `context.pacing()` (weekly 今週分 tasks of 時間割外 / 集中講義 courses)  | high, critical from 2 weeks behind                            |
 | `exam_announced`         | `change`: exam created                                                           | high                                                          |
 | `important_announcement` | `change`: announcement created with importance high/critical or scope university | high, critical for critical importance                        |
 | `auth_expired`           | `health` / `sync:failed` with state `auth_required`                              | high (body carries `unicontext login <sourceId>`)             |
@@ -46,6 +47,8 @@ passed through the core redactor.
 contains the remaining time), and not for submitted, completed or cancelled tasks. The due date is
 part of the dedupe key, so a moved deadline fires again. Default leads are `24h`, `3h`, `1h`; the
 check runs on `uc.clock` every 5 minutes (and once at `start()`).
+
+`pace_behind` is keyed by course, week and weeks behind, so it escalates once per level (1 week, 2 weeks, …).
 
 ## Dedupe and the log
 
