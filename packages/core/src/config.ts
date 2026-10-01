@@ -69,6 +69,47 @@ export const ConfigSchema = z.object({
   logging: z
     .object({ level: z.enum(['debug', 'info', 'warn', 'error']).default('info') })
     .default({ level: 'info' }),
+  /** Local daemon (unicontextd, §34). It only ever binds to 127.0.0.1. */
+  daemon: z
+    .object({ port: z.number().int().min(1024).max(65535).default(17878) })
+    .default({ port: 17878 }),
+  /** Notification engine (§46). Webhook is off by default; its secret lives in the SecretStore. */
+  notifications: z
+    .object({
+      enabled: z.boolean().default(true),
+      minPriority: z.enum(['low', 'normal', 'high', 'critical']).default('low'),
+      /** How long before a due date a "deadline approaching" notification fires. */
+      deadlineLeadTimes: z.array(z.string()).default(['24h', '3h']),
+      sinks: z
+        .object({
+          console: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
+          desktop: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
+          webhook: z
+            .object({
+              enabled: z.boolean().default(false),
+              url: z.string().optional(),
+              /** Key name in the SecretStore holding the HMAC secret. Never put the secret here. */
+              secretRef: z.string().optional(),
+              minPriority: z.enum(['low', 'normal', 'high', 'critical']).default('high'),
+            })
+            .default({ enabled: false, minPriority: 'high' }),
+        })
+        .default({
+          console: { enabled: true },
+          desktop: { enabled: true },
+          webhook: { enabled: false, minPriority: 'high' },
+        }),
+    })
+    .default({
+      enabled: true,
+      minPriority: 'low',
+      deadlineLeadTimes: ['24h', '3h'],
+      sinks: {
+        console: { enabled: true },
+        desktop: { enabled: true },
+        webhook: { enabled: false, minPriority: 'high' },
+      },
+    }),
   /** §61: telemetry is off unless explicitly enabled. */
   telemetry: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
 });

@@ -1,7 +1,7 @@
 {
   "name": "@unicontext/notifications",
   "version": "1.0.0",
-  "description": "Notification engine (stub)",
+  "description": "Notification engine: rules, dedupe, log and sinks (§46)",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -20,6 +20,18 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/core": "workspace:*"
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/context-engine": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/provenance": "workspace:*",
+    "@unicontext/sync-engine": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "optionalDependencies": {
+    "node-notifier": "^10.0.1"
+  },
+  "devDependencies": {
+    "@unicontext/connector-sdk": "workspace:*",
+    "@types/node-notifier": "^8.0.5"
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "@unicontext/cli",
   "version": "1.0.0",
-  "description": "unicontext CLI (stub)",
+  "description": "unicontext command line (§42)",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -13,6 +13,9 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "unicontext": "./dist/bin.js"
+  },
   "files": [
     "dist"
   ],
@@ -20,6 +23,17 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/core": "workspace:*"
+    "@unicontext/auth": "workspace:*",
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/context-engine": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/daemon": "workspace:*",
+    "@unicontext/database": "workspace:*",
+    "@unicontext/mcp": "workspace:*",
+    "@unicontext/notifications": "workspace:*",
+    "commander": "^15.0.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
   }
 }

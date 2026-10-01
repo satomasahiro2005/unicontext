@@ -56,8 +56,8 @@ fix without contacting any university system (§6).
 | packages/task-engine                                                      | `@unicontext/task-engine`                  | implemented                               |
 | packages/context-engine                                                   | `@unicontext/context-engine`               | implemented (includes `createUniContext`) |
 | packages/adapter-{mcp,cli,rest,browser}                                   | `@unicontext/adapter-*`                    | stub (lane a)                             |
-| packages/notifications                                                    | `@unicontext/notifications`                | stub (lane b)                             |
-| apps/{daemon,cli,web,mcp}                                                 | `@unicontext/{daemon,cli,web,mcp}`         | stub (lane b)                             |
+| packages/notifications                                                    | `@unicontext/notifications`                | implemented (§3.12)                       |
+| apps/{daemon,cli,web,mcp}                                                 | `@unicontext/{daemon,cli,web,mcp}`         | implemented (§3.12)                       |
 | connectors/{microsoft365,livecampusu,local-files,syllabus,chatgpt-record} | `@unicontext/<dir>`                        | stub (lane a)                             |
 | profiles/shizuoka-university                                              | profile.yaml                               | settings only (§54)                       |
 | tests/                                                                    | `@unicontext/tests` (private)              | cross-package integration tests           |
@@ -66,7 +66,7 @@ Commands (from the repo root):
 
 ```
 pnpm install
-pnpm build        # tsc -b over all project references (dist/ per package)
+pnpm build        # tsc -b over all project references (dist/ per package), then the Web UI (Vite -> apps/web/dist)
 pnpm test         # vitest run (resolves @unicontext/* to src/, no build needed)
 pnpm typecheck    # build + type-check test files (tsconfig.test.json)
 pnpm lint         # eslint
@@ -503,6 +503,30 @@ candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `Task
 - `CONTEXT_VIEWS` (name, `context://<name>` URI, description), `ContextViewParams` (zod schemas per
   view, usable as MCP tool input schemas), `getView(engine, name, params)` (validated dispatcher),
   `isContextViewName`.
+
+## 3.12 Apps and notifications (lane b)
+
+- `@unicontext/notifications`: `NotificationService({uc, sinks, logFile?, minPriority?, deadlineLeadTimes?})`
+  subscribes to the bus (`change`, `conflict`, `health`, `sync:failed`, `drift`) and polls
+  `context.deadline()` for approaching deadlines. Notifications are deduped by `dedupeKey` in a JSONL log; sinks are
+  console (stderr), desktop (optional `node-notifier`) and webhook (off by default, HMAC signed).
+  `createSinksFromConfig(config.notifications, {secrets})` builds them from config.
+- `@unicontext/mcp` (apps/mcp): `createMcpServer(deps)`, `runStdioServer`, `handleMcpHttp` (stateless streamable
+  HTTP), the file-backed `ProposalStore` + `applyProposal` (propose -> confirm -> execute, §50) and `buildAssignments`.
+  Every tool result is an envelope `{data, citations, conflicts, answerHint}`.
+- `@unicontext/daemon` (apps/daemon): `createRuntime` (config + profile + dynamic connector loading + secrets, shared by
+  the CLI and MCP stdio), `startDaemon` (lock file, scheduler, notifications, Fastify on 127.0.0.1: REST `/api/v1`, Web
+  UI static files, `/mcp`), `DaemonClient`, service install helpers and `api-types` (wire types, type-only subpath).
+  Connector packages are resolved by name in `src/registry.ts`: the source key or `connector:` gives
+  `@unicontext/<name>`, `adapter: mcp|cli|rest|browser` gives `@unicontext/adapter-<kind>`. A package exports a
+  `ConnectorModule` as `default` or `connector`, or a factory `({sourceId, config, profile}) => ConnectorModule`. A
+  missing package marks only that source `failed`.
+- `@unicontext/cli` (apps/cli, bin `unicontext`) and `@unicontext/web` (apps/web: React, Vite, TanStack Router, built
+  to `apps/web/dist` and served by the daemon).
+- Config additions in core (`ConfigSchema`): `daemon.port` (default 17878) and `notifications` (enabled, minPriority,
+  deadlineLeadTimes, sinks.console/desktop/webhook). Config keys that are not in the schema are dropped on load.
+- Dev mode (`unicontextd --dev`, `unicontext --dev <cmd>`): the Shizuoka seed through the fake connector with the clock
+  anchored at 2026-10-01 09:30 JST. Nothing contacts a university.
 
 ## 4. Writing a connector (lane a)
 

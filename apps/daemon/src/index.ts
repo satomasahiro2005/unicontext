@@ -1,2 +1,3 @@
-// Placeholder: implemented by a later lane. See docs/ARCHITECTURE.md.
-export const PACKAGE_NAME = '@unicontext/daemon';
+export * from './lib.js';
+export * from './daemon.js';
+export * from './rest.js';
