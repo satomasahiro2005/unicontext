@@ -1,0 +1,262 @@
+<!-- UniContext fixture (SYNTHETIC values, real structure). 単位修得情報 SC_10004B00_02, reached by POST SC_10004B00_01/forward (「単位修得情報照会」). Observed 2026-10-01: one table, columns 要件区分（科目名）/必要単位/修得見込単位/充足状況; nesting = leading &emsp;; requirement groups carry a toggle link to their course rows (tr.topToggleNNNNN, hidden). -->
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"><title>単位修得情報</title></head><body>
+<main class="c-container">
+<div class="c-contents">
+  <div class="c-heading-h1-container">
+    <h2 class="c-heading-h1">
+       単位修得情報
+    </h2>
+  </div>
+  <div class="c-expands">
+    <div class="c-expand">
+      <form id="SC_10004B00_SearchForm" class="h-adr" action="/lcu-web/SC_10004B00_02" method="post">
+        <input type="hidden" id="SC_10004B00_SearchForm_seisekiKind" name="seisekiKind" value="" />
+        <div class="select_wrapper u-w100per-sp"><select id="requirementTypeCode" name="requirementTypeCode" class="select u-w260-pc u-w100per-sp js-select" onchange="changeRequirementtype()"><option value="01" selected="selected">卒業要件（学士課程）</option><option value="ZZ">履修カルテ用教職要件</option></select></div>
+        <input type="hidden" name="_csrf" value="00000000-0000-0000-0000-000000000000" />
+      </form>
+      <div class="c-box-shadow">
+        <div class="c-contents-body -small">
+          <table class="dataTable c-table c-table-card c-table-pd-narrow c-table-omitted SC_10004B00_02_table">
+            <thead>
+              <tr>
+                <th class="title -center u-w562-pc u-w240-sp">要件区分（科目名）</th>
+                <th class="title -center u-w60-pc u-w80-sp">必要単位</th>
+                <th class="title -center u-w60-pc u-w80-sp">修得見込単位</th>
+                <th class="title -center u-w60-pc u-w80-sp">充足状況</th>
+              </tr>
+            </thead>
+            <tbody>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">卒業要件（学士課程）</td>
+  <td class="title -right" title-label="必要単位">124.0</td>
+  <td class="title -right" title-label="修得見込単位">30.0</td>
+  <td class="title -center" title-label="充足状況">
+        <span class="lack-badge">不足</span>
+  </td>
+</tr>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">教養科目</td>
+  <td class="title -right" title-label="必要単位">30.0</td>
+  <td class="title -right" title-label="修得見込単位">8.0</td>
+  <td class="title -center" title-label="充足状況">
+        <span class="lack-badge">不足</span>
+  </td>
+</tr>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">&emsp;教養基礎科目</td>
+  <td class="title -right" title-label="必要単位">10.0</td>
+  <td class="title -right" title-label="修得見込単位">4.0</td>
+  <td class="title -center" title-label="充足状況">
+        <span class="lack-badge">不足</span>
+  </td>
+</tr>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">&emsp;&emsp;教養基礎科目</td>
+  <td class="title -right" title-label="必要単位"></td>
+  <td class="title -right" title-label="修得見込単位">4.0</td>
+  <td class="title -center" title-label="充足状況">
+        
+  </td>
+</tr>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">
+    <div class="c-form-box">
+      <div class="inner-side-left">&emsp;&emsp;&emsp;サンプル基礎</div>
+      <div class="inner-side-center">必</div>
+      <div class="inner-side-right"><a href="" class="c-btn-toggle small js-accordion is-open" onclick="$('tr.topToggle90011').toggle();"></a></div>
+    </div>
+  </td>
+  <td class="title -right" title-label="必要単位">2.0</td>
+  <td class="title -right" title-label="修得見込単位">2.0</td>
+  <td class="title -center" title-label="充足状況">
+        <span class="satisfaction-badge">充足</span>
+  </td>
+</tr>
+<tr class="topToggle90011 SC_10004B00_02_toggle" style="display: none;">
+    <td class="title" title-label="要件区分（科目名）">
+      <div class="c-form-box">
+        <div class="inner-side-left">&emsp;&emsp;&emsp;&emsp;+オンライン教養</div>
+        <div class="inner-side-center">必</div>
+        <div class="inner-side-right"></div>
+      </div>
+    </td>
+    <td class="title -right" title-label="単位">1.0</td>
+    <td class="-center">
+          合格
+    </td>
+    <td class="none" title-label="充足状況"></td>
+  </tr>
+<tr class="topToggle90011 SC_10004B00_02_toggle" style="display: none;">
+    <td class="title" title-label="要件区分（科目名）">
+      <div class="c-form-box">
+        <div class="inner-side-left">&emsp;&emsp;&emsp;&emsp;+キャリアサンプル</div>
+        <div class="inner-side-center">必</div>
+        <div class="inner-side-right"></div>
+      </div>
+    </td>
+    <td class="title -right" title-label="単位">1.0</td>
+    <td class="-center">
+          合格
+    </td>
+    <td class="none" title-label="充足状況"></td>
+  </tr>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">
+    <div class="c-form-box">
+      <div class="inner-side-left">&emsp;&emsp;&emsp;サンプル選択群</div>
+      <div class="inner-side-center">選必</div>
+      <div class="inner-side-right"><a href="" class="c-btn-toggle small js-accordion is-open" onclick="$('tr.topToggle90021').toggle();"></a></div>
+    </div>
+  </td>
+  <td class="title -right" title-label="必要単位">4.0</td>
+  <td class="title -right" title-label="修得見込単位">0.0</td>
+  <td class="title -center" title-label="充足状況">
+        <span class="lack-badge">不足</span>
+  </td>
+</tr>
+<tr class="topToggle90021 SC_10004B00_02_toggle" style="display: none;">
+    <td class="title" title-label="要件区分（科目名）">
+      <div class="c-form-box">
+        <div class="inner-side-left">&emsp;&emsp;&emsp;&emsp;サンプル統計</div>
+        <div class="inner-side-center">選必</div>
+        <div class="inner-side-right"></div>
+      </div>
+    </td>
+    <td class="title -right" title-label="単位">2.0</td>
+    <td class="-center">
+          
+    </td>
+    <td class="none" title-label="充足状況"></td>
+  </tr>
+<tr class="topToggle90021 SC_10004B00_02_toggle" style="display: none;">
+    <td class="title" title-label="要件区分（科目名）">
+      <div class="c-form-box">
+        <div class="inner-side-left">&emsp;&emsp;&emsp;&emsp;サンプル選択Ａ</div>
+        <div class="inner-side-center">選必</div>
+        <div class="inner-side-right"></div>
+      </div>
+    </td>
+    <td class="title -right" title-label="単位">2.0</td>
+    <td class="-center">
+          不合格
+    </td>
+    <td class="none" title-label="充足状況"></td>
+  </tr>
+<tr class="topToggle90021 SC_10004B00_02_toggle" style="display: none;">
+    <td class="title" title-label="要件区分（科目名）">
+      <div class="c-form-box">
+        <div class="inner-side-left">&emsp;&emsp;&emsp;&emsp;サンプル選択Ｂ</div>
+        <div class="inner-side-center">選必</div>
+        <div class="inner-side-right"></div>
+      </div>
+    </td>
+    <td class="title -right" title-label="単位">2.0</td>
+    <td class="-center">
+          
+    </td>
+    <td class="none" title-label="充足状況"></td>
+  </tr>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">専門科目</td>
+  <td class="title -right" title-label="必要単位">94.0</td>
+  <td class="title -right" title-label="修得見込単位">22.0</td>
+  <td class="title -center" title-label="充足状況">
+        <span class="lack-badge">不足</span>
+  </td>
+</tr>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">&emsp;学科専門科目／必修</td>
+  <td class="title -right" title-label="必要単位">40.0</td>
+  <td class="title -right" title-label="修得見込単位">22.0</td>
+  <td class="title -center" title-label="充足状況">
+        <span class="lack-badge">不足</span>
+  </td>
+</tr>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">&emsp;&emsp;学科専門科目／必修</td>
+  <td class="title -right" title-label="必要単位"></td>
+  <td class="title -right" title-label="修得見込単位">22.0</td>
+  <td class="title -center" title-label="充足状況">
+        
+  </td>
+</tr>
+<tr>
+  <td class="title" title-label="要件区分（科目名）">
+    <div class="c-form-box">
+      <div class="inner-side-left">&emsp;&emsp;&emsp;必修</div>
+      <div class="inner-side-center">必</div>
+      <div class="inner-side-right"><a href="" class="c-btn-toggle small js-accordion is-open" onclick="$('tr.topToggle90031').toggle();"></a></div>
+    </div>
+  </td>
+  <td class="title -right" title-label="必要単位">40.0</td>
+  <td class="title -right" title-label="修得見込単位">22.0</td>
+  <td class="title -center" title-label="充足状況">
+        <span class="lack-badge">不足</span>
+  </td>
+</tr>
+<tr class="topToggle90031 SC_10004B00_02_toggle" style="display: none;">
+    <td class="title" title-label="要件区分（科目名）">
+      <div class="c-form-box">
+        <div class="inner-side-left">&emsp;&emsp;&emsp;&emsp;サンプル入門</div>
+        <div class="inner-side-center">必</div>
+        <div class="inner-side-right"></div>
+      </div>
+    </td>
+    <td class="title -right" title-label="単位">2.0</td>
+    <td class="-center">
+          不合格
+    </td>
+    <td class="none" title-label="充足状況"></td>
+  </tr>
+<tr class="topToggle90031 SC_10004B00_02_toggle" style="display: none;">
+    <td class="title" title-label="要件区分（科目名）">
+      <div class="c-form-box">
+        <div class="inner-side-left">&emsp;&emsp;&emsp;&emsp;サンプル演習</div>
+        <div class="inner-side-center">必</div>
+        <div class="inner-side-right"></div>
+      </div>
+    </td>
+    <td class="title -right" title-label="単位">2.0</td>
+    <td class="-center">
+          合格
+    </td>
+    <td class="none" title-label="充足状況"></td>
+  </tr>
+<tr class="topToggle90031 SC_10004B00_02_toggle" style="display: none;">
+    <td class="title" title-label="要件区分（科目名）">
+      <div class="c-form-box">
+        <div class="inner-side-left">&emsp;&emsp;&emsp;&emsp;サンプル数学</div>
+        <div class="inner-side-center">必</div>
+        <div class="inner-side-right"></div>
+      </div>
+    </td>
+    <td class="title -right" title-label="単位">2.0</td>
+    <td class="-center">
+          合格
+    </td>
+    <td class="none" title-label="充足状況"></td>
+  </tr>
+<tr class="topToggle90031 SC_10004B00_02_toggle" style="display: none;">
+    <td class="title" title-label="要件区分（科目名）">
+      <div class="c-form-box">
+        <div class="inner-side-left">&emsp;&emsp;&emsp;&emsp;サンプル後期科目</div>
+        <div class="inner-side-center">必</div>
+        <div class="inner-side-right"></div>
+      </div>
+    </td>
+    <td class="title -right" title-label="単位">2.0</td>
+    <td class="-center">
+          
+    </td>
+    <td class="none" title-label="充足状況"></td>
+  </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</main>
+</body></html>

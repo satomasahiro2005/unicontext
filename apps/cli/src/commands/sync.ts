@@ -3,6 +3,7 @@ import { requireSource } from '@unicontext/daemon/lib';
 import type {
   SourceInfo,
   SourcesResponse,
+  SyncJobResponse,
   SyncResponse,
   SyncRunReport,
 } from '@unicontext/daemon/api-types';
@@ -40,6 +41,34 @@ function pickSources(
   return { ids, skipped };
 }
 
+const POLL_MS = 1_000;
+
+/**
+ * Start a sync in the daemon and wait for its report. The daemon answers right away with a job
+ * (202) and the job is polled, so a sync that runs for minutes (LiveCampusU) never hits the HTTP
+ * timeout. A daemon without background jobs answers with the report itself.
+ */
+export async function syncViaDaemon(
+  daemon: DaemonClient,
+  sourceId: string,
+  options: { pollMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<SyncRunReport> {
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const started = await daemon.post<SyncJobResponse | SyncResponse>(
+    `/api/v1/sources/${encodeURIComponent(sourceId)}/sync?wait=0`,
+  );
+  if ('report' in started) return started.report;
+  let job = started.job;
+  while (job.state === 'running') {
+    await sleep(options.pollMs ?? POLL_MS);
+    job = (await daemon.get<SyncJobResponse>(`/api/v1/sync-jobs/${encodeURIComponent(job.id)}`))
+      .job;
+  }
+  if (job.report) return job.report;
+  throw new Error(job.error ?? `sync of ${sourceId} failed`);
+}
+
 /** Sequentially sync the given source (or every enabled one), through the daemon when it runs. */
 export async function runSync(
   ctx: CliContext,
@@ -50,10 +79,7 @@ export async function runSync(
   if (daemon) {
     const { sources } = await daemon.get<SourcesResponse>('/api/v1/sources');
     const { ids, skipped } = pickSources(sources, requested);
-    for (const id of ids) {
-      const res = await daemon.post<SyncResponse>(`/api/v1/sources/${encodeURIComponent(id)}/sync`);
-      reports.push(res.report);
-    }
+    for (const id of ids) reports.push(await syncViaDaemon(daemon, id));
     return { via: 'daemon', reports, skipped };
   }
   const rt = await ctx.runtime();

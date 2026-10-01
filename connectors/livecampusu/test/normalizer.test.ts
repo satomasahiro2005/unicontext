@@ -420,6 +420,88 @@ describe('normalizer: assignments, warnings, calendar, exams, attendance', () =>
       gradePoint: 3,
       finalizedAt: '2026-08-19T15:00:00.000Z',
       courseOfferingId: ctx.id('courseOffering', '2026-77401100-61'),
+      extra: { evaluation: 'A', outcome: 'passed', academicYear: 2026, term: '前期' },
+    });
+  });
+
+  it('keeps every evaluation label verbatim and classifies it (unknown stays unknown)', async () => {
+    const grade = async (mark: string | undefined, extra: Record<string, unknown> = {}) =>
+      entityOf(
+        await norm({
+          sourceType: 'lcu.grade',
+          externalId: `g-${mark ?? 'none'}`,
+          payload: {
+            subjectCode: '90000001',
+            subjectName: 'サンプル入門',
+            credits: 2,
+            ...(mark !== undefined ? { mark } : {}),
+            reportTerm: '2025年度 後期 後期後半',
+            academicYear: 2025,
+            term: '後期',
+            termPart: '後期後半',
+            examType: '本試験',
+            ...extra,
+            context: {},
+            source: { screen: 'SC_10004B00_01', selector: 'tr[subjectCode=90000001]' },
+          },
+        }),
+        'grade',
+      );
+    const cases: [string | undefined, string][] = [
+      ['秀', 'passed'],
+      ['合', 'passed'],
+      ['不可', 'failed'],
+      ['否', 'failed'],
+      ['再試', 'not_graded'],
+      ['認定', 'transferred'],
+      ['放棄', 'withdrawn'],
+      ['履修中', 'in_progress'],
+      [undefined, 'in_progress'],
+      ['ＸＹＺ', 'unknown'],
+    ];
+    for (const [mark, outcome] of cases) {
+      const g = await grade(mark);
+      expect(g?.extra).toMatchObject({ evaluation: mark ?? '', outcome });
+      expect(g?.courseOfferingId).toBeUndefined();
+    }
+    expect((await grade('再試'))?.extra).toMatchObject({ pendingReexam: true });
+    expect((await grade('良', { interim: true }))?.extra).toMatchObject({
+      evaluation: '良',
+      outcome: 'in_progress',
+      interim: true,
+    });
+    // A re-exam row never shares the id of the regular exam row of the same term.
+    const regular = await grade('不可');
+    const reexam = await grade('不可', { examType: '再試験' });
+    expect(reexam?.id).not.toBe(regular?.id);
+  });
+
+  it('単位修得情報 → one credit_requirements fact on the student', async () => {
+    const out = await norm({
+      sourceType: 'lcu.creditRequirements',
+      externalId: '01',
+      payload: {
+        requirementType: { code: '01', name: '卒業要件（学士課程）' },
+        rows: [
+          {
+            depth: 0,
+            name: '卒業要件（学士課程）',
+            required: 124,
+            expected: 30,
+            status: '不足',
+            courses: [],
+          },
+        ],
+        markers: [{ symbol: '+', label: 'オンライン科目', capCredits: 10, totalCredits: 2 }],
+        source: { screen: 'SC_10004B00_02' },
+      },
+    });
+    expect(entityOf(out, 'person')).toMatchObject({ isSelf: true });
+    expect(out.facts).toHaveLength(1);
+    expect(out.facts?.[0]).toMatchObject({
+      predicate: 'credit_requirements',
+      origin: 'authoritative',
+      value: { requirementType: { code: '01' }, rows: [{ name: '卒業要件（学士課程）' }] },
     });
   });
 });

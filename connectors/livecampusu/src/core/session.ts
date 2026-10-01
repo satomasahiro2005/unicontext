@@ -254,7 +254,11 @@ export class LcuSession {
       extraDeniedScreens: [this.d.screens.assignmentSubmit],
       noticeListScreen: this.d.screens.noticeList,
       noticeDetailScreen: this.d.screens.noticeDetail,
-      gradeScreens: [this.d.screens.grades, this.d.screens.gradeDashboard],
+      gradeScreens: [
+        this.d.screens.grades,
+        this.d.screens.gradeDashboard,
+        ...(this.d.screens.creditRequirements ? [this.d.screens.creditRequirements] : []),
+      ],
     });
   }
 

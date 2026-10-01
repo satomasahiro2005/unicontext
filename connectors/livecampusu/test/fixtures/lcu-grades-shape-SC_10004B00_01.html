@@ -1,7 +1,220 @@
-<!-- UniContext fixture (STRUCTURE ONLY, no grade values). 成績情報 SC_10004B00_01, reached from 成績ダッシュボード SC_15005B00_01 button POST SC_15005B00_01/gredeInformation (also from 時間割参照 SC_18001B00_13/gredeInformation), logged in, 2026-10-01. Form SC_10004B00_SearchForm -> /lcu-web/SC_10004B00_01 [hidden seisekiKind, select requirementTypeCode]; actions SC_10004B00_01/changeSeisekiKind, /changeRequirementtype, /report (export, not clicked), /forward, /back. Header shows 学籍番号 and 学生氏名 (sanitized below). Main table had 69 rows; all rows removed. -->
-<h3>学籍番号 : S0000000</h3>
-<h3>学生氏名 : 学生 太郎</h3>
-<table><thead><tr><th>成績マーカー</th><th>上限単位数</th><th>合計単位数</th></tr></thead><tbody><tr><td>(removed)</td><td>(removed)</td><td>(removed)</td></tr></tbody></table>
-<table id="02"><thead><tr>
-<th id="subjectCode">科目コード</th><th id="subjectName">科目名</th><th id="staffName">担当教員</th><th id="kubunName">科目区分</th><th id="reqName">単位区分</th><th id="unit">単位</th><th id="score">得点</th><th id="marks">評価</th><th id="subjectGp">科目GP</th><th id="reportYearSemesterTerm">成績報告時期</th><th id="reportDate">入力年月日</th><th id="replaceName">読替前科目名</th><th id="examType">試験種別</th>
-</tr></thead><tbody><!-- 69 rows removed --></tbody></table>
+<!-- UniContext fixture (STRUCTURE ONLY, no grade values). 成績情報 SC_10004B00_01 as observed 2026-10-01 with every row removed (the real page had 69). See lcu-grades-SC_10004B00_01.synthetic.html for synthetic rows. -->
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"><title>成績情報</title></head><body>
+<script>
+function changeSeisekiKind(seisekiKind) {
+    $('#SC_10004B00_SearchForm_seisekiKind').val(seisekiKind);
+    return exPostSubmit('SC_10004B00_SearchForm', 'SC_10004B00_01/changeSeisekiKind');
+}
+function changeRequirementtype() {
+	return exPostSubmit("SC_10004B00_SearchForm", "SC_10004B00_01/changeRequirementtype");
+}
+$(function() {
+	popupMenuForReport();
+	$("td:has(span.backYellow)").addClass("backYellow");
+});
+</script>
+<main class="c-container">
+<div class="c-contents">
+  <div class="c-breadcrumbs"></div>
+  <div class="c-heading-h1-container">
+    <h2 class="c-heading-h1">
+       成績情報
+    </h2>
+        <p class="c-heading-description">成績情報は以下の通りとなります。<br>得点、評価の背景が黄色のものは中間点です。</p>
+    <p class="c-heading-description">科目名の先頭にある成績マーカーについては、<a style="color: #0000EE;" target="_blank" href="https://gakujo.shizuoka.ac.jp/lcu-web/pdf/seisekiMarkerList.pdf">《成績マーカー一覧表》</a>をご確認ください。</p>
+  </div>
+  <div class="c-expands">
+    <div class="c-expand">
+      <form id="SC_10004B00_SearchForm" class="h-adr" action="/lcu-web/SC_10004B00_01" method="post">
+        <div class="c-heading-container -all-over">
+          <div class="c-heading-contents -between">
+            <div class="c-heading-h3-container">
+              <h3 class="c-heading-h3">
+                学籍番号&nbsp;:&nbsp;S0000000
+              </h3>
+              <h3 class="c-heading-h3">
+                学生氏名&nbsp;:&nbsp;学生 太郎
+              </h3>
+            </div>
+            <div class="side-left">
+              <p class="c-half-btn">
+                      <a class="is-active">修得成績</a>
+                    
+                    
+                  
+                
+                  
+                    
+                    
+                      <a href="javascript:changeSeisekiKind(1)">履修中含む</a>
+                <input type="hidden" id="SC_10004B00_SearchForm_seisekiKind" name="seisekiKind" value="" />
+              </p>
+            </div>
+            <div class="side-right u-w100per-sp">
+              <div class="c-form-box u-w100per-sp">
+                  要件：
+                    <div class="select_wrapper u-w100per-sp"><select id="requirementTypeCode" name="requirementTypeCode" class="select u-w260-pc u-w100per-sp js-select" onchange="changeRequirementtype()"><option value="01" selected="selected">卒業要件（学士課程）</option><option value="ZZ">履修カルテ用教職要件</option></select></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      <div>
+<input type="hidden" name="_csrf" value="00000000-0000-0000-0000-000000000000" />
+</div></form>
+      <div class="c-box-shadow">
+          <div class="seiseki-marker-contents-body -small">
+            <table class="c-table nowrap c-table-pd-narrow c-table-omitted hover no-footer" style="width:auto">
+              <thead>
+                <tr>
+                  <th class="title -center" tabindex="0" aria-controls="02" style="width:auto"><p>成績マーカー</p></th>
+                  <th class="title -center" tabindex="0" aria-controls="02" style="width:auto"><p>上限単位数</p></th>
+                  <th class="title -center" tabindex="0" aria-controls="02" style="width:auto"><p>合計単位数</p></th>
+                </tr>
+              </thead>
+              <tbody>
+                  <tr class="is-unread odd" _index="0">
+                    <td class="content is-source " id="content">+オンライン科目</td>
+                    <td class="content is-source " id="content" style="text-align: right;">10.0</td>
+                    <td class="content is-source " id="content" style="text-align: right;">2.0</td>
+                  </tr>
+              </tbody>
+            </table>
+          </div>
+<form id="BaseForm" action="/lcu-web/SC_10004B00_01" method="post"><div class="c-table-scroll"><table id="02" class="c-table nowrap c-table-pd-narrow c-table-omitted hover" style="visibility: hidden;"><thead><tr><th class="title  -center u-w60-pc u-w80-sp" id="subjectCode" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>科目コード</p></th>
+<th class="title  " id="subjectKanaName" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="subjectName" 
+								_visible="true" 
+								_sortKey="subjectKanaName" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="include" ><p>科目名</p></th>
+<th class="title  " id="teacherCode" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="staffName" 
+								_visible="true" 
+								_sortKey="teacherCode" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>担当教員</p></th>
+<th class="title  " id="kubunDispOrder" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="html-num" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="kubunName" 
+								_visible="true" 
+								_sortKey="kubunDispOrder" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>科目区分</p></th>
+<th class="title  " id="subjectReqCode" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="reqName" 
+								_visible="true" 
+								_sortKey="subjectReqCode" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>単位区分</p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="unit" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="html-num" ><p>単位</p></th>
+<th class="title  " id="sortScore" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="html-num" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="score" 
+								_visible="true" 
+								_sortKey="sortScore" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="include" ><p>得点</p></th>
+<th class="title  " id="markCode" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="marks" 
+								_visible="true" 
+								_sortKey="markCode" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="include" ><p>評価</p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="subjectGp" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="html-num" ><p>科目GP</p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="reportYearSemesterTerm" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>成績報告時期</p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="reportDate" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="date" ><p>入力年月日</p></th>
+<th class="title  " id="replaceKana" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="replaceName" 
+								_visible="true" 
+								_sortKey="replaceKana" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="include" ><p>読替前科目名</p></th>
+<th class="title  " id="examTypeCode" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="examType" 
+								_visible="true" 
+								_sortKey="examTypeCode" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>試験種別</p></th>
+</tr></thead><tbody></tbody></table></div><input type="hidden" id="BaseForm_rowIndex" name="rowIndex" value="" /><input type="hidden" id="BaseForm_viewRowIndexArray" name="viewRowIndexArray" value="" /><div>
+<input type="hidden" name="_csrf" value="00000000-0000-0000-0000-000000000000" />
+</div></form>
+		<button type="button" onclick="submitFormButtonForReport($(this), '/lcu-web/SC_10004B00_01/report');return false;"formId="BaseForm" loading="false" class="c-btn c-btn-submit01" fileType="report" ><span class="c-btn-link"><span class="c-btn-text c-icon-submission">成績通知表印刷</span></span></button>
+		<button type="button" onclick="submitFormButton($(this), '/lcu-web/SC_10004B00_01/forward', '', '');return false;"formId="BaseForm" class="c-btn c-btn-submit01" ><span class="c-btn-link"><span class="c-btn-text ">単位修得情報照会</span><i class="c-icon-arrow-right c-color-base" aria-hidden="true"></i></span></button>
+      </div>
+    </div>
+  </div>
+</div>
+</main>
+</body></html>

@@ -1,4 +1,4 @@
-import type { ScheduleSlot } from '@unicontext/canonical-model';
+import { isReexamLabel, type JsonValue, type ScheduleSlot } from '@unicontext/canonical-model';
 import {
   detectSchemaDrift,
   type DriftFinding,
@@ -13,6 +13,7 @@ import {
 import { classifyNoticeImportance, findPeriod, zonedTime } from '@unicontext/core';
 import type { z } from 'zod';
 import { type ContactKind, type LcuDeploymentProfile, lcuUrl } from './deployment.js';
+import { lcuGradeOutcome, parseLcuReportTerm } from './parsers/grades.js';
 import {
   ALL_RAW_TYPES,
   type AssignmentPayload,
@@ -20,6 +21,7 @@ import {
   CalendarEventPayloadSchema,
   type CoursePayload,
   ExamPayloadSchema,
+  CreditRequirementsPayloadSchema,
   GradePayloadSchema,
   type LcuRawType,
   type NoticePayload,
@@ -41,7 +43,7 @@ import {
   uniquePeriodOnDay,
 } from './text.js';
 
-export const NORMALIZER_VERSION = '3';
+export const NORMALIZER_VERSION = '4';
 export const SELF_PERSON_KEY = 'self';
 
 export interface LiveCampusUNormalizerOptions {
@@ -571,9 +573,17 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
           const coId = offering(p.context.offeringKey);
           const finalized = slashDateToIso(p.reportDate);
           const finalizedAt = finalized ? at(finalized, undefined, ctx.timezone) : undefined;
+          const rt = p.academicYear === undefined ? parseLcuReportTerm(p.reportTerm) : {};
+          const academicYear = p.academicYear ?? rt.academicYear;
+          const term = p.term ?? rt.term;
+          const termPart = p.termPart ?? rt.termPart;
+          const outcome = lcuGradeOutcome(p);
+          // One entity per attempt; a re-exam row gets its own id so it never overwrites the
+          // regular exam row of the same 成績報告時期.
+          const reexam = p.examType && p.examType !== '本試験' ? [p.examType] : [];
           entities.push({
             entity: {
-              id: ctx.id('grade', p.subjectCode, p.reportTerm ?? ''),
+              id: ctx.id('grade', p.subjectCode, p.reportTerm ?? '', ...reexam),
               kind: 'grade',
               ...(coId ? { courseOfferingId: coId } : {}),
               ...(p.score !== undefined ? { score: p.score } : {}),
@@ -583,14 +593,47 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
               extra: {
                 subjectCode: p.subjectCode,
                 subjectName: p.subjectName,
+                ...(p.markers?.length ? { markers: p.markers } : {}),
                 ...(p.credits !== undefined ? { credits: p.credits } : {}),
                 ...(p.category ? { category: p.category } : {}),
+                ...(p.categoryOrder !== undefined ? { categoryOrder: p.categoryOrder } : {}),
                 ...(p.creditType ? { creditType: p.creditType } : {}),
+                ...(p.staffName ? { staffName: p.staffName } : {}),
+                // The evaluation label exactly as LCU shows it ('' while in progress) + outcome.
+                evaluation: p.mark ?? '',
+                ...(p.markCode ? { evaluationCode: p.markCode } : {}),
+                outcome,
+                ...(isReexamLabel(p.mark) ? { pendingReexam: true } : {}),
+                ...(p.interim ? { interim: true } : {}),
                 ...(p.reportTerm ? { reportTerm: p.reportTerm } : {}),
+                ...(academicYear !== undefined ? { academicYear } : {}),
+                ...(term ? { term } : {}),
+                ...(termPart ? { termPart } : {}),
+                ...(p.reportDate ? { reportDate: p.reportDate } : {}),
                 ...(p.examType ? { examType: p.examType } : {}),
+                ...(p.replacedSubjectName ? { replacedSubjectName: p.replacedSubjectName } : {}),
+                ...(p.view ? { view: p.view } : {}),
               },
             },
             ref: refFor(p.source.screen, p.source.selector),
+          });
+          break;
+        }
+
+        case 'lcu.creditRequirements': {
+          const parsed = CreditRequirementsPayloadSchema.safeParse(item.payload);
+          if (!parsed.success) break;
+          const { source, ...value } = parsed.data;
+          entities.push({
+            entity: { id: self, kind: 'person', name: '本人', roles: ['student'], isSelf: true },
+            deriveFacts: false,
+          });
+          facts.push({
+            subject: self,
+            predicate: 'credit_requirements',
+            value: value as unknown as JsonValue,
+            origin: 'authoritative',
+            ref: refFor(source.screen, source.selector),
           });
           break;
         }

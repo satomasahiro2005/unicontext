@@ -243,3 +243,28 @@ const NOTIFICATION_KIND_LABELS: Record<string, string> = {
 export function notificationKindLabel(kind: string): string {
   return NOTIFICATION_KIND_LABELS[kind] ?? kind;
 }
+
+// Grade outcomes (mirrors GRADE_OUTCOME_LABELS of the canonical model; nothing from @unicontext/*
+// reaches the browser bundle at runtime). The evaluation label itself is always shown verbatim.
+const GRADE_OUTCOME_LABELS: Record<string, string> = {
+  passed: '合格',
+  failed: '不合格',
+  in_progress: '履修中',
+  not_graded: '未評価',
+  withdrawn: '放棄・取消',
+  transferred: '認定',
+  unknown: '不明',
+};
+
+export const GRADE_OUTCOME_ORDER = Object.keys(GRADE_OUTCOME_LABELS);
+
+export function gradeOutcomeLabel(outcome: string): string {
+  return GRADE_OUTCOME_LABELS[outcome] ?? outcome;
+}
+
+export function gradeOutcomeTone(outcome: string): Tone {
+  if (outcome === 'passed' || outcome === 'transferred') return 'ok';
+  if (outcome === 'failed' || outcome === 'withdrawn') return 'bad';
+  if (outcome === 'in_progress') return 'info';
+  return 'warn';
+}

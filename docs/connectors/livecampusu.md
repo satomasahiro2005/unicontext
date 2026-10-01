@@ -133,7 +133,12 @@ class)` arguments; off-grid courses become offerings with `scheduleType` `unsche
    (`rowSelect` → `SC_17001B00_02` → `back`) only for READ rows whose row hash changed since the
    detail was last fetched (incremental), newest first, capped per run. Bodies are carried forward
    in `cursor.extra.notices` (and in memory), so unchanged notices keep their body without a request.
-7. 成績 (only with `grades: true`).
+7. 成績 (only with `grades: true`): 成績ダッシュボード → 成績情報 (`SC_10004B00_01`), switched to the
+   「履修中含む」 tab (`changeSeisekiKind`, `seisekiKind=1`) so registered courses without a grade are
+   listed too, then 「単位修得情報照会」 (`SC_10004B00_01/forward` → `SC_10004B00_02`, requirement
+   status). The grade list holds every attempt of every year on one page (failed ones and re-exams
+   included); there is no year selector. If the tab switch does not apply, the default 修得成績 tab
+   is used and a warning is reported.
 
 A step that fails (non-auth) becomes a `SyncResult.warnings` entry and its types are not marked
 complete, so nothing is deleted by mistake. Steps whose listing is complete set
@@ -168,7 +173,7 @@ ref has `url` = base + screen id and `location.selector` = `<screen id> <selecto
 | `lcu.calendarEvent`                               | scheduler `events`                                                           | `calendarEvent` (category = `listType`: Holiday / teachingevent)                                                                                                                                                                                                                                                                                                                                           |                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `lcu.exam`                                        | 試験時間割                                                                   | `exam` (`final`, date + period times or explicit time, room)                                                                                                                                                                                                                                                                                                                                               | column layout unobserved (heuristic)                                                                                                                                                                                                                                                                                                                                                                                 |
 | `lcu.attendance`                                  | 出欠                                                                         | fact `attendance` = {attended, absent, late, earlyLeave, excused, invalid, published} on the offering, authoritative                                                                                                                                                                                                                                                                                       |                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `lcu.grade` (opt-in)                              | 成績情報                                                                     | `grade` (score, letter, gradePoint, finalizedAt)                                                                                                                                                                                                                                                                                                                                                           | header 学籍番号/氏名 never parsed                                                                                                                                                                                                                                                                                                                                                                                    |
+| `lcu.grade` (opt-in)                              | 成績情報 (one item per attempt)                                              | `grade` (score, letter, gradePoint, finalizedAt; `extra.evaluation` = label verbatim, `extra.outcome`, academicYear, term, credits, 科目区分, 成績マーカー)                                                                                                                                                                                                                                                | header 学籍番号/氏名 never parsed                                                                                                                                                                                                                                                                                                                                                                                    |
 
 Never stored: `userInformation` (not requested at all), student id/name, cookies, tokens,
 `warningNoticeRequestPath`.
@@ -190,3 +195,21 @@ as drift findings (missing/mismatched ⇒ `degraded`).
 - A full refresh after a process restart re-fetches notice details (capped per run) because the
   cursor is only passed in incremental mode.
 - Calendar events are the current week only.
+
+## Grades: evaluation labels and outcomes
+
+Every grade keeps the evaluation label exactly as LCU shows it (`extra.evaluation`: 秀, 優, 良, 可,
+不可, 合, 否, 再試 …) and a normalized `extra.outcome` from `classifyGradeLabel`
+(`@unicontext/canonical-model`): `passed`, `failed`, `in_progress`, `not_graded`, `withdrawn`,
+`transferred` (認定) or `unknown`. Only `passed` and `transferred` count as earned credits; a label
+outside the tables stays `unknown` and is never counted as passed or failed. 再試 (failed the regular
+exam, re-exam pending) is `not_graded` with `pendingReexam: true`; an interim result (yellow
+background, 「中間点」) is `in_progress`. A re-exam row (試験種別 ≠ 本試験) has its own entity id.
+
+単位修得情報 is stored as one `lcu.creditRequirements` raw item and normalized into a
+`credit_requirements` fact on the student (requirement tree: 必要単位, 修得見込単位, 充足状況, and the
+courses of each requirement with 合格/不合格).
+
+The grade report (`buildGradeReport` in `@unicontext/context-engine`) is shared by
+`get_credit_summary` (local and remote MCP), `GET /api/v1/grades`, `unicontext grades` and the Web UI
+授業 page.

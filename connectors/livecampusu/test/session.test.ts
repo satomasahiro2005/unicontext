@@ -63,6 +63,8 @@ describe('hard-coded request policy (denylist)', () => {
     ['POST', 'SC_13002B00_01/linkselect'],
     ['POST', 'SC_15005B00_01/gredeInformation'],
     ['GET', 'SC_10004B00_01'],
+    ['POST', 'SC_10004B00_01/changeSeisekiKind'],
+    ['GET', 'SC_10004B00_02'],
     ['POST', 'SC_15005B00_01/init'],
     ['GET', 'SC_17001B00_01/../SC_14002B00_03'],
     // servlet-style path parameters and encoded separators do not hide a denied screen/action

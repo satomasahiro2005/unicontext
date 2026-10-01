@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import { type JsonValue, type TaskStatus, TASK_STATUSES } from '@unicontext/canonical-model';
-import { getView, setPaceSlots } from '@unicontext/context-engine';
+import { buildGradeReport, getView, setPaceSlots } from '@unicontext/context-engine';
 import {
   isUniContextError,
   NotFoundError,
@@ -28,6 +28,7 @@ import type {
   AssignmentsResponse,
   ConflictsResponse,
   CoursesResponse,
+  GradesResponse,
   HealthResponse,
   NotificationsResponse,
   PaceResponse,
@@ -38,6 +39,8 @@ import type {
   SettingsResponse,
   SourceRefResponse,
   SourcesResponse,
+  SyncJob,
+  SyncJobResponse,
 } from './api-types.js';
 import { listCourses } from './courses.js';
 import type { Runtime } from './runtime.js';
@@ -259,6 +262,18 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
   };
   const write = { preHandler: requireWrite };
 
+  // Background syncs started with `?wait=0` (kept in memory; the newest 50).
+  const syncJobs = new Map<string, SyncJob>();
+  let syncJobSeq = 0;
+  const rememberSyncJob = (job: SyncJob): void => {
+    syncJobs.set(job.id, job);
+    while (syncJobs.size > 50) {
+      const oldest = syncJobs.keys().next().value;
+      if (oldest === undefined) break;
+      syncJobs.delete(oldest);
+    }
+  };
+
   app.setErrorHandler((error, request, reply) => {
     const status = statusFor(error);
     const fe = error as { statusCode?: number; code?: string; message?: string };
@@ -313,6 +328,30 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
     async (request): Promise<CoursesResponse> =>
       listCourses(uc, { term: request.query.term || undefined }),
   );
+
+  app.get<{ Querystring: { year?: string; status?: string; failed?: string } }>(
+    '/api/v1/grades',
+    async (request): Promise<GradesResponse> => {
+      const q = request.query;
+      const year = q.year && /^\d{4}$/.test(q.year) ? Number(q.year) : undefined;
+      if (q.year && year === undefined) throw new ValidationError('year must be a 4-digit year');
+      const statuses = (q.status ?? '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean);
+      return buildGradeReport(uc, {
+        year,
+        ...(statuses.length ? { statuses } : {}),
+        failedOnly: q.failed === '1' || q.failed === 'true',
+      });
+    },
+  );
+
+  app.get<{ Params: { id: string } }>('/api/v1/sync-jobs/:id', async (request) => {
+    const job = syncJobs.get(request.params.id);
+    if (!job) throw new NotFoundError(`sync job ${request.params.id}`);
+    return { job } satisfies SyncJobResponse;
+  });
 
   app.get<{ Params: { id: string } }>('/api/v1/courses/:id', async (request) =>
     getView(uc.context, 'course', { courseOfferingId: request.params.id }),
@@ -462,13 +501,39 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
   }));
 
   // ---- writes (bearer token or CSRF) -----------------------------------------------------
-  app.post<{ Params: { id: string }; Body: unknown }>(
+  // A sync can outlast any HTTP client timeout (LCU: minutes). `?wait=0` starts it in the
+  // background and answers 202 with a job to poll; without it the request waits for the report.
+  app.post<{ Params: { id: string }; Querystring: { wait?: string }; Body: unknown }>(
     '/api/v1/sources/:id/sync',
     write,
-    async (request) => {
-      requireSource(runtime, request.params.id);
-      const report = await uc.scheduler.trigger(request.params.id);
-      return { report };
+    async (request, reply) => {
+      const sourceId = request.params.id;
+      requireSource(runtime, sourceId);
+      if (request.query.wait !== '0' && request.query.wait !== 'false') {
+        const report = await uc.scheduler.trigger(sourceId);
+        return { report };
+      }
+      const job: SyncJob = {
+        id: `${sourceId}-${Date.now().toString(36)}-${(++syncJobSeq).toString(36)}`,
+        sourceId,
+        state: 'running',
+        startedAt: new Date().toISOString(),
+      };
+      rememberSyncJob(job);
+      uc.scheduler.trigger(sourceId).then(
+        (report) => {
+          job.report = report;
+          job.state = report.ok ? 'done' : 'failed';
+          if (!report.ok && report.error) job.error = report.error;
+          job.finishedAt = new Date().toISOString();
+        },
+        (e: unknown) => {
+          job.state = 'failed';
+          job.error = errorMessage(e);
+          job.finishedAt = new Date().toISOString();
+        },
+      );
+      return reply.code(202).send({ job } satisfies SyncJobResponse);
     },
   );
 

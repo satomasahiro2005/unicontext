@@ -43,6 +43,8 @@ export const LcuScreensSchema = z.object({
   attendance: screenId,
   gradeDashboard: screenId,
   grades: screenId,
+  /** 単位修得情報 (requirement status), reached from the grade screen. Opt-in like grades. */
+  creditRequirements: screenId.optional(),
 });
 export type LcuScreens = z.infer<typeof LcuScreensSchema>;
 
@@ -63,6 +65,16 @@ export const LcuActionsSchema = z.object({
   /** 出欠状況一覧 search (per year/semester); without it only the default (current) semester is read. */
   attendanceSearch: relPath.optional(),
   gradesFromDashboard: relPath,
+  /**
+   * Switch of the grade list between 修得成績 and 履修中含む (registered courses without an
+   * evaluation yet). The value of `gradesKindField` selects the view.
+   */
+  gradesChangeKind: relPath.optional(),
+  gradesKindField: z.string().default('seisekiKind'),
+  /** Value of `gradesKindField` for the 履修中含む view. */
+  gradesKindIncludingInProgress: z.string().optional(),
+  /** Grade screen → 単位修得情報 (requirement status). */
+  gradesToRequirements: relPath.optional(),
 });
 export type LcuActions = z.infer<typeof LcuActionsSchema>;
 

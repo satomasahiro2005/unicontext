@@ -14,6 +14,12 @@ import type {
   CourseContext,
   DeadlineContext,
   DeadlineItem,
+  GradeAttempt,
+  GradeCourse,
+  GradeLabelCount,
+  GradePeriodTotals,
+  GradeReport,
+  CreditRequirementsView,
   LectureBundle,
   PaceCourseItem,
   PaceItem,
@@ -50,6 +56,11 @@ export type {
   CourseRef,
   DeadlineContext,
   DeadlineItem,
+  GradeAttempt,
+  GradeCourse,
+  GradeLabelCount,
+  GradePeriodTotals,
+  CreditRequirementsView,
   LectureBundle,
   Notification,
   PaceCourseItem,
@@ -164,10 +175,30 @@ export interface SourcesResponse {
   sources: SourceInfo[];
 }
 
-/** POST /api/v1/sources/:id/sync */
+/** POST /api/v1/sources/:id/sync (waits for the run to finish) */
 export interface SyncResponse {
   report: SyncRunReport;
 }
+
+/**
+ * A sync started in the background: `POST /api/v1/sources/:id/sync?wait=0` answers 202 with the
+ * job, `GET /api/v1/sync-jobs/:id` reports it until `state` is done or failed.
+ */
+export interface SyncJob {
+  id: string;
+  sourceId: string;
+  state: 'running' | 'done' | 'failed';
+  startedAt: string;
+  finishedAt?: string;
+  report?: SyncRunReport;
+  error?: string;
+}
+export interface SyncJobResponse {
+  job: SyncJob;
+}
+
+/** GET /api/v1/grades?year=&status=&failed=1: every attempt with evaluation label and outcome. */
+export type GradesResponse = GradeReport;
 
 /** GET /api/v1/source-refs/:id: where a citation points (§49). `rawPayload` only with `?raw=1`. */
 export interface SourceRefResponse {

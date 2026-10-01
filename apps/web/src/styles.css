@@ -953,3 +953,29 @@ legend {
 main:has(.week-grid) {
   max-width: 1280px;
 }
+
+/* ---- grades ---- */
+
+.grade-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.grade-table th,
+.grade-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.grade-table thead th {
+  background: var(--surface-2);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.grade-table td.num {
+  text-align: right;
+}

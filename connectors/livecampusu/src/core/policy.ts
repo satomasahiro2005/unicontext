@@ -45,7 +45,7 @@ const DENIED_SCREEN_PATTERNS: readonly RegExp[] = [
 
 const ROW_TRANSITION = /^(rowselect|linkselect)$/i;
 const DEFAULT_NOTICE_DETAIL_SCREENS = ['SC_17001B00_02'];
-const DEFAULT_GRADE_SCREENS = ['SC_10004B00_01', 'SC_15005B00_01'];
+const DEFAULT_GRADE_SCREENS = ['SC_10004B00_01', 'SC_10004B00_02', 'SC_15005B00_01'];
 const GRADE_ACTIONS = /^(grede|grade)information$/i;
 
 export type PolicyGrant = 'notice-detail';

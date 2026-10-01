@@ -52,7 +52,6 @@ function isConnectionFailure(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
   const cause = (e as { cause?: { code?: string } }).cause;
   return (
-    e.name === 'TimeoutError' ||
     (e instanceof TypeError && /fetch failed/i.test(e.message)) ||
     cause?.code === 'ECONNREFUSED' ||
     cause?.code === 'ECONNRESET'
@@ -153,6 +152,13 @@ export function describeError(e: unknown): DescribedError {
     return {
       message: `データベースエラー（${code}）: ${errorMessage(e)}`,
       hint: '「unicontext doctor」でデータ保存先を確認してください',
+      exitCode: 1,
+    };
+  }
+  if (e instanceof Error && e.name === 'TimeoutError') {
+    return {
+      message: 'デーモンが時間内に応答しませんでした',
+      hint: 'デーモンは処理を続けている可能性があります。「unicontext status」で状態を確認してください',
       exitCode: 1,
     };
   }

@@ -135,6 +135,10 @@ export class FakeLcuServer {
   attendanceSemester = '2';
   /** Simulate a semester switch that does not take effect (the page keeps showing 前期). */
   ignoreSemesterSwitch = false;
+  /** 成績情報 tab: '3' 修得成績 (default) / '1' 履修中含む. */
+  gradesKind = '3';
+  /** When true, changeSeisekiKind is ignored (the page keeps the default tab). */
+  ignoreGradesKind = false;
   lastRowIndex = 0;
   options: FakeLcuOptions;
   importantNotice: unknown[];
@@ -403,8 +407,25 @@ ${body}</body></html>`;
         return this.html('<main><h2>成績ダッシュボード</h2></main>', '成績ダッシュボード');
       case 'POST SC_15005B00_01/gredeInformation':
         return this.redirect('SC_10004B00_01');
+      case 'POST SC_10004B00_01/changeSeisekiKind':
+        if (!this.ignoreGradesKind) this.gradesKind = form?.get('seisekiKind') ?? '3';
+        return this.redirect('SC_10004B00_01');
       case 'GET SC_10004B00_01':
-        return this.html(fixture('lcu-grades-shape-SC_10004B00_01.html'), '成績情報');
+        return this.html(
+          fixture(
+            this.gradesKind === '1'
+              ? 'lcu-grades-inprogress-SC_10004B00_01.synthetic.html'
+              : 'lcu-grades-SC_10004B00_01.synthetic.html',
+          ),
+          '成績情報',
+        );
+      case 'POST SC_10004B00_01/forward':
+        return this.redirect('SC_10004B00_02');
+      case 'GET SC_10004B00_02':
+        return this.html(
+          fixture('lcu-credit-requirements-SC_10004B00_02.synthetic.html'),
+          '単位修得情報',
+        );
       default:
         return this.errorPage();
     }

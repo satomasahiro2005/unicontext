@@ -4,6 +4,9 @@ import {
   countUnhealthy,
   entityKindLabel,
   fieldLabel,
+  GRADE_OUTCOME_ORDER,
+  gradeOutcomeLabel,
+  gradeOutcomeTone,
   healthLabel,
   healthSeverity,
   healthTone,
@@ -71,5 +74,34 @@ describe('other labels', () => {
     expect(scheduleTypeLabel('unscheduled')).toBe('時間割外');
     expect(scheduleTypeLabel('intensive')).toBe('集中講義');
     expect(scheduleTypeLabel('regular')).toBe('時間割');
+  });
+});
+
+describe('grade outcome labels', () => {
+  it('labels and colours every outcome, falling back to the raw value', () => {
+    expect(GRADE_OUTCOME_ORDER).toEqual([
+      'passed',
+      'failed',
+      'in_progress',
+      'not_graded',
+      'withdrawn',
+      'transferred',
+      'unknown',
+    ]);
+    expect(GRADE_OUTCOME_ORDER.map(gradeOutcomeLabel)).toEqual([
+      '合格',
+      '不合格',
+      '履修中',
+      '未評価',
+      '放棄・取消',
+      '認定',
+      '不明',
+    ]);
+    expect(gradeOutcomeTone('passed')).toBe('ok');
+    expect(gradeOutcomeTone('transferred')).toBe('ok');
+    expect(gradeOutcomeTone('failed')).toBe('bad');
+    expect(gradeOutcomeTone('in_progress')).toBe('info');
+    expect(gradeOutcomeTone('unknown')).toBe('warn');
+    expect(gradeOutcomeLabel('something')).toBe('something');
   });
 });

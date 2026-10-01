@@ -6,14 +6,19 @@ import {
   extractTokens,
   findEventsLiteral,
   gradeTableColumns,
+  gradeViewKind,
   GRADE_COLUMNS,
+  GRADE_HIDDEN_COLUMNS,
   jsLiteralToJson,
   parseAssignmentCells,
   parseAssignmentList,
   parseAttendance,
   parseCalendarEvents,
   parseExamTimetable,
+  parseCreditRequirements,
+  parseGradeMarkers,
   parseGrades,
+  parseLcuReportTerm,
   parseNoticeDetail,
   parseNoticeList,
   parseSubjectKey,
@@ -25,6 +30,8 @@ import {
   periodFromLabel,
   pluginFingerprint,
   screenIdFromUrl,
+  selectedOption,
+  splitGradeMarkers,
   splitTitleClass,
   stripJsessionid,
   TESTED_FINGERPRINT,
@@ -250,37 +257,150 @@ describe('JSON fixtures', () => {
   });
 });
 
-describe('grades SC_10004B00_01 (shape only)', () => {
-  it('finds the grade columns and no rows in the shape fixture', () => {
+describe('grades SC_10004B00_01', () => {
+  it('reads every column id of the real table (8 hidden) and no rows from the shape fixture', () => {
     const html = fixture('lcu-grades-shape-SC_10004B00_01.html');
-    expect(gradeTableColumns(html)).toEqual([...GRADE_COLUMNS]);
+    const cols = gradeTableColumns(html);
+    expect(cols).toHaveLength(21);
+    expect(cols.filter((c) => (GRADE_COLUMNS as readonly string[]).includes(c))).toEqual([
+      ...GRADE_COLUMNS,
+    ]);
+    expect(cols.filter((c) => (GRADE_HIDDEN_COLUMNS as readonly string[]).includes(c))).toEqual([
+      ...GRADE_HIDDEN_COLUMNS,
+    ]);
     expect(parseGrades(html)).toEqual([]);
+    expect(gradeViewKind(html)).toBe('earned');
+    expect(selectedOption(html, 'requirementTypeCode')).toEqual({
+      value: '01',
+      label: '卒業要件（学士課程）',
+    });
   });
 
-  it('maps a synthetic row by column id (never reading the 学籍番号 header)', () => {
-    const html = fixture('lcu-grades-shape-SC_10004B00_01.html').replace(
-      '<!-- 69 rows removed -->',
-      '<tr><td>77401100</td><td>情報理論</td><td>教員 花子</td><td>専門</td><td>必修</td><td>2.0</td><td>88</td><td>A</td><td>3.0</td><td>2026前期</td><td>2026/08/20</td><td></td><td>定期</td></tr>',
-    );
+  it('parses every attempt with the verbatim evaluation, its outcome, year and term', () => {
+    const html = fixture('lcu-grades-SC_10004B00_01.synthetic.html');
     const rows = parseGrades(html);
-    expect(rows).toEqual([
-      {
-        subjectCode: '77401100',
-        subjectName: '情報理論',
-        staffName: '教員 花子',
-        category: '専門',
-        creditType: '必修',
-        credits: 2,
-        score: 88,
-        mark: 'A',
-        gradePoint: 3,
-        reportTerm: '2026前期',
-        reportDate: '2026/08/20',
-        examType: '定期',
-      },
+    expect(rows).toHaveLength(14);
+    // A course failed three times: three rows, one per year.
+    const intro = rows.filter((r) => r.subjectCode === '90000001');
+    expect(intro.map((r) => [r.academicYear, r.term, r.mark, r.outcome])).toEqual([
+      [2024, '前期', '不可', 'failed'],
+      [2025, '前期', '不可', 'failed'],
+      [2026, '前期', '不可', 'failed'],
     ]);
+    expect(intro[0]).toMatchObject({
+      subjectName: 'サンプル入門',
+      credits: 2,
+      score: 9,
+      gradePoint: 0,
+      markCode: '05',
+      markHighlighted: true,
+      termPart: '前期後半',
+      reportTerm: '2024年度 前期 前期後半',
+      reportDate: '2024/08/20',
+      examType: '本試験',
+      examTypeCode: '1',
+      category: '必修',
+      categoryOrder: 1001,
+      creditType: '必',
+      creditTypeCode: '1',
+      staffName: '教員 一郎',
+    });
+    const byMark = Object.fromEntries(rows.map((r) => [r.mark, r.outcome]));
+    expect(byMark).toEqual({
+      不可: 'failed',
+      優: 'passed',
+      合: 'passed',
+      否: 'failed',
+      秀: 'passed',
+      良: 'passed',
+      再試: 'not_graded',
+      認定: 'transferred',
+      評価保留中: 'unknown',
+    });
+    // 成績マーカー: stripped from the title, explained by the marker table.
+    const online = rows.find((r) => r.subjectCode === '90000003');
+    expect(online).toMatchObject({
+      subjectName: 'オンライン教養',
+      markers: [{ symbol: '+', label: 'オンライン科目' }],
+    });
+    expect(online?.score).toBeUndefined();
+    expect(parseGradeMarkers(html)).toEqual([
+      { symbol: '+', label: 'オンライン科目', capCredits: 10, totalCredits: 2 },
+    ]);
+    expect(rows.find((r) => r.examType === '再試験')).toMatchObject({ mark: '不可' });
+    expect(rows.find((r) => r.mark === '認定')?.replacedSubjectName).toBe('サンプル検定');
     expect(JSON.stringify(rows)).not.toContain('S0000000');
     expect(JSON.stringify(rows)).not.toContain('学生 太郎');
+  });
+
+  it('reads the 履修中含む view: registered courses without a mark and interim results', () => {
+    const html = fixture('lcu-grades-inprogress-SC_10004B00_01.synthetic.html');
+    expect(gradeViewKind(html)).toBe('includingInProgress');
+    const rows = parseGrades(html);
+    expect(rows).toHaveLength(16);
+    expect(rows.find((r) => r.subjectCode === '90000011')).toMatchObject({
+      outcome: 'in_progress',
+      academicYear: 2026,
+      term: '後期',
+    });
+    expect(rows.find((r) => r.subjectCode === '90000011')?.mark).toBeUndefined();
+    expect(rows.find((r) => r.subjectCode === '90000012')).toMatchObject({
+      mark: '良',
+      interim: true,
+      outcome: 'in_progress',
+    });
+  });
+
+  it('splits report terms and markers', () => {
+    expect(parseLcuReportTerm('2025年度 後期 後期前半')).toEqual({
+      academicYear: 2025,
+      term: '後期',
+      termPart: '後期前半',
+    });
+    expect(parseLcuReportTerm('2026前期')).toEqual({ academicYear: 2026, term: '前期' });
+    expect(parseLcuReportTerm('')).toEqual({});
+    expect(splitGradeMarkers('+＊科目', [{ symbol: '+', label: 'オンライン科目' }])).toEqual({
+      title: '科目',
+      markers: [{ symbol: '+', label: 'オンライン科目' }, { symbol: '＊' }],
+    });
+    expect(splitGradeMarkers('+')).toEqual({ title: '+', markers: [] });
+  });
+});
+
+describe('単位修得情報 SC_10004B00_02', () => {
+  it('reads the requirement tree with depth, required / expected credits and course results', () => {
+    const req = parseCreditRequirements(
+      fixture('lcu-credit-requirements-SC_10004B00_02.synthetic.html'),
+    );
+    expect(req?.requirementType).toEqual({ code: '01', name: '卒業要件（学士課程）' });
+    expect(req?.rows.map((r) => [r.depth, r.name, r.required, r.expected, r.status])).toEqual([
+      [0, '卒業要件（学士課程）', 124, 30, '不足'],
+      [0, '教養科目', 30, 8, '不足'],
+      [1, '教養基礎科目', 10, 4, '不足'],
+      [2, '教養基礎科目', undefined, 4, undefined],
+      [3, 'サンプル基礎', 2, 2, '充足'],
+      [3, 'サンプル選択群', 4, 0, '不足'],
+      [0, '専門科目', 94, 22, '不足'],
+      [1, '学科専門科目／必修', 40, 22, '不足'],
+      [2, '学科専門科目／必修', undefined, 22, undefined],
+      [3, '必修', 40, 22, '不足'],
+    ]);
+    const group = req?.rows.find((r) => r.name === 'サンプル選択群');
+    expect(group?.creditType).toBe('選必');
+    expect(group?.courses).toEqual([
+      { title: 'サンプル統計', creditType: '選必', credits: 2 },
+      { title: 'サンプル選択Ａ', creditType: '選必', credits: 2, status: '不合格' },
+      { title: 'サンプル選択Ｂ', creditType: '選必', credits: 2 },
+    ]);
+    expect(req?.rows.find((r) => r.name === 'サンプル基礎')?.courses[0]).toMatchObject({
+      title: 'オンライン教養',
+      markers: [{ symbol: '+' }],
+      status: '合格',
+    });
+  });
+
+  it('returns undefined for a page without the requirement table', () => {
+    expect(parseCreditRequirements('<main><p>no table</p></main>')).toBeUndefined();
   });
 });
 

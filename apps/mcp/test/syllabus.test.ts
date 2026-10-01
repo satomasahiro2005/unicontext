@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type CanonicalEntityInput, stableId } from '@unicontext/canonical-model';
-import { createUniContext, type UniContext } from '@unicontext/context-engine';
+import { createUniContext, parseReportTermText, type UniContext } from '@unicontext/context-engine';
 import {
   defineMetadata,
   type NormalizeOutput,
@@ -31,9 +31,7 @@ import {
   getCreditSummary,
   getSyllabus,
   getSyllabusShape,
-  judgeGrade,
   parseGradeYears,
-  parseReportTerm,
   parseSlotText,
   SEARCH_SYLLABUS_DESCRIPTION,
   searchSyllabus,
@@ -262,18 +260,32 @@ const OFFERINGS: Offering[] = [
 
 interface GradeSpec {
   key: string;
+  code?: string;
   term: string;
   credits: number;
   letter?: string;
   gradePoint?: number;
+  extra?: Record<string, unknown>;
 }
 const GRADES: GradeSpec[] = [
   { key: 'g1', term: '2026前期', credits: 2, letter: '秀', gradePoint: 4 },
   { key: 'g2', term: '2026前期', credits: 2, letter: '良', gradePoint: 2 },
-  { key: 'g3', term: '2026前期', credits: 2, letter: '不可', gradePoint: 0 },
+  // A retake: failed in 2025 後期 and again in 2026 前期.
+  { key: 'g3', code: 'R1', term: '2026前期', credits: 2, letter: '不可', gradePoint: 0 },
+  { key: 'g7', code: 'R1', term: '2025後期', credits: 2, letter: '不可', gradePoint: 0 },
   { key: 'g4', term: '2025後期', credits: 3, letter: '優', gradePoint: 3 },
+  // No label at all, and a label outside the tables: both unknown, never counted.
   { key: 'g5', term: '2025後期', credits: 1 },
   { key: 'g6', term: '2025後期', credits: 2, letter: 'D', gradePoint: 1 },
+  { key: 'g8', term: '2026前期', credits: 1, letter: '認定' },
+  // The connector's own classification wins (LiveCampusU 再試 = waiting for the re-exam).
+  {
+    key: 'g9',
+    term: '2026前期',
+    credits: 2,
+    letter: '再試',
+    extra: { evaluation: '再試', outcome: 'not_graded', pendingReexam: true },
+  },
 ];
 
 function lcuEntities(): CanonicalEntityInput[] {
@@ -309,7 +321,13 @@ function lcuEntities(): CanonicalEntityInput[] {
       kind: 'grade',
       ...(g.letter ? { letter: g.letter } : {}),
       ...(g.gradePoint !== undefined ? { gradePoint: g.gradePoint } : {}),
-      extra: { credits: g.credits, reportTerm: g.term, subjectCode: g.key },
+      extra: {
+        credits: g.credits,
+        reportTerm: g.term,
+        subjectCode: g.code ?? g.key,
+        subjectName: `科目${g.code ?? g.key}`,
+        ...(g.extra ?? {}),
+      },
     });
   return out;
 }
@@ -441,16 +459,13 @@ describe('helpers', () => {
     expect(parseSlotText('月3')).toEqual([{ dayOfWeek: 1, period: 3 }]);
     expect(parseSlotText('木3・4')).toEqual([{ dayOfWeek: 4, period: 2 }]);
     expect(() => parseSlotText('いつか')).toThrow(ValidationError);
-    expect(parseReportTerm('2026前期')).toEqual({ year: 2026, term: '前期' });
-    expect(parseReportTerm('2025年度後期')).toEqual({ year: 2025, term: '後期' });
-    expect(judgeGrade({ letter: '秀', gradePoint: 4 })).toBe('passed');
-    expect(judgeGrade({ letter: '不可', gradePoint: 0 })).toBe('failed');
-    expect(judgeGrade({ letter: '欠席' })).toBe('failed');
-    expect(judgeGrade({ letter: 'F', gradePoint: 1 })).toBe('failed');
-    expect(judgeGrade({ letter: 'A', gradePoint: 0 })).toBe('failed');
-    expect(judgeGrade({ letter: 'D', gradePoint: 1 })).toBe('passed');
-    expect(judgeGrade({ letter: '認定' })).toBe('passed');
-    expect(judgeGrade({})).toBe('unknown');
+    expect(parseReportTermText('2026前期')).toEqual({ academicYear: 2026, term: '前期' });
+    expect(parseReportTermText('2025年度後期')).toEqual({ academicYear: 2025, term: '後期' });
+    expect(parseReportTermText('2025年度 後期 後期前半')).toEqual({
+      academicYear: 2025,
+      term: '後期',
+      termPart: '後期前半',
+    });
   });
 });
 
@@ -735,27 +750,51 @@ describe('get_syllabus', () => {
   });
 });
 
+type Outcomes = Record<string, number>;
+type CreditTerm = {
+  term: string;
+  registeredCredits: number;
+  registeredCourses: number;
+  earnedCredits: number;
+  failedCredits: number;
+  inProgressCredits: number;
+  notGradedCredits: number;
+  withdrawnCredits: number;
+  transferredCredits: number;
+  unknownCredits: number;
+  gradedCourses: number;
+  outcomeCounts: Outcomes | null;
+};
+type CreditAttempt = {
+  academicYear: number | null;
+  term: string | null;
+  evaluation: string;
+  outcome: string;
+  pendingReexam?: boolean;
+};
 type CreditData = {
   currentTerm: { academicYear: number; term: string; label: string };
   cap: { perTerm: number | null; perYear: number | null; note: string | null } | null;
   registeredThisTerm: { credits: number; courses: number; unknownCreditCourses: number };
   remainingUnderCap: number | null;
-  terms: {
-    term: string;
-    registeredCredits: number;
-    registeredCourses: number;
-    earnedCredits: number;
-    failedCredits: number;
-    unjudgedCredits: number;
-    gradedCourses: number;
-  }[];
-  totals: {
-    registeredCredits: number;
-    earnedCredits: number;
-    failedCredits: number;
-    unjudgedCredits: number;
-  };
+  terms: CreditTerm[];
+  years: { academicYear: number | null; earnedCredits: number; failedCredits: number }[];
+  totals: Omit<CreditTerm, 'term' | 'registeredCourses' | 'gradedCourses' | 'outcomeCounts'>;
   earnedCreditsAllYears: number;
+  evaluationLabels: { evaluation: string; outcome: string; count: number }[];
+  courses: {
+    subjectCode?: string;
+    title: string;
+    status: string;
+    statusEvaluation: string;
+    earned: boolean;
+    attemptCount: number;
+    failedAttempts: number;
+    latest: CreditAttempt;
+    attempts: CreditAttempt[];
+  }[];
+  coursesNotEarned: { subjectCode?: string; latestOutcome: string; failedAttempts: number }[];
+  requirements: unknown;
   notes: string[];
 };
 
@@ -776,30 +815,73 @@ describe('get_credit_summary', () => {
     expect(byTerm['2026 前期']).toMatchObject({
       registeredCredits: 4,
       registeredCourses: 2,
-      earnedCredits: 4, // 秀 2 + 良 2
+      earnedCredits: 5, // 秀 2 + 良 2 + 認定 1
+      transferredCredits: 1,
       failedCredits: 2, // 不可
-      unjudgedCredits: 0,
-      gradedCourses: 3,
+      notGradedCredits: 2, // 再試 (waiting for the re-exam)
+      unknownCredits: 0,
+      gradedCourses: 5,
     });
     expect(byTerm['2025 後期']).toMatchObject({
       registeredCourses: 0,
-      earnedCredits: 5, // 優 3 + D (gradePoint 1) 2
-      failedCredits: 0,
-      unjudgedCredits: 1, // no letter, no grade point
-      gradedCourses: 3,
+      earnedCredits: 3, // 優 3; D is not a known label
+      failedCredits: 2,
+      unknownCredits: 3, // no label (1) + D (2): never counted as passed or failed
+      gradedCourses: 4,
     });
     expect(byTerm['2026 後期']).toMatchObject({ registeredCredits: 5, earnedCredits: 0 });
-    expect(d.totals).toEqual({
+    expect(d.totals).toMatchObject({
       registeredCredits: 9,
-      earnedCredits: 9,
-      failedCredits: 2,
-      unjudgedCredits: 1,
+      earnedCredits: 8,
+      failedCredits: 4,
+      notGradedCredits: 2,
+      unknownCredits: 3,
     });
-    expect(d.earnedCreditsAllYears).toBe(9);
+    expect(d.earnedCreditsAllYears).toBe(8);
+    expect(d.years.map((y) => [y.academicYear, y.earnedCredits, y.failedCredits])).toEqual([
+      [2025, 3, 2],
+      [2026, 5, 2],
+    ]);
+
+    // Every attempt per course, oldest first, with the verbatim label and its outcome.
+    const retake = d.courses.find((c) => c.subjectCode === 'R1');
+    expect(retake).toMatchObject({
+      title: '科目R1',
+      attemptCount: 2,
+      failedAttempts: 2,
+      earned: false,
+      status: 'failed',
+      statusEvaluation: '不可',
+      latest: { academicYear: 2026, term: '前期', evaluation: '不可', outcome: 'failed' },
+    });
+    expect(retake?.attempts.map((a) => [a.academicYear, a.term])).toEqual([
+      [2025, '後期'],
+      [2026, '前期'],
+    ]);
+    expect(d.courses.find((c) => c.subjectCode === 'g9')?.latest).toMatchObject({
+      evaluation: '再試',
+      outcome: 'not_graded',
+      pendingReexam: true,
+    });
+    expect(d.courses.find((c) => c.subjectCode === 'g6')).toMatchObject({
+      statusEvaluation: 'D',
+      status: 'unknown',
+    });
+    expect(d.coursesNotEarned.map((c) => c.subjectCode).sort()).toEqual(['R1', 'g5', 'g6', 'g9']);
+    expect(d.evaluationLabels).toEqual(
+      expect.arrayContaining([
+        { evaluation: '不可', outcome: 'failed', count: 2 },
+        { evaluation: 'D', outcome: 'unknown', count: 1 },
+        { evaluation: '', outcome: 'unknown', count: 1 },
+        { evaluation: '認定', outcome: 'transferred', count: 1 },
+      ]),
+    );
     const notes = d.notes.join('\n');
     expect(notes).toMatch(/目安/);
     expect(notes).toMatch(/単位数が不明/);
-    expect(notes).toMatch(/合否を判定できず/);
+    expect(notes).toMatch(
+      /区分を判定できない評価があります（空欄、D）|区分を判定できない評価があります（D、空欄）/,
+    );
 
     const envelope = buildEnvelope(out.data, out.options);
     expect(envelope.citations.length).toBeGreaterThan(0);
@@ -810,10 +892,12 @@ describe('get_credit_summary', () => {
     const uc = await createUc();
     const d = getCreditSummary(uc, { year: 2025 }).data as CreditData;
     expect(d.terms.map((t) => t.term)).toEqual(['2025 後期']);
-    expect(d.totals).toMatchObject({ earnedCredits: 5, registeredCredits: 0 });
+    expect(d.totals).toMatchObject({ earnedCredits: 3, registeredCredits: 0 });
+    // the retake is listed with its whole history even when only one year is asked for
+    expect(d.courses.find((c) => c.subjectCode === 'R1')?.attemptCount).toBe(2);
     // registered-this-term and all-years earned credits do not depend on the filter
     expect(d.registeredThisTerm.credits).toBe(5);
-    expect(d.earnedCreditsAllYears).toBe(9);
+    expect(d.earnedCreditsAllYears).toBe(8);
     expect(getCreditSummary(uc, { year: null }).data).toHaveProperty('terms');
   });
 

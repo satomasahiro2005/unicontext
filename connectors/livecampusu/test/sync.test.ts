@@ -75,7 +75,9 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
         'lcu.warningNotice',
         'lcu.notice',
         'lcu.attendance',
+        // Grades are off here: the disabled opt-in types are complete with zero items.
         'lcu.grade',
+        'lcu.creditRequirements',
       ].sort(),
     );
     expect(result.productVersion).toEqual({ product: 'livecampusu', version: TESTED_FINGERPRINT });
@@ -210,10 +212,47 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
     expect(r.complete?.sourceTypes).toContain('lcu.grade');
     expect(await off.adapter.capabilities()).not.toContain('grades');
 
+    expect(r.complete?.sourceTypes).toContain('lcu.creditRequirements');
+    expect(r.items.some((i) => i.sourceType === 'lcu.grade')).toBe(false);
+
     const on = setup({}, { grades: true });
-    await on.adapter.sync({ mode: 'initial' });
-    expect(on.server.paths()).toContain('POST SC_15005B00_01/gredeInformation');
+    const g = await on.adapter.sync({ mode: 'initial' });
+    expect(on.server.paths()).toEqual(
+      expect.arrayContaining([
+        'POST SC_15005B00_01/gredeInformation',
+        'POST SC_10004B00_01/changeSeisekiKind',
+        'POST SC_10004B00_01/forward',
+        'GET SC_10004B00_02',
+      ]),
+    );
     expect(await on.adapter.capabilities()).toContain('grades');
+    // 履修中含む view: every attempt of every year plus the registered, ungraded ones.
+    const grades = g.items.filter((i) => i.sourceType === 'lcu.grade');
+    expect(grades).toHaveLength(16);
+    expect(new Set(grades.map((i) => i.externalId)).size).toBe(16);
+    expect(
+      grades.every((i) => (i.payload as { view?: string }).view === 'includingInProgress'),
+    ).toBe(true);
+    const years = grades.map((i) => (i.payload as { academicYear?: number }).academicYear);
+    expect(new Set(years)).toEqual(new Set([2024, 2025, 2026]));
+    const req = g.items.filter((i) => i.sourceType === 'lcu.creditRequirements');
+    expect(req).toHaveLength(1);
+    expect(req[0]?.externalId).toBe('01');
+    expect((req[0]?.payload as { markers?: unknown[] }).markers).toHaveLength(1);
+    expect(g.complete?.sourceTypes).toEqual(
+      expect.arrayContaining(['lcu.grade', 'lcu.creditRequirements']),
+    );
+    expect(JSON.stringify(g.items)).not.toContain('S0000000');
+    expect(JSON.stringify(g.items)).not.toContain('学生 太郎');
+  });
+
+  it('keeps the default grade view (with a warning) when the 履修中含む switch does not apply', async () => {
+    const { server, adapter } = setup({}, { grades: true });
+    server.ignoreGradesKind = true;
+    const r = await adapter.sync({ mode: 'initial' });
+    expect(r.items.filter((i) => i.sourceType === 'lcu.grade')).toHaveLength(14);
+    expect(r.warnings?.join('\n')).toMatch(/履修中含む/);
+    expect(r.complete?.sourceTypes).toContain('lcu.grade');
   });
 
   it('reports an unknown product version (→ degraded) and checks common.js only when needed', async () => {

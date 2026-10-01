@@ -1,0 +1,220 @@
+<!-- UniContext fixture (SYNTHETIC values, real structure). 成績情報 SC_10004B00_01 from 成績ダッシュボード SC_15005B00_01 POST SC_15005B00_01/gredeInformation, observed 2026-10-01. Tabs 修得成績 (changeSeisekiKind(3), default) / 履修中含む (changeSeisekiKind(1)); both list failed attempts and re-exams. Grade table id="02" has 21 columns, 8 of them hidden (_visible="false": sort keys and codes). Failing evaluations are wrapped in span.fontBoldRed; interim results in span.backYellow. 認定 and 評価保留中 were not on the real page; they test the classification. -->
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8"><title>成績情報</title></head><body>
+<script>
+function changeSeisekiKind(seisekiKind) {
+    $('#SC_10004B00_SearchForm_seisekiKind').val(seisekiKind);
+    return exPostSubmit('SC_10004B00_SearchForm', 'SC_10004B00_01/changeSeisekiKind');
+}
+function changeRequirementtype() {
+	return exPostSubmit("SC_10004B00_SearchForm", "SC_10004B00_01/changeRequirementtype");
+}
+$(function() {
+	popupMenuForReport();
+	$("td:has(span.backYellow)").addClass("backYellow");
+});
+</script>
+<main class="c-container">
+<div class="c-contents">
+  <div class="c-breadcrumbs"></div>
+  <div class="c-heading-h1-container">
+    <h2 class="c-heading-h1">
+       成績情報
+    </h2>
+        <p class="c-heading-description">成績情報は以下の通りとなります。<br>得点、評価の背景が黄色のものは中間点です。</p>
+    <p class="c-heading-description">科目名の先頭にある成績マーカーについては、<a style="color: #0000EE;" target="_blank" href="https://gakujo.shizuoka.ac.jp/lcu-web/pdf/seisekiMarkerList.pdf">《成績マーカー一覧表》</a>をご確認ください。</p>
+  </div>
+  <div class="c-expands">
+    <div class="c-expand">
+      <form id="SC_10004B00_SearchForm" class="h-adr" action="/lcu-web/SC_10004B00_01" method="post">
+        <div class="c-heading-container -all-over">
+          <div class="c-heading-contents -between">
+            <div class="c-heading-h3-container">
+              <h3 class="c-heading-h3">
+                学籍番号&nbsp;:&nbsp;S0000000
+              </h3>
+              <h3 class="c-heading-h3">
+                学生氏名&nbsp;:&nbsp;学生 太郎
+              </h3>
+            </div>
+            <div class="side-left">
+              <p class="c-half-btn">
+                      <a class="is-active">修得成績</a>
+                    
+                    
+                  
+                
+                  
+                    
+                    
+                      <a href="javascript:changeSeisekiKind(1)">履修中含む</a>
+                <input type="hidden" id="SC_10004B00_SearchForm_seisekiKind" name="seisekiKind" value="" />
+              </p>
+            </div>
+            <div class="side-right u-w100per-sp">
+              <div class="c-form-box u-w100per-sp">
+                  要件：
+                    <div class="select_wrapper u-w100per-sp"><select id="requirementTypeCode" name="requirementTypeCode" class="select u-w260-pc u-w100per-sp js-select" onchange="changeRequirementtype()"><option value="01" selected="selected">卒業要件（学士課程）</option><option value="ZZ">履修カルテ用教職要件</option></select></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      <div>
+<input type="hidden" name="_csrf" value="00000000-0000-0000-0000-000000000000" />
+</div></form>
+      <div class="c-box-shadow">
+          <div class="seiseki-marker-contents-body -small">
+            <table class="c-table nowrap c-table-pd-narrow c-table-omitted hover no-footer" style="width:auto">
+              <thead>
+                <tr>
+                  <th class="title -center" tabindex="0" aria-controls="02" style="width:auto"><p>成績マーカー</p></th>
+                  <th class="title -center" tabindex="0" aria-controls="02" style="width:auto"><p>上限単位数</p></th>
+                  <th class="title -center" tabindex="0" aria-controls="02" style="width:auto"><p>合計単位数</p></th>
+                </tr>
+              </thead>
+              <tbody>
+                  <tr class="is-unread odd" _index="0">
+                    <td class="content is-source " id="content">+オンライン科目</td>
+                    <td class="content is-source " id="content" style="text-align: right;">10.0</td>
+                    <td class="content is-source " id="content" style="text-align: right;">2.0</td>
+                  </tr>
+              </tbody>
+            </table>
+          </div>
+<form id="BaseForm" action="/lcu-web/SC_10004B00_01" method="post"><div class="c-table-scroll"><table id="02" class="c-table nowrap c-table-pd-narrow c-table-omitted hover" style="visibility: hidden;"><thead><tr><th class="title  -center u-w60-pc u-w80-sp" id="subjectCode" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>科目コード</p></th>
+<th class="title  " id="subjectKanaName" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="subjectName" 
+								_visible="true" 
+								_sortKey="subjectKanaName" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="include" ><p>科目名</p></th>
+<th class="title  " id="teacherCode" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="staffName" 
+								_visible="true" 
+								_sortKey="teacherCode" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>担当教員</p></th>
+<th class="title  " id="kubunDispOrder" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="html-num" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="kubunName" 
+								_visible="true" 
+								_sortKey="kubunDispOrder" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>科目区分</p></th>
+<th class="title  " id="subjectReqCode" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="reqName" 
+								_visible="true" 
+								_sortKey="subjectReqCode" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>単位区分</p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="unit" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="html-num" ><p>単位</p></th>
+<th class="title  " id="sortScore" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="html-num" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="score" 
+								_visible="true" 
+								_sortKey="sortScore" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="include" ><p>得点</p></th>
+<th class="title  " id="markCode" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="marks" 
+								_visible="true" 
+								_sortKey="markCode" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="include" ><p>評価</p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="subjectGp" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="html-num" ><p>科目GP</p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="reportYearSemesterTerm" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>成績報告時期</p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="reportDate" 
+								_visible="true" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="date" ><p>入力年月日</p></th>
+<th class="title  " id="replaceKana" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="replaceName" 
+								_visible="true" 
+								_sortKey="replaceKana" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="include" ><p>読替前科目名</p></th>
+<th class="title  " id="examTypeCode" 
+								_visible="false" 
+								_sortKey="" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p></p></th>
+<th class="title  -center u-w60-pc u-w80-sp" id="examType" 
+								_visible="true" 
+								_sortKey="examTypeCode" 
+								_sortKey2="" 
+								_sortable="true" 
+								_type="" ><p>試験種別</p></th>
+</tr></thead><tbody><tr class="is-unread" _index="0"><td class="content is-source " id="content" data-label="科目コード">90000001</td><td class="content is-source " id="content" data-label="">サンプルニュウモン</td><td class="content is-source " id="content" data-label="科目名"><span class="fontBoldRed">サンプル入門</span></td><td class="content is-source " id="content" data-label="">10000001</td><td class="content is-source " id="content" data-label="担当教員">教員 一郎</td><td class="content is-source " id="content" data-label="">1001</td><td class="content is-source " id="content" data-label="科目区分">必修</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label="">9.00</td><td class="content is-source -right" id="content" data-label="得点"><span class="fontBoldRed">9</span></td><td class="content is-source " id="content" data-label="">05</td><td class="content is-source " id="content" data-label="評価"><span class="fontBoldRed">不可</span></td><td class="content is-source -right" id="content" data-label="科目GP">0.00</td><td class="content is-source " id="content" data-label="成績報告時期">2024年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2024/08/20</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="1"><td class="content is-source " id="content" data-label="科目コード">90000001</td><td class="content is-source " id="content" data-label="">サンプルニュウモン</td><td class="content is-source " id="content" data-label="科目名"><span class="fontBoldRed">サンプル入門</span></td><td class="content is-source " id="content" data-label="">10000001</td><td class="content is-source " id="content" data-label="担当教員">教員 一郎</td><td class="content is-source " id="content" data-label="">1001</td><td class="content is-source " id="content" data-label="科目区分">必修</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label="">30.00</td><td class="content is-source -right" id="content" data-label="得点"><span class="fontBoldRed">30</span></td><td class="content is-source " id="content" data-label="">05</td><td class="content is-source " id="content" data-label="評価"><span class="fontBoldRed">不可</span></td><td class="content is-source -right" id="content" data-label="科目GP">0.00</td><td class="content is-source " id="content" data-label="成績報告時期">2025年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2025/08/21</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="2"><td class="content is-source " id="content" data-label="科目コード">90000001</td><td class="content is-source " id="content" data-label="">サンプルニュウモン</td><td class="content is-source " id="content" data-label="科目名"><span class="fontBoldRed">サンプル入門</span></td><td class="content is-source " id="content" data-label="">10000001</td><td class="content is-source " id="content" data-label="担当教員">教員 一郎</td><td class="content is-source " id="content" data-label="">1001</td><td class="content is-source " id="content" data-label="科目区分">必修</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label="">45.00</td><td class="content is-source -right" id="content" data-label="得点"><span class="fontBoldRed">45</span></td><td class="content is-source " id="content" data-label="">05</td><td class="content is-source " id="content" data-label="評価"><span class="fontBoldRed">不可</span></td><td class="content is-source -right" id="content" data-label="科目GP">0.00</td><td class="content is-source " id="content" data-label="成績報告時期">2026年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2026/08/19</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="3"><td class="content is-source " id="content" data-label="科目コード">90000002</td><td class="content is-source " id="content" data-label="">サンプルエンシュウ</td><td class="content is-source " id="content" data-label="科目名"><span class="fontBoldRed">サンプル演習</span></td><td class="content is-source " id="content" data-label="">10000002</td><td class="content is-source " id="content" data-label="担当教員">教員 二郎</td><td class="content is-source " id="content" data-label="">1001</td><td class="content is-source " id="content" data-label="科目区分">必修</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label="">20.00</td><td class="content is-source -right" id="content" data-label="得点"><span class="fontBoldRed">20</span></td><td class="content is-source " id="content" data-label="">05</td><td class="content is-source " id="content" data-label="評価"><span class="fontBoldRed">不可</span></td><td class="content is-source -right" id="content" data-label="科目GP">0.00</td><td class="content is-source " id="content" data-label="成績報告時期">2024年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2024/08/22</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="4"><td class="content is-source " id="content" data-label="科目コード">90000002</td><td class="content is-source " id="content" data-label="">サンプルエンシュウ</td><td class="content is-source " id="content" data-label="科目名">サンプル演習</td><td class="content is-source " id="content" data-label="">10000002</td><td class="content is-source " id="content" data-label="担当教員">教員 二郎</td><td class="content is-source " id="content" data-label="">1001</td><td class="content is-source " id="content" data-label="科目区分">必修</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label="">85.00</td><td class="content is-source -right" id="content" data-label="得点">85</td><td class="content is-source " id="content" data-label="">02</td><td class="content is-source " id="content" data-label="評価">優</td><td class="content is-source -right" id="content" data-label="科目GP">3.50</td><td class="content is-source " id="content" data-label="成績報告時期">2025年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2025/08/22</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="5"><td class="content is-source " id="content" data-label="科目コード">90000003</td><td class="content is-source " id="content" data-label="">オンラインキョウヨウ</td><td class="content is-source " id="content" data-label="科目名">+オンライン教養</td><td class="content is-source " id="content" data-label="">10000003</td><td class="content is-source " id="content" data-label="担当教員">教員 三郎</td><td class="content is-source " id="content" data-label="">100</td><td class="content is-source " id="content" data-label="科目区分">数理ＤＳ</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">1.0</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source -right" id="content" data-label="得点"></td><td class="content is-source " id="content" data-label="">07</td><td class="content is-source " id="content" data-label="評価">合</td><td class="content is-source -right" id="content" data-label="科目GP"></td><td class="content is-source " id="content" data-label="成績報告時期">2024年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2024/08/01</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="6"><td class="content is-source " id="content" data-label="科目コード">90000004</td><td class="content is-source " id="content" data-label="">キャリアサンプル</td><td class="content is-source " id="content" data-label="科目名"><span class="fontBoldRed">+キャリアサンプル</span></td><td class="content is-source " id="content" data-label="">10000004</td><td class="content is-source " id="content" data-label="担当教員">教員 四郎</td><td class="content is-source " id="content" data-label="">120</td><td class="content is-source " id="content" data-label="科目区分">キャリア形成科目</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">1.0</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source -right" id="content" data-label="得点"><span class="fontBoldRed"></span></td><td class="content is-source " id="content" data-label="">10</td><td class="content is-source " id="content" data-label="評価"><span class="fontBoldRed">否</span></td><td class="content is-source -right" id="content" data-label="科目GP"></td><td class="content is-source " id="content" data-label="成績報告時期">2024年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2024/08/02</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="7"><td class="content is-source " id="content" data-label="科目コード">90000004</td><td class="content is-source " id="content" data-label="">キャリアサンプル</td><td class="content is-source " id="content" data-label="科目名">+キャリアサンプル</td><td class="content is-source " id="content" data-label="">10000004</td><td class="content is-source " id="content" data-label="担当教員">教員 四郎</td><td class="content is-source " id="content" data-label="">120</td><td class="content is-source " id="content" data-label="科目区分">キャリア形成科目</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">1.0</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source -right" id="content" data-label="得点"></td><td class="content is-source " id="content" data-label="">07</td><td class="content is-source " id="content" data-label="評価">合</td><td class="content is-source -right" id="content" data-label="科目GP"></td><td class="content is-source " id="content" data-label="成績報告時期">2024年度 後期 後期後半</td><td class="content is-source " id="content" data-label="入力年月日">2025/02/10</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="8"><td class="content is-source " id="content" data-label="科目コード">90000005</td><td class="content is-source " id="content" data-label="">サンプルスウガク</td><td class="content is-source " id="content" data-label="科目名">サンプル数学</td><td class="content is-source " id="content" data-label="">10000005</td><td class="content is-source " id="content" data-label="担当教員">教員 五郎</td><td class="content is-source " id="content" data-label="">1001</td><td class="content is-source " id="content" data-label="科目区分">必修</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label="">95.00</td><td class="content is-source -right" id="content" data-label="得点">95</td><td class="content is-source " id="content" data-label="">01</td><td class="content is-source " id="content" data-label="評価">秀</td><td class="content is-source -right" id="content" data-label="科目GP">4.50</td><td class="content is-source " id="content" data-label="成績報告時期">2024年度 後期 後期後半</td><td class="content is-source " id="content" data-label="入力年月日">2025/02/12</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="9"><td class="content is-source " id="content" data-label="科目コード">90000008</td><td class="content is-source " id="content" data-label="">サンプルジッケン</td><td class="content is-source " id="content" data-label="科目名">サンプル実験</td><td class="content is-source " id="content" data-label="">10000008</td><td class="content is-source " id="content" data-label="担当教員">教員 八郎</td><td class="content is-source " id="content" data-label="">1003</td><td class="content is-source " id="content" data-label="科目区分">選択</td><td class="content is-source " id="content" data-label="">4</td><td class="content is-source " id="content" data-label="単位区分">選択</td><td class="content is-source -right" id="content" data-label="単位">1.0</td><td class="content is-source " id="content" data-label="">72.00</td><td class="content is-source -right" id="content" data-label="得点">72</td><td class="content is-source " id="content" data-label="">03</td><td class="content is-source " id="content" data-label="評価">良</td><td class="content is-source -right" id="content" data-label="科目GP">2.20</td><td class="content is-source " id="content" data-label="成績報告時期">2025年度 後期 後期前半</td><td class="content is-source " id="content" data-label="入力年月日">2025/12/01</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="10"><td class="content is-source " id="content" data-label="科目コード">90000006</td><td class="content is-source " id="content" data-label="">サンプルトウケイ</td><td class="content is-source " id="content" data-label="科目名"><span class="fontBoldRed">サンプル統計</span></td><td class="content is-source " id="content" data-label="">10000006</td><td class="content is-source " id="content" data-label="担当教員">教員 六郎</td><td class="content is-source " id="content" data-label="">1002</td><td class="content is-source " id="content" data-label="科目区分">選択必修Ａ</td><td class="content is-source " id="content" data-label="">5</td><td class="content is-source " id="content" data-label="単位区分">選必</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source -right" id="content" data-label="得点"><span class="fontBoldRed"></span></td><td class="content is-source " id="content" data-label="">06</td><td class="content is-source " id="content" data-label="評価"><span class="fontBoldRed">再試</span></td><td class="content is-source -right" id="content" data-label="科目GP"></td><td class="content is-source " id="content" data-label="成績報告時期">2026年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2026/08/25</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="11"><td class="content is-source " id="content" data-label="科目コード">90000007</td><td class="content is-source " id="content" data-label="">サンプルリロン</td><td class="content is-source " id="content" data-label="科目名"><span class="fontBoldRed">サンプル理論</span></td><td class="content is-source " id="content" data-label="">10000007</td><td class="content is-source " id="content" data-label="担当教員">教員 七郎</td><td class="content is-source " id="content" data-label="">1001</td><td class="content is-source " id="content" data-label="科目区分">必修</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="単位区分">必</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label="">5.00</td><td class="content is-source -right" id="content" data-label="得点"><span class="fontBoldRed">5</span></td><td class="content is-source " id="content" data-label="">05</td><td class="content is-source " id="content" data-label="評価"><span class="fontBoldRed">不可</span></td><td class="content is-source -right" id="content" data-label="科目GP">0.00</td><td class="content is-source " id="content" data-label="成績報告時期">2026年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2026/09/28</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">3</td><td class="content is-source " id="content" data-label="試験種別">再試験</td></tr><tr class="is-unread" _index="12"><td class="content is-source " id="content" data-label="科目コード">90000009</td><td class="content is-source " id="content" data-label="">サンプルガイコクゴ</td><td class="content is-source " id="content" data-label="科目名">サンプル外国語</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="担当教員"></td><td class="content is-source " id="content" data-label="">110</td><td class="content is-source " id="content" data-label="科目区分">英語 選択</td><td class="content is-source " id="content" data-label="">4</td><td class="content is-source " id="content" data-label="単位区分">選択</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source -right" id="content" data-label="得点"></td><td class="content is-source " id="content" data-label="">08</td><td class="content is-source " id="content" data-label="評価">認定</td><td class="content is-source -right" id="content" data-label="科目GP"></td><td class="content is-source " id="content" data-label="成績報告時期">2025年度 前期 前期後半</td><td class="content is-source " id="content" data-label="入力年月日">2025/05/01</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名">サンプル検定</td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr><tr class="is-unread" _index="13"><td class="content is-source " id="content" data-label="科目コード">90000010</td><td class="content is-source " id="content" data-label="">サンプルトクロン</td><td class="content is-source " id="content" data-label="科目名">サンプル特論</td><td class="content is-source " id="content" data-label="">10000010</td><td class="content is-source " id="content" data-label="担当教員">教員 十郎</td><td class="content is-source " id="content" data-label="">1003</td><td class="content is-source " id="content" data-label="科目区分">選択</td><td class="content is-source " id="content" data-label="">4</td><td class="content is-source " id="content" data-label="単位区分">選択</td><td class="content is-source -right" id="content" data-label="単位">2.0</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source -right" id="content" data-label="得点"></td><td class="content is-source " id="content" data-label="">99</td><td class="content is-source " id="content" data-label="評価">評価保留中</td><td class="content is-source -right" id="content" data-label="科目GP"></td><td class="content is-source " id="content" data-label="成績報告時期">2025年度 後期 後期後半</td><td class="content is-source " id="content" data-label="入力年月日">2026/02/20</td><td class="content is-source " id="content" data-label=""></td><td class="content is-source " id="content" data-label="読替前科目名"></td><td class="content is-source " id="content" data-label="">1</td><td class="content is-source " id="content" data-label="試験種別">本試験</td></tr></tbody></table></div><input type="hidden" id="BaseForm_rowIndex" name="rowIndex" value="" /><input type="hidden" id="BaseForm_viewRowIndexArray" name="viewRowIndexArray" value="" /><div>
+<input type="hidden" name="_csrf" value="00000000-0000-0000-0000-000000000000" />
+</div></form>
+		<button type="button" onclick="submitFormButtonForReport($(this), '/lcu-web/SC_10004B00_01/report');return false;"formId="BaseForm" loading="false" class="c-btn c-btn-submit01" fileType="report" ><span class="c-btn-link"><span class="c-btn-text c-icon-submission">成績通知表印刷</span></span></button>
+		<button type="button" onclick="submitFormButton($(this), '/lcu-web/SC_10004B00_01/forward', '', '');return false;"formId="BaseForm" class="c-btn c-btn-submit01" ><span class="c-btn-link"><span class="c-btn-text ">単位修得情報照会</span><i class="c-icon-arrow-right c-color-base" aria-hidden="true"></i></span></button>
+      </div>
+    </div>
+  </div>
+</div>
+</main>
+</body></html>

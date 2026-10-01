@@ -15,6 +15,8 @@ export const RAW_TYPES = {
   exam: 'lcu.exam',
   attendance: 'lcu.attendance',
   grade: 'lcu.grade',
+  /** 単位修得情報: graduation requirement status (one item per requirement type). */
+  creditRequirements: 'lcu.creditRequirements',
 } as const;
 export type LcuRawType = (typeof RAW_TYPES)[keyof typeof RAW_TYPES];
 export const ALL_RAW_TYPES: LcuRawType[] = Object.values(RAW_TYPES);
@@ -246,22 +248,72 @@ export const AttendancePayloadSchema = z.object({
   source: sourceSchema,
 });
 
+const markerSchema = z.object({ symbol: str, label: str.optional() });
+
 export const GradePayloadSchema = z.object({
   subjectCode: str,
   subjectName: str,
+  markers: z.array(markerSchema).optional(),
   staffName: str.optional(),
   category: str.optional(),
+  categoryOrder: z.number().optional(),
   creditType: str.optional(),
+  creditTypeCode: str.optional(),
   credits: z.number().optional(),
   score: z.number().optional(),
   mark: str.optional(),
+  markCode: str.optional(),
+  markHighlighted: z.boolean().optional(),
   gradePoint: z.number().optional(),
+  interim: z.boolean().optional(),
   reportTerm: str.optional(),
+  academicYear: z.number().optional(),
+  term: str.optional(),
+  termPart: str.optional(),
   reportDate: str.optional(),
+  replacedSubjectName: str.optional(),
   examType: str.optional(),
+  examTypeCode: str.optional(),
+  /** Grade list view the row came from (履修中含む lists registered courses without a mark). */
+  view: z.enum(['earned', 'includingInProgress']).optional(),
   context: contextSchema,
   source: sourceSchema,
 });
+export type GradePayload = z.infer<typeof GradePayloadSchema>;
+
+const requirementCourseSchema = z.object({
+  title: str,
+  markers: z.array(markerSchema).optional(),
+  creditType: str.optional(),
+  credits: z.number().optional(),
+  status: str.optional(),
+});
+
+export const CreditRequirementsPayloadSchema = z.object({
+  requirementType: z.object({ code: str, name: str }).optional(),
+  rows: z.array(
+    z.object({
+      depth: z.number(),
+      name: str,
+      creditType: str.optional(),
+      required: z.number().optional(),
+      expected: z.number().optional(),
+      status: str.optional(),
+      courses: z.array(requirementCourseSchema),
+    }),
+  ),
+  /** 成績マーカー table: symbol, meaning, credit cap and total. */
+  markers: z
+    .array(
+      markerSchema.extend({
+        capCredits: z.number().optional(),
+        totalCredits: z.number().optional(),
+      }),
+    )
+    .optional(),
+  source: sourceSchema,
+});
+export type CreditRequirementsPayload = z.infer<typeof CreditRequirementsPayloadSchema>;
 
 export const PAYLOAD_SCHEMAS: Record<LcuRawType, z.ZodType> = {
   'lcu.course': CoursePayloadSchema,
@@ -273,4 +325,5 @@ export const PAYLOAD_SCHEMAS: Record<LcuRawType, z.ZodType> = {
   'lcu.exam': ExamPayloadSchema,
   'lcu.attendance': AttendancePayloadSchema,
   'lcu.grade': GradePayloadSchema,
+  'lcu.creditRequirements': CreditRequirementsPayloadSchema,
 };

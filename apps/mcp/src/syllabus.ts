@@ -3,9 +3,14 @@ import {
   type Course,
   type CourseOffering,
   type Enrollment,
-  type Grade,
+  GRADE_OUTCOME_LABELS,
 } from '@unicontext/canonical-model';
-import type { UniContext } from '@unicontext/context-engine';
+import {
+  buildGradeReport,
+  type GradeAttempt,
+  type GradePeriodTotals,
+  type UniContext,
+} from '@unicontext/context-engine';
 import { NotFoundError, ValidationError } from '@unicontext/core';
 import { uniqueCitations, type Citation } from '@unicontext/provenance';
 import { z } from 'zod';
@@ -51,7 +56,7 @@ export const GET_SYLLABUS_DESCRIPTION =
   '1科目のシラバス（担当・曜日時限・単位・授業の目標・学修内容・授業計画・成績評価・テキストなど）を返す。course には search_syllabus の id、科目コード、科目名（一部可）を使える。同じ名前の科目が複数あるときは候補の一覧を返す。 / The syllabus of one course (instructors, schedule, credits, goals, content, weekly plan, grading, textbook). `course` accepts an id from search_syllabus, a course code or a (partial) title; several matches return a candidate list.';
 
 export const CREDIT_SUMMARY_DESCRIPTION =
-  '学期ごとの履修登録中の単位数と修得済みの単位数、今学期の登録上限（わかる場合）と残りの目安を返す。「今学期あと何単位とれる？」「ここまでに何単位とった？」に使う。上限は履修制限科目にだけかかる場合があるので残りは目安。 / Credits registered per term, credits earned so far, the registration cap of the current term (when known) and an approximate remainder. The cap may apply to restricted courses only, so the remainder is a guide.';
+  '過去の全年度・全学期の成績（科目ごとの全受験。不合格・再試・再履修も含む）、学期別・年度別・通算の修得単位、卒業要件の充足状況（学務情報システムの単位修得情報がある場合）、今学期の登録単位と上限の目安を返す。各成績は大学の表示どおりの評価（秀・不可・合・否・再試など）をevaluationに、集計用の区分をoutcome（passed/failed/in_progress/not_graded/withdrawn/transferred/unknown）に持つ。修得単位はpassedとtransferredだけを数え、unknownは合否どちらにも数えない。「ここまでに何単位とった？」「落とした科目は？」「卒業要件で足りない区分は？」「今学期あと何単位とれる？」に使う。 / Full grade history of every year and term (every attempt per course, failed ones and re-exams included), earned credits per term, per year and in total, graduation requirement status when the academic system provides it, and the current term registration with its cap. Each grade keeps the verbatim evaluation label and a normalized outcome; only passed and transferred count as earned, unknown is never counted.';
 
 // ---------------------------------------------------------------------------------------------
 // input shapes
@@ -827,62 +832,6 @@ function selfEnrollments(uc: UniContext): Enrollment[] {
     );
 }
 
-const PASS_MARKS = new Set([
-  '秀',
-  '優',
-  '良',
-  '可',
-  '合格',
-  '認定',
-  'S',
-  'A',
-  'B',
-  'C',
-  'AA',
-  'A+',
-]);
-const FAIL_MARKS = new Set([
-  '不可',
-  '不合格',
-  '欠席',
-  '欠',
-  '放棄',
-  '失格',
-  '未修得',
-  '未受験',
-  'F',
-  'X',
-  'W',
-]);
-
-/** passed / failed / unknown for one grade row (see docs: unknown marks pass only with gradePoint > 0). */
-export function judgeGrade(
-  g: Pick<Grade, 'letter' | 'gradePoint'>,
-): 'passed' | 'failed' | 'unknown' {
-  const letter = g.letter?.normalize('NFKC').trim() ?? '';
-  const upper = letter.toUpperCase();
-  if (
-    letter &&
-    (FAIL_MARKS.has(letter) || FAIL_MARKS.has(upper) || /不可|不合格|欠席|不認定/.test(letter))
-  )
-    return 'failed';
-  if (g.gradePoint === 0) return 'failed';
-  if (letter && (PASS_MARKS.has(letter) || PASS_MARKS.has(upper))) return 'passed';
-  if (g.gradePoint !== undefined && g.gradePoint > 0) return 'passed';
-  return 'unknown';
-}
-
-/** "2026前期" / "2026年度後期" -> year + term. */
-export function parseReportTerm(text: string): {
-  year: number | undefined;
-  term: string | undefined;
-} {
-  const m = /(\d{4})\s*年?度?\s*(.*)$/.exec(text.normalize('NFKC'));
-  if (!m) return { year: undefined, term: text.trim() || undefined };
-  const rest = (m[2] ?? '').trim();
-  return { year: Number(m[1]), term: rest || undefined };
-}
-
 function localDate(now: Date, timeZone: string): { date: string; year: number; month: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -917,16 +866,42 @@ interface TermRow {
   registeredCredits: number;
   registeredCourses: number;
   unknownCreditCourses: number;
-  earnedCredits: number;
-  failedCredits: number;
-  unjudgedCredits: number;
-  gradedCourses: number;
 }
 
 function termLabel(year: number | undefined, term: string | undefined): string {
   if (year === undefined && !term) return '不明';
   return `${year ?? ''} ${term ?? ''}`.trim();
 }
+
+function outcomeCredits(t: GradePeriodTotals | undefined) {
+  return {
+    earnedCredits: t?.earnedCredits ?? 0,
+    failedCredits: t?.failedCredits ?? 0,
+    inProgressCredits: t?.credits.in_progress ?? 0,
+    notGradedCredits: t?.credits.not_graded ?? 0,
+    withdrawnCredits: t?.credits.withdrawn ?? 0,
+    transferredCredits: t?.credits.transferred ?? 0,
+    unknownCredits: t?.credits.unknown ?? 0,
+  };
+}
+
+function attemptView(a: GradeAttempt) {
+  return {
+    academicYear: a.academicYear ?? null,
+    term: a.term ?? null,
+    ...(a.termPart ? { termPart: a.termPart } : {}),
+    evaluation: a.evaluation,
+    outcome: a.outcome,
+    ...(a.pendingReexam ? { pendingReexam: true } : {}),
+    ...(a.interim ? { interim: true } : {}),
+    ...(a.score !== undefined ? { score: a.score } : {}),
+    ...(a.gradePoint !== undefined ? { gradePoint: a.gradePoint } : {}),
+    ...(a.examType ? { examType: a.examType } : {}),
+    ...(a.reportDate ? { reportDate: a.reportDate } : {}),
+  };
+}
+
+const MAX_OPEN_CANDIDATES = 30;
 
 export function getCreditSummary(uc: UniContext, args: CreditSummaryArgs): SyllabusToolOutput {
   const entities = uc.sync.stores.entities;
@@ -942,10 +917,6 @@ export function getCreditSummary(uc: UniContext, args: CreditSummaryArgs): Sylla
         registeredCredits: 0,
         registeredCourses: 0,
         unknownCreditCourses: 0,
-        earnedCredits: 0,
-        failedCredits: 0,
-        unjudgedCredits: 0,
-        gradedCourses: 0,
       };
       rows.set(key, r);
     }
@@ -988,55 +959,22 @@ export function getCreditSummary(uc: UniContext, args: CreditSummaryArgs): Sylla
     if (r.key === currentKey) citedIds.push(enr.id);
   }
 
-  // Earned: graded rows. Passed credits count, failed and not-yet-judged ones are listed apart.
-  let earnedAll = 0;
-  let unjudgedRows = 0;
-  for (const g of entities.list('grade')) {
-    const credits = num(g.extra?.['credits']);
-    const linkedOffering = g.courseOfferingId
-      ? entities.getOfKind('courseOffering', g.courseOfferingId)
-      : undefined;
-    const reported = str(g.extra?.['reportTerm']);
-    const parsed = reported ? parseReportTerm(reported) : undefined;
-    const year = parsed?.year ?? linkedOffering?.academicYear;
-    const term = parsed?.term ?? linkedOffering?.term;
-    const r = row(year, term);
-    r.gradedCourses++;
-    const verdict = judgeGrade(g);
-    let c = credits;
-    if (c === undefined && linkedOffering)
-      c =
-        num(linkedOffering.extra?.['credits']) ??
-        (linkedOffering.courseId
-          ? entities.getOfKind('course', linkedOffering.courseId)?.credits
-          : undefined);
-    c ??= 0;
-    if (verdict === 'passed') {
-      r.earnedCredits = round1(r.earnedCredits + c);
-      earnedAll = round1(earnedAll + c);
-    } else if (verdict === 'failed') r.failedCredits = round1(r.failedCredits + c);
-    else {
-      r.unjudgedCredits = round1(r.unjudgedCredits + c);
-      unjudgedRows++;
-    }
-    if (citedIds.length < 40) citedIds.push(g.id);
-  }
-
+  // Grades: every attempt of every year, with the verbatim evaluation and its outcome.
   const year = args.year ?? undefined;
+  const everything = buildGradeReport(uc, {});
+  const report = year === undefined ? everything : buildGradeReport(uc, { year });
+  const gradeTerms = new Map(
+    report.terms.map((t) => [termLabel(t.academicYear, t.term ? termKey(t.term) : undefined), t]),
+  );
+  for (const t of report.terms) row(t.academicYear, t.term);
+  citedIds.push(...report.gradeIds.slice(0, 40));
+
   const sorted = [...rows.values()].sort(
     (a, b) =>
       (a.academicYear ?? 9999) - (b.academicYear ?? 9999) || termRank(a.term) - termRank(b.term),
   );
   const shown = year === undefined ? sorted : sorted.filter((r) => r.academicYear === year);
-  const totals = shown.reduce(
-    (t, r) => ({
-      registeredCredits: round1(t.registeredCredits + r.registeredCredits),
-      earnedCredits: round1(t.earnedCredits + r.earnedCredits),
-      failedCredits: round1(t.failedCredits + r.failedCredits),
-      unjudgedCredits: round1(t.unjudgedCredits + r.unjudgedCredits),
-    }),
-    { registeredCredits: 0, earnedCredits: 0, failedCredits: 0, unjudgedCredits: 0 },
-  );
+  const registeredTotal = round1(shown.reduce((n, r) => n + r.registeredCredits, 0));
 
   const thisTerm = rows.get(currentKey);
   const registeredThisTerm = {
@@ -1060,6 +998,9 @@ export function getCreditSummary(uc: UniContext, args: CreditSummaryArgs): Sylla
   notes.push(
     '「登録中」は学務情報システムの時間割にある科目の単位数です（履修登録の確定は学務情報システムで確認してください）。',
   );
+  notes.push(
+    'evaluationは大学の表示どおりの評価、outcomeは集計用の区分です。修得単位はpassed（合格）とtransferred（認定）だけを数えます。not_graded（再試待ち・未評価）とunknown（区分を判定できない評価）は修得にも不合格にも数えていません。',
+  );
   if (cap) {
     notes.push(
       '残りの単位数は目安です。上限は履修制限科目の登録単位にかかるため、履修制限外の科目はこの計算に含まれない場合があります。',
@@ -1072,9 +1013,76 @@ export function getCreditSummary(uc: UniContext, args: CreditSummaryArgs): Sylla
       `今学期の${registeredThisTerm.unknownCreditCourses}科目は単位数が不明のため合計に含めていません。`,
     );
   if (noTerm > 0) notes.push(`${noTerm}科目は年度・学期が不明のため学期別の集計に含めていません。`);
-  if (unjudgedRows > 0)
-    notes.push(`${unjudgedRows}件の成績は合否を判定できず、修得単位に含めていません。`);
+  if (report.unknownLabels.length > 0)
+    notes.push(
+      `区分を判定できない評価があります（${report.unknownLabels.map((l) => l || '空欄').join('、')}）。outcomeはunknownで、修得単位にも不合格にも数えていません。`,
+    );
+  if (everything.totals.attempts === 0)
+    notes.push(
+      '成績はまだ取り込まれていません（学務情報システムの成績は、ソースの設定でgrades: trueにすると取り込みます）。',
+    );
   if (sorted.length === 0) notes.push('履修や成績のデータがまだ取り込まれていません。');
+
+  const courses = report.courses.map((c) => ({
+    ...(c.subjectCode ? { subjectCode: c.subjectCode } : {}),
+    title: c.title,
+    credits: c.credits ?? null,
+    ...(c.category ? { category: c.category } : {}),
+    ...(c.creditType ? { creditType: c.creditType } : {}),
+    ...(c.markers ? { markers: c.markers.map((m) => m.label ?? m.symbol) } : {}),
+    status: c.status,
+    statusEvaluation: c.statusEvaluation,
+    earned: c.earned,
+    attemptCount: c.attempts.length,
+    failedAttempts: c.failedAttempts,
+    latest: attemptView(c.latest),
+    attempts: c.attempts.map(attemptView),
+  }));
+  const notEarned = everything.courses
+    .filter((c) => !c.earned)
+    .map((c) => ({
+      ...(c.subjectCode ? { subjectCode: c.subjectCode } : {}),
+      title: c.title,
+      credits: c.credits ?? null,
+      ...(c.creditType ? { creditType: c.creditType } : {}),
+      ...(c.category ? { category: c.category } : {}),
+      latestEvaluation: c.latest.evaluation,
+      latestOutcome: c.latest.outcome,
+      latestTerm: termLabel(c.latest.academicYear, c.latest.term),
+      attemptCount: c.attempts.length,
+      failedAttempts: c.failedAttempts,
+    }));
+
+  const req = everything.requirements;
+  const requirements = req
+    ? {
+        ...(req.requirementType ? { requirementType: req.requirementType.name } : {}),
+        note: '学務情報システムの「単位修得情報」。expected（修得見込単位）は修得済みの単位に履修登録中の単位を足した値です。',
+        rows: req.rows.map((r) => {
+          const passed = r.courses.filter((c) => c.status === '合格').map((c) => c.title);
+          const failed = r.courses.filter((c) => c.status === '不合格').map((c) => c.title);
+          const open = r.courses.filter((c) => !c.status);
+          return {
+            depth: r.depth,
+            name: r.name,
+            ...(r.creditType ? { creditType: r.creditType } : {}),
+            required: r.required ?? null,
+            expected: r.expected ?? null,
+            status: r.status ?? null,
+            ...(r.shortfall !== undefined ? { shortfall: r.shortfall } : {}),
+            ...(passed.length ? { passedCourses: passed } : {}),
+            ...(failed.length ? { failedCourses: failed } : {}),
+            ...(r.status === '不足' && open.length
+              ? {
+                  openCourses: open.slice(0, MAX_OPEN_CANDIDATES).map((c) => c.title),
+                  ...(open.length > MAX_OPEN_CANDIDATES ? { openCourseCount: open.length } : {}),
+                }
+              : {}),
+          };
+        }),
+        ...(req.markers?.length ? { markers: req.markers } : {}),
+      }
+    : null;
 
   return {
     data: {
@@ -1086,19 +1094,32 @@ export function getCreditSummary(uc: UniContext, args: CreditSummaryArgs): Sylla
       cap,
       registeredThisTerm,
       remainingUnderCap,
-      terms: shown.map((r) => ({
-        term: r.key,
-        academicYear: r.academicYear ?? null,
-        termName: r.term ?? null,
-        registeredCredits: r.registeredCredits,
-        registeredCourses: r.registeredCourses,
-        earnedCredits: r.earnedCredits,
-        failedCredits: r.failedCredits,
-        unjudgedCredits: r.unjudgedCredits,
-        gradedCourses: r.gradedCourses,
+      terms: shown.map((r) => {
+        const g = gradeTerms.get(r.key);
+        return {
+          term: r.key,
+          academicYear: r.academicYear ?? null,
+          termName: r.term ?? null,
+          registeredCredits: r.registeredCredits,
+          registeredCourses: r.registeredCourses,
+          ...outcomeCredits(g),
+          gradedCourses: g?.attempts ?? 0,
+          outcomeCounts: g?.counts ?? null,
+        };
+      }),
+      years: report.years.map((y) => ({
+        academicYear: y.academicYear ?? null,
+        ...outcomeCredits(y),
+        attempts: y.attempts,
+        outcomeCounts: y.counts,
       })),
-      totals,
-      earnedCreditsAllYears: earnedAll,
+      totals: { registeredCredits: registeredTotal, ...outcomeCredits(report.totals) },
+      earnedCreditsAllYears: everything.totals.earnedCredits,
+      evaluationLabels: report.labels,
+      outcomeLabels: GRADE_OUTCOME_LABELS,
+      courses,
+      coursesNotEarned: notEarned,
+      requirements,
       notes,
     },
     options: { citations: conciseCitations(uc.context.citationsFor(citedIds)) },

@@ -229,6 +229,26 @@ describe('DNS rebinding and origin protection (§41)', () => {
   });
 });
 
+describe('GET /api/v1/grades', () => {
+  it('returns the grade report shape and validates the year', async () => {
+    const res = await get('/api/v1/grades');
+    expect(res.statusCode).toBe(200);
+    const body = json<{
+      attempts: unknown[];
+      courses: unknown[];
+      terms: unknown[];
+      totals: { attempts: number };
+    }>(res);
+    expect(Array.isArray(body.attempts)).toBe(true);
+    expect(Array.isArray(body.courses)).toBe(true);
+    expect(body.totals.attempts).toBe(body.attempts.length);
+    expect((await get('/api/v1/grades?year=2026&failed=1&status=failed,不可')).statusCode).toBe(
+      200,
+    );
+    expect((await get('/api/v1/grades?year=abc')).statusCode).toBe(400);
+  });
+});
+
 describe('writes need a bearer token or the Web UI CSRF pair (§41)', () => {
   it('no credentials -> 401', async () => {
     const res = await post('/api/v1/sources/lcu/sync', {});
@@ -245,6 +265,28 @@ describe('writes need a bearer token or the Web UI CSRF pair (§41)', () => {
     expect(res.statusCode).toBe(200);
     const body = json<{ report: { ok: boolean; sourceId: string } }>(res);
     expect(body.report).toMatchObject({ ok: true, sourceId: 'lcu' });
+  });
+
+  it('?wait=0 starts the sync in the background and returns a job to poll (202)', async () => {
+    const res = await post('/api/v1/sources/lcu/sync?wait=0', {}, bearer);
+    expect(res.statusCode).toBe(202);
+    const { job } = json<{ job: { id: string; state: string; sourceId: string } }>(res);
+    expect(job).toMatchObject({ sourceId: 'lcu', state: 'running' });
+    let state = job.state;
+    let body: { job: { state: string; report?: { ok: boolean }; finishedAt?: string } } | undefined;
+    for (let i = 0; i < 200 && state === 'running'; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      const polled = json<NonNullable<typeof body>>(
+        await get(`/api/v1/sync-jobs/${encodeURIComponent(job.id)}`),
+      );
+      body = polled;
+      state = polled.job.state;
+    }
+    expect(body?.job).toMatchObject({ state: 'done', report: { ok: true } });
+    expect(body?.job.finishedAt).toBeTruthy();
+    expect((await get('/api/v1/sync-jobs/nope')).statusCode).toBe(404);
+    // starting a job is a write: no token, no job
+    expect((await post('/api/v1/sources/lcu/sync?wait=0', {})).statusCode).toBe(401);
   });
 
   it('sync of an unknown source -> 409 with a clear message', async () => {

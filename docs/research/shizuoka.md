@@ -132,7 +132,7 @@
 | 課題・小テスト・レポートの一覧 | `SC_14002B00_01` の HTML（全行入り） | HTML | [観測] |
 | 試験時間割 | `SC_18001B00_19` の HTML | HTML | [観測] |
 | 出欠 | `SC_13002B00_01` の HTML | HTML | [観測] |
-| 成績 | `SC_10004B00_01` の HTML | HTML | [観測]（値は記録していない） |
+| 成績 | `SC_10004B00_01` の HTML（§1.10） | HTML | [観測]（値は記録していない） |
 | シラバス | §3（公開） | HTML | [観測] |
 
 **ICS / RSS / 携帯版 / 公開 API**
@@ -160,6 +160,18 @@
 - **連絡**: 280 行すべてが未読（`tr.is-unread`）なので、方針どおり本文は 1 件も開いていない。`importanceCategory` は 154 件すべて `1`、一覧の隠し列 `contactTypeOrder` もほぼ `U051` 型で、重要度の手がかりにならない。重要度は題名と種別から決める（`classifyNoticeImportance`）[観測]
 - **JSON の形**: `importantNotice`・`warningNoticeInformation`（日付リストを含む）・`getClassSubjectList`（`label`/`value`/`optGroupflg`、後期は `[]`）のキーは見本（`samples/`）と同じ。schema drift は記録されなかった。`submissionInformation?mode=web` は今回も `[]` [観測]
 - **カレンダー**（スケジュールの `events`）: 2025〜2027 年の祝日（`listType: Holiday`）45 件。2026 年度の授業の行事（`teachingevent`）は入っていない。授業期間・補講日・振替授業日は LCU からは取れないので、**令和8年度 行事予定表**（https://www.shizuoka.ac.jp/education/affairs/schedule/document/r08_schedule.pdf 、2026-02-09 版、昼間コース）から profile の `academicCalendar` に書き写した: 前学期 4/1〜9/30（授業 4/13〜7/24、試験 7/27〜7/31・予備日 8/3、5/7 は水曜授業、7/17 は月曜授業、7/20 は補講日）、後学期 10/1〜3/31（授業 10/1〜1/28、試験 1/29・2/1〜2/4・予備日 2/5、11/25 は月曜授業、10/30 は静岡地区のみ・11/6 は浜松地区のみ休講、12/22〜25 は集中講義、12/28〜1/3 は休業、1/7 は対面授業なし、1/15 は情報学部の 7・8 限以降の専門科目が休講、1/21 は補講日）[観測（PDF）]
+
+### 1.10 成績情報と単位修得情報（2026-10-01 に観測。値は記録していない）
+- 成績情報 `SC_10004B00_01`: 全年度・全学期の成績が 1 ページに全部出る。年度・学期の切り替えは無い。不合格・再試・再試験の行も出る [観測]
+- タブ 2 つ: 「修得成績」（既定。`changeSeisekiKind(3)`）と「履修中含む」（`changeSeisekiKind(1)`）。どちらも `POST SC_10004B00_01/changeSeisekiKind`（`seisekiKind`, `requirementTypeCode`）。調査時点では両タブの行は同じだった（後期の履修登録前） [観測]
+- 成績の表 `table#02` は 21 列。見える列 13（科目コード〜試験種別）と、隠し列 8（`_visible="false"`: `subjectKanaName`, `teacherCode`, `kubunDispOrder`, `subjectReqCode`, `sortScore`, `markCode`, `replaceKana`, `examTypeCode`） [観測]
+- 評価の表記と `markCode`: 01 秀, 02 優, 03 良, 04 可, 05 不可, 06 再試, 07 合, 10 否。試験種別: 1 本試験, 3 再試験。単位区分: 1 必, 4 選択, 5 選必 [観測]
+- 不可・否・再試は科目名・得点・評価が `span.fontBoldRed`。「得点、評価の背景が黄色のものは中間点」（`span.backYellow`）。調査時点では黄色の行は無かった [観測]
+- 成績報告時期は「2026年度 前期 前期後半」の形 [観測]
+- 科目名の先頭に成績マーカー（例 `+` = オンライン科目）。表の上に「成績マーカー / 上限単位数 / 合計単位数」の表がある [観測]
+- 「単位修得情報照会」ボタン → `POST SC_10004B00_01/forward` → `SC_10004B00_02` 単位修得情報: 要件区分（科目名）/ 必要単位 / 修得見込単位 / 充足状況（充足・不足）。入れ子は先頭の `&emsp;` の数。区分の行に `tr.topToggleNNNNN` で科目の行（単位・合格/不合格）がぶら下がる [観測]
+- 「成績通知表印刷」は `SC_10004B00_01/report`（出力。押していない、connector も呼ばない）
+- 構造の見本: `samples/lcu-grades-shape-SC_10004B00_01.html`（行なし）, `samples/lcu-credit-requirements-SC_10004B00_02.synthetic.html`（値は架空）
 
 ## 2. 公開の休講案内（LCU）
 - URL: `GET https://gakujo.shizuoka.ac.jp/lcu-web/SC_90002szu_01`（学生教務ポータルの「休講情報」リンク）[観測]

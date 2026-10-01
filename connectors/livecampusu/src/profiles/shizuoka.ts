@@ -33,6 +33,7 @@ export const SHIZUOKA_DEPLOYMENT = {
     attendance: 'SC_13002B00_01',
     gradeDashboard: 'SC_15005B00_01',
     grades: 'SC_10004B00_01',
+    creditRequirements: 'SC_10004B00_02',
   },
   actions: {
     menuInit: 'init',
@@ -49,6 +50,13 @@ export const SHIZUOKA_DEPLOYMENT = {
     attendanceSearch: 'SC_13002B00_01/search',
     // Spelling as served by LCU ("grede").
     gradesFromDashboard: 'SC_15005B00_01/gredeInformation',
+    // 成績情報 tabs (observed 2026-10-01): javascript:changeSeisekiKind(1) = 履修中含む,
+    // changeSeisekiKind(3) = 修得成績 (the default). Both list failed attempts too.
+    gradesChangeKind: 'SC_10004B00_01/changeSeisekiKind',
+    gradesKindField: 'seisekiKind',
+    gradesKindIncludingInProgress: '1',
+    // 「単位修得情報照会」 button → SC_10004B00_02 (requirement tree: 必要単位 / 修得見込単位 / 充足状況).
+    gradesToRequirements: 'SC_10004B00_01/forward',
   },
   endpoints: {
     importantNotice: 'SC_01002B00_00/importantNotice',

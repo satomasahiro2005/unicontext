@@ -17,11 +17,19 @@ import { type NoticeListRow, parseNoticeDetail, parseNoticeList } from './parser
 import {
   type AttendanceRow,
   type ExamRow,
-  type GradeRow,
   parseAttendance,
   parseExamTimetable,
-  parseGrades,
 } from './parsers/records.js';
+import {
+  type CreditRequirements,
+  type GradeRow,
+  gradeTableColumns,
+  gradeViewKind,
+  parseCreditRequirements,
+  parseGradeMarkers,
+  parseGrades,
+  selectedOption,
+} from './parsers/grades.js';
 import {
   activeSemesterLabel,
   type OffGridEntry,
@@ -486,17 +494,67 @@ export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise
   );
   for (const it of noticeOutcome.items) add(it);
 
-  // 6. 成績 (opt-in).
+  // 6. 成績 (opt-in): every graded attempt of every year (failed ones and re-exams included),
+  // in the 履修中含む view when the deployment has it, then 単位修得情報 (requirement status).
   let gradesOk = false;
+  let requirementsOk = false;
   if (o.grades) {
-    const rows = await step('grades', async () => {
+    const got = await step('grades', async () => {
       await session.open(d.screens.gradeDashboard);
-      const page = await session.post(d.actions.gradesFromDashboard);
-      return parseGrades(page.html);
+      let page = await session.post(d.actions.gradesFromDashboard);
+      const markers = parseGradeMarkers(page.html);
+      let view = gradeViewKind(page.html);
+      const a = d.actions;
+      if (a.gradesChangeKind && a.gradesKindIncludingInProgress && view !== 'includingInProgress') {
+        const req = selectedOption(page.html, 'requirementTypeCode');
+        const switched = await session.post(a.gradesChangeKind, [
+          [a.gradesKindField, a.gradesKindIncludingInProgress],
+          ...(req ? ([['requirementTypeCode', req.value]] as const) : []),
+        ]);
+        const switchedView = gradeViewKind(switched.html);
+        if (switchedView === 'includingInProgress' || gradeTableColumns(switched.html).length) {
+          page = switched;
+          view = switchedView;
+        }
+        if (switchedView !== 'includingInProgress')
+          warnings.push(
+            'grades: the 履修中含む view did not open; registered courses without a grade may be missing',
+          );
+      }
+      const rows = parseGrades(page.html, markers);
+      if (rows.length === 0 && gradeTableColumns(page.html).length === 0)
+        throw new Error('the grade table (th#subjectCode) was not found on the grade screen');
+      let requirements: CreditRequirements | undefined;
+      if (a.gradesToRequirements && d.screens.creditRequirements) {
+        try {
+          const req = await session.post(a.gradesToRequirements, [
+            ['rowIndex', ''],
+            ['viewRowIndexArray', ''],
+          ]);
+          requirements = parseCreditRequirements(req.html);
+          if (!requirements) throw new Error('the requirement table was not found');
+        } catch (e) {
+          if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+          warnings.push(`creditRequirements: ${errorMessage(e)}`);
+        }
+      }
+      return { rows, markers, view, requirements };
     });
-    if (rows) {
+    if (got) {
       gradesOk = true;
-      for (const r of rows) add(gradeItem(d, r, index));
+      for (const r of got.rows) add(gradeItem(d, r, index, got.view));
+      if (got.requirements) {
+        requirementsOk = true;
+        add({
+          sourceType: RAW_TYPES.creditRequirements,
+          externalId: got.requirements.requirementType?.code ?? 'default',
+          payload: {
+            ...got.requirements,
+            ...(got.markers.length ? { markers: got.markers } : {}),
+            source: { screen: d.screens.creditRequirements ?? d.screens.grades },
+          },
+        });
+      }
     }
   } else steps.grades = 'skipped';
 
@@ -516,6 +574,7 @@ export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise
   // Disabled opt-in types are complete with zero items: previously synced rows are removed.
   if (attendanceOk || !o.attendance) complete.push(RAW_TYPES.attendance);
   if (gradesOk || !o.grades) complete.push(RAW_TYPES.grade);
+  if (requirementsOk || !o.grades) complete.push(RAW_TYPES.creditRequirements);
 
   const notices: Record<string, NoticeCacheEntry> = {};
   for (const [k, v] of ctx.noticeCache) notices[k] = v;
@@ -727,13 +786,21 @@ function attendanceItem(
   };
 }
 
-function gradeItem(d: LcuDeploymentProfile, r: GradeRow, index: OfferingIndex): RawItem {
+function gradeItem(
+  d: LcuDeploymentProfile,
+  r: GradeRow,
+  index: OfferingIndex,
+  view: 'earned' | 'includingInProgress' | undefined,
+): RawItem {
   const off = index.bySubjectCode(r.subjectCode);
+  const { outcome: _derived, ...row } = r;
   return {
     sourceType: RAW_TYPES.grade,
+    // Stable across views: code + 成績報告時期 + 試験種別 (one row per attempt).
     externalId: `g-${shortHash(r.subjectCode, r.reportTerm ?? '', r.examType ?? '')}`,
     payload: {
-      ...r,
+      ...row,
+      ...(view ? { view } : {}),
       context: off ? { offeringKey: off.key, offeringTitle: off.title } : {},
       source: { screen: d.screens.grades, selector: `tr[subjectCode=${r.subjectCode}]` },
     },
