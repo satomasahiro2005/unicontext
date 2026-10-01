@@ -44,8 +44,8 @@ export function consentPage(input: ConsentPageInput): string {
 <input type="hidden" name="request" value="${escapeHtml(input.sealed)}">
 <label for="passphrase">UniContextのパスフレーズ</label>
 <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" autofocus>
-<div class="row"><button class="secondary" type="submit" name="action" value="deny">拒否</button>
-<button class="primary" type="submit" name="action" value="approve">許可</button></div></form>`
+<div class="row" style="flex-direction:row-reverse"><button class="primary" type="submit" name="action" value="approve">許可</button>
+<button class="secondary" type="submit" name="action" value="deny">拒否</button></div></form>`
     : `<p class="warn">パスフレーズが設定されていません。このパソコンで<code>unicontext remote set-passphrase</code>を実行してから、もう一度やり直してください。</p>`;
   return page(
     'UniContextへの接続',
