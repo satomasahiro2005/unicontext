@@ -35,6 +35,9 @@
       "path": "./packages/context-engine"
     },
     {
+      "path": "./packages/mapping"
+    },
+    {
       "path": "./packages/adapter-mcp"
     },
     {
@@ -72,6 +75,9 @@
     },
     {
       "path": "./connectors/syllabus"
+    },
+    {
+      "path": "./connectors/wordpress-portal"
     },
     {
       "path": "./connectors/chatgpt-record"

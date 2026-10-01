@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "Authorization_RequestDenied",
+    "message": "Insufficient privileges to complete the operation.",
+    "innerError": {
+      "request-id": "00000000-0000-0000-0000-000000000000"
+    }
+  }
+}

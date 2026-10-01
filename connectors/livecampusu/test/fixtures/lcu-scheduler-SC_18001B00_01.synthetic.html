@@ -1,0 +1,20 @@
+<!-- UniContext SYNTHETIC fixture modeled on スケジュール SC_18001B00_01: FullCalendar initialised with an inline `events: [...]` literal (research §1.5: listType Holiday / teachingevent, no XHR). Values are made up. -->
+<main class="c-container">
+<div id="calendar"></div>
+<script type="text/javascript">
+$(function() {
+  var calendarEl = document.getElementById('calendar');
+  $('#calendar').fullCalendar({
+    header: { left: 'prev,next today', center: 'title', right: '' },
+    defaultView: 'agendaWeek',
+    // events rendered by the server
+    events: [
+      { title: 'スポーツの日', start: '2026-10-12', end: '2026-10-13', allDay: true, listType: 'Holiday', color: '#ff7f7f' },
+      { title: "後期授業開始", start: "2026-10-01", allDay: true, listType: "teachingevent", },
+      { title: '学内行事 \'説明会\'', start: '2026-10-02T13:00:00', end: '2026-10-02T14:30:00', allDay: false, listType: 'teachingevent' },
+    ],
+    eventClick: function(info) { scheduleSelect(info.event); }
+  });
+});
+</script>
+</main>

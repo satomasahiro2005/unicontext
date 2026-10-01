@@ -1,0 +1,49 @@
+{
+  "_fixture": "GET https://wwp.shizuoka.ac.jp/acad-affairs-portal/wp-json/wp/v2/posts?per_page=2&_fields=id,date,date_gmt,modified,modified_gmt,link,title,excerpt,categories,content (public WordPress 5.2 REST; headers X-WP-Total/X-WP-TotalPages; 2026-10-01). content/excerpt truncated to 400 chars.",
+  "response": [
+    {
+      "id": 2813,
+      "date": "2026-03-06T17:34:23",
+      "date_gmt": "2026-03-06T08:34:23",
+      "modified": "2026-03-06T17:34:23",
+      "modified_gmt": "2026-03-06T08:34:23",
+      "link": "https://wwp.shizuoka.ac.jp/acad-affairs-portal/archives/2813",
+      "title": {
+        "rendered": "2026年度オンライン授業科目一覧表に関するお知らせを掲載しました。"
+      },
+      "content": {
+        "rendered": "<p>本サイト【学生向け情報】の「オンライン授業科目関係」をご参照ください。</p>\n",
+        "protected": false
+      },
+      "excerpt": {
+        "rendered": "<p>本サイト【学生向け情報】の「オンライン授業科目関係」をご参照ください。</p>\n",
+        "protected": false
+      },
+      "categories": [
+        1
+      ]
+    },
+    {
+      "id": 1527,
+      "date": "2026-01-14T16:20:07",
+      "date_gmt": "2026-01-14T07:20:07",
+      "modified": "2026-01-14T16:21:33",
+      "modified_gmt": "2026-01-14T07:21:33",
+      "link": "https://wwp.shizuoka.ac.jp/acad-affairs-portal/archives/1527",
+      "title": {
+        "rendered": "【重要】卒業・修了する学生のOneDrive削除を含む情報基盤サービスの終了について"
+      },
+      "content": {
+        "rendered": "<p>情報基盤センターWEBサイトにて、「卒業・修了に伴う各種情報基盤サービスの終了」についてご案内をしております。2026年３月に卒業・修了を予定している学生は、以下のリンク先の内容をご確認ください。</p>\n<p><a href=\"https://www.cii.shizuoka.ac.jp/?p=3434\" target=\"_blank\" rel=\"noopener noreferrer\">【重要】卒業・修了する学生のOneDrive削除を含む情報基盤サービスの終了について</a></p>\n",
+        "protected": false
+      },
+      "excerpt": {
+        "rendered": "<p>情報基盤センターWEBサイトにて、「卒業・修了に伴う各種情報基盤サービスの終了」についてご案内をしております。2026年３月に卒業・修了を予定している学生は、以下のリンク先の内容をご確認ください。 【重要】卒業・修了する… <span class=\"read-more\"><a href=\"https://wwp.shizuoka.ac.jp/acad-affairs-portal/archives/1527\">続きを読む &raquo;</a></span></p>\n",
+        "protected": false
+      },
+      "categories": [
+        1
+      ]
+    }
+  ]
+}

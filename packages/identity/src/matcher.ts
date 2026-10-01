@@ -131,6 +131,15 @@ export function scoreOfferingMatch(
       evidence.push('timetable differs');
     }
   }
+  // Title-only sources (a course folder, a transcript's course hint, a Teams team name) carry no
+  // code/teacher/timetable. An exact normalized title in the same academic year is then the best
+  // evidence available, so it may reach the link threshold on its own.
+  const titleOnly = (c: OfferingCandidate): boolean =>
+    !c.courseCode && c.instructorNames.length === 0 && c.schedule.length === 0;
+  if (sim >= 0.95 && a.academicYear && b.academicYear && (titleOnly(a) || titleOnly(b))) {
+    score += 0.2;
+    evidence.push('exact title from a title-only source in the same year');
+  }
   score = Math.max(0, Math.min(1, score));
   const strongEnough = codeMatch || sim >= 0.5;
   const decision =

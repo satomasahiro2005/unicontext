@@ -1,3 +1,3 @@
 # @unicontext/local-files
 
-Local files connector (stub).
+Local files connector (watch roots, extract text, chunk for FTS).

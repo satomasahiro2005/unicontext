@@ -1,0 +1,151 @@
+openapi: 3.0.3
+info:
+  title: Fake LMS
+  version: 2.4.1
+servers:
+  - url: https://lms.example/api/v1
+paths:
+  /courses:
+    get:
+      operationId: listCourses
+      summary: List my courses
+      tags: [courses]
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - name: state
+          in: query
+          schema:
+            type: array
+            items: { type: string }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Course'
+  /courses/{courseId}:
+    parameters:
+      - name: courseId
+        in: path
+        required: true
+        schema: { type: integer }
+    delete:
+      operationId: deleteCourse
+      summary: Delete a course
+      tags: [courses]
+      responses:
+        '204': { description: gone }
+  /courses/{courseId}/assignments:
+    parameters:
+      - name: courseId
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      operationId: listAssignments
+      summary: Assignments of a course
+      tags: [assignments]
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: X-Trace
+          in: header
+          schema: { type: string }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssignmentPage'
+    post:
+      operationId: createAssignment
+      summary: Create an assignment
+      tags: [assignments]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Assignment' }
+      responses:
+        '201': { description: created }
+  /courses/{courseId}/announcements:
+    parameters:
+      - name: courseId
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      summary: Announcements of a course
+      tags: [announcements]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Announcement' }
+  /me:
+    get:
+      operationId: getMe
+      tags: [users]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+  /search:
+    get:
+      operationId: search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ok }
+components:
+  parameters:
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer }
+  schemas:
+    Course:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        code: { type: string }
+        parent:
+          $ref: '#/components/schemas/Course'
+    Assignment:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        due: { type: string, format: date-time }
+    AssignmentPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Assignment'
+        next_cursor:
+          type: string
+          nullable: true
+    Announcement:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }

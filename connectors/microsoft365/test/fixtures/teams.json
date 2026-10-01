@@ -1,0 +1,44 @@
+{
+  "value": [
+    {
+      "id": "11111111-aaaa-4bbb-8ccc-000000000001",
+      "createdDateTime": "2026-03-20T00:00:00Z",
+      "displayName": "2026年度（データベースシステム論・1クラス）",
+      "description": null,
+      "internalId": "19:0001internal@thread.tacv2",
+      "classification": null,
+      "specialization": "educationClass",
+      "visibility": "private",
+      "webUrl": "https://teams.microsoft.com/l/team/19%3a0001%40thread.tacv2/conversations?groupId=11111111-aaaa-4bbb-8ccc-000000000001&tenantId=e0d7dc00-4621-4fe0-90b1-df7b1b40b351",
+      "isArchived": false,
+      "tenantId": "e0d7dc00-4621-4fe0-90b1-df7b1b40b351",
+      "isMembershipLimitedToOwners": false,
+      "memberSettings": null,
+      "guestSettings": null,
+      "messagingSettings": null,
+      "funSettings": null,
+      "discoverySettings": null,
+      "summary": null
+    },
+    {
+      "id": "11111111-aaaa-4bbb-8ccc-000000000002",
+      "createdDateTime": "2026-03-20T00:00:00Z",
+      "displayName": "情報科学基礎演習 自主ゼミ",
+      "description": null,
+      "internalId": "19:0002internal@thread.tacv2",
+      "classification": null,
+      "specialization": "none",
+      "visibility": "private",
+      "webUrl": "https://teams.microsoft.com/l/team/19%3a0002%40thread.tacv2/conversations?groupId=11111111-aaaa-4bbb-8ccc-000000000002&tenantId=e0d7dc00-4621-4fe0-90b1-df7b1b40b351",
+      "isArchived": false,
+      "tenantId": "e0d7dc00-4621-4fe0-90b1-df7b1b40b351",
+      "isMembershipLimitedToOwners": false,
+      "memberSettings": null,
+      "guestSettings": null,
+      "messagingSettings": null,
+      "funSettings": null,
+      "discoverySettings": null,
+      "summary": null
+    }
+  ]
+}

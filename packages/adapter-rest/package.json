@@ -1,10 +1,9 @@
 {
   "name": "@unicontext/adapter-rest",
   "version": "1.0.0",
-  "description": "REST/OpenAPI adapter (stub)",
+  "description": "REST/OpenAPI source adapter with an operation catalog and declarative mappings",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -20,6 +19,11 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/connector-sdk": "workspace:*"
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/mapping": "workspace:*",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
   }
 }

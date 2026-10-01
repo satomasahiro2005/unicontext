@@ -1,2 +1,6 @@
-// Placeholder: implemented by a later lane. See docs/ARCHITECTURE.md.
-export const PACKAGE_NAME = '@unicontext/adapter-cli';
+export * from './config.js';
+export * from './exec.js';
+export * from './adapter.js';
+export * from './connector.js';
+
+export { connector, connector as default } from './factory.js';

@@ -1,10 +1,9 @@
 {
   "name": "@unicontext/local-files",
   "version": "1.0.0",
-  "description": "Local files connector (stub)",
+  "description": "Local files connector (watch roots, extract text, chunk for FTS)",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -20,6 +19,16 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@unicontext/connector-sdk": "workspace:*"
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/identity": "workspace:*",
+    "chokidar": "^5.0.0",
+    "exifr": "^7.1.3",
+    "image-size": "^2.0.4",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "unpdf": "^1.8.1",
+    "zod": "^4.6.5"
   }
 }

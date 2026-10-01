@@ -153,7 +153,7 @@ describe('profile (§54)', () => {
     const p = loadProfile('shizuoka-university');
     expect(p.academicCalendar.timezone).toBe('Asia/Tokyo');
     expect(p.sources.academic?.product).toBe('livecampusu');
-    expect(p.academicCalendar.periods).toHaveLength(5);
+    expect(p.academicCalendar.periods).toHaveLength(7);
   });
   it('rejects unknown or unsafe profile ids', () => {
     expect(() => loadProfile('nope-university')).toThrow(/not found/);

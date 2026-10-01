@@ -1,3 +1,3 @@
 # @unicontext/adapter-rest
 
-REST/OpenAPI adapter (stub).
+REST/OpenAPI source adapter with an operation catalog and declarative mappings.

@@ -1,38 +1,84 @@
 # Shizuoka University deployment profile (§54, §76).
-# Settings only. Product logic lives in connectors/*; nothing here is Shizuoka-specific code.
-# Period times are the commonly published 静岡大学 timetable; verify against the current
-# academic calendar before relying on them.
+# Settings only. Product logic lives in connectors/*; Shizuoka screen ids and hosts live in each
+# connector's deployment module (src/profiles/shizuoka.ts) selected by `deployment: shizuoka`.
+# Observations behind these values: docs/research/shizuoka.md.
 id: shizuoka-university
 name: 静岡大学
 locale: ja-JP
 academicCalendar:
   timezone: Asia/Tokyo
+  # Period = LiveCampusU 時限 pair index (1 = 1・2限 … 7 = 13・14限); every connector uses this.
+  # 1–5 (day) match the university's published 授業時間区分 (8:40 start, 90-minute periods; lunch
+  # 11:50–12:45). 6–7 are the 夜間主コース times of the 人文社会科学部 (17:50–19:20, 19:30–21:00)
+  # from the student handbook; they may differ by campus — verify if you have evening classes.
   periods:
     - { period: 1, start: '08:40', end: '10:10' }
     - { period: 2, start: '10:20', end: '11:50' }
     - { period: 3, start: '12:45', end: '14:15' }
     - { period: 4, start: '14:25', end: '15:55' }
     - { period: 5, start: '16:05', end: '17:35' }
+    - { period: 6, start: '17:50', end: '19:20' }
+    - { period: 7, start: '19:30', end: '21:00' }
+  # Term dates are approximate; the authoritative 行事予定表 is a PDF on the 学生教務ポータル
+  # (ingested by the wordpress-portal source as a document).
   terms:
     - { id: '2026-1', name: '2026年度 前期', year: 2026, start: '2026-04-08', end: '2026-08-10' }
     - { id: '2026-2', name: '2026年度 後期', year: 2026, start: '2026-10-01', end: '2027-02-10' }
+
+# Role → product (+ how to connect). `connector` = package dir; `module` picks one of several modules
+# in a package (docs/connectors/README.md).
 sources:
-  academic: { product: livecampusu }
-  collaboration: { product: microsoft365 }
-  discussion: { product: edstem }
-  syllabus: { product: syllabus }
-  lectures: { product: chatgpt-record }
-  files: { product: local-files }
+  academic: { product: livecampusu, connector: livecampusu, schedule: 15m }
+  collaboration: { product: microsoft365, connector: microsoft365, schedule: 15m }
+  syllabus: { product: syllabus, connector: syllabus, schedule: 1d }
+  cancellations:
+    product: lcu-public-cancellations
+    connector: syllabus
+    module: public-cancellations
+    schedule: 15m
+  portal: { product: wordpress-portal, connector: wordpress-portal, schedule: 1h }
+  files: { product: local-files, connector: local-files, schedule: event }
+  lectures: { product: chatgpt-record, connector: chatgpt-record, schedule: event }
+  # EdStem is not in the university's guidance (research §6); individual courses may use it.
+  # Disabled by default; enable it in config.yaml with an EdStem MCP server command.
+  discussion:
+    product: edstem
+    connector: adapter-mcp
+    adapter: mcp
+    enabled: false
+    mapping: edstem-mcp.yaml
+
 products:
   livecampusu:
-    # Deployment settings consumed by connectors/livecampusu. The connector decides how to use them.
-    auth: entra
+    deployment: shizuoka
+    # Browser SSO: Shibboleth IdP (idp.shizuoka.ac.jp) → Entra ID + MFA, done by the human once.
+    # The hidden local-account form is never used (CONNECTOR_POLICY.md).
+    auth: browser-sso
+    allowLocalAccount: false
     sourceLabel: 学務情報システム
+    # The FAQ mentions a nightly stop without times; this window is a conservative assumption.
+    maintenanceWindow: '01:00-06:00'
+    idleTimeoutMinutes: 60
   microsoft365:
+    tenant: e0d7dc00-4621-4fe0-90b1-df7b1b40b351
     tenantHint: shizuoka.ac.jp
-    sourceLabel: Microsoft Teams
+    sourceLabel: Microsoft 365
+    # clientId is user-supplied (app registration by students is allowed; user consent policy is
+    # unverified — see docs/connectors/microsoft365.md).
   syllabus:
+    deployment: shizuoka
     sourceLabel: シラバス
+  lcu-public-cancellations:
+    deployment: shizuoka
+    sourceLabel: 休講案内
+  wordpress-portal:
+    deployment: shizuoka
+    label: 学生教務ポータル
+  local-files:
+    sourceLabel: ローカルファイル
+  chatgpt-record:
+    sourceLabel: ChatGPT Record
+
 privacy:
   # Student IDs are redacted from logs. Pattern is intentionally broad (8 alphanumerics).
   studentIdPattern: "\\b[0-9]{2}[0-9A-Z][0-9]{5}\\b"

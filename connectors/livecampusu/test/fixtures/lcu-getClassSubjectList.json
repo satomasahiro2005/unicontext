@@ -1,0 +1,9 @@
+{
+  "_fixture": "POST /lcu-web/SubjectInformationSearch/getClassSubjectList (logged in, 2026-10-01). Called by $.ajaxPostJSON from changeCmb() on 課題(SC_14002B00_01)/出欠(SC_13002B00_01) screens. Request: Content-Type application/json;charset=utf-8, header X-CSRF-TOKEN (page token), body = convertFormToJson(#SubjectInformationSearchConditionForm) = {staffCode, startYear, startSemester(1=前期,2=後期), subjectCode, _csrf}. Response application/json: the student's enrolled class-subjects for that year/semester. 13 items for 2026/1; 0 for 2026/2 (registration not finished). value = <8-digit subjectCode>_<classCode>.",
+  "request": {"staffCode": "", "startYear": "2026", "startSemester": "1", "subjectCode": "", "_csrf": "REDACTED"},
+  "response": [
+    {"label": "コンピュータ入門（再履修（情）１）", "optGroupflg": false, "value": "77301020_RW"},
+    {"label": "情報学方法論（1クラス）", "optGroupflg": false, "value": "77301090_61"},
+    {"label": "情報セキュリティと法制度（1クラス）", "optGroupflg": false, "value": "77351100_61"}
+  ]
+}

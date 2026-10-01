@@ -1,2 +1,7 @@
-// Placeholder: implemented by a later lane. See docs/ARCHITECTURE.md.
-export const PACKAGE_NAME = '@unicontext/adapter-mcp';
+export * from './config.js';
+export * from './result.js';
+export * from './transport.js';
+export * from './adapter.js';
+export * from './connector.js';
+
+export { connector, connector as default } from './factory.js';

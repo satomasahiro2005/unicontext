@@ -4,3 +4,4 @@ pnpm-lock.yaml
 docs/research
 docs/SPEC.md
 *.tsbuildinfo
+**/test/fixtures

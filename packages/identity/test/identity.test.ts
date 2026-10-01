@@ -74,6 +74,15 @@ describe('offering matcher', () => {
     const ed = offering('courseOffering:ed', { title: 'DBSys' });
     expect(scoreOfferingMatch(toCandidate(lcu), toCandidate(ed)).decision).toBe('suggest');
   });
+  it('auto-links a title-only source (course folder) with the exact title in the same year', () => {
+    const folder = offering('courseOffering:folder', {
+      title: 'データベースシステム論',
+      academicYear: 2026,
+    });
+    expect(scoreOfferingMatch(toCandidate(lcu), toCandidate(folder)).decision).toBe('link');
+    const noYear = offering('courseOffering:folder2', { title: 'データベースシステム論' });
+    expect(scoreOfferingMatch(toCandidate(lcu), toCandidate(noYear)).decision).toBe('suggest');
+  });
   it('vetoes different years (Course vs CourseOffering, §8)', () => {
     const old = offering('courseOffering:old', {
       title: 'データベースシステム論',

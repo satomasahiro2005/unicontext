@@ -1,0 +1,82 @@
+{
+  "_fixture": "GET /lcu-web/SC_01002B00_00/importantNotice (XHR from home SC_01002B00_01, logged in, 2026-10-01). application/json. Top-level array (151 items observed, all importanceCategory=\"1\"). contactSeq values replaced; teacher name inside a title replaced. contactTypeCode values observed: U04 講義室変更, U05 学内連絡, U06 教員連絡, U23 小テスト登録通知, U24 レポート登録通知, U26 小テスト催促通知, U27 レポート催促通知.",
+  "response": [
+    {
+      "contactDate": "2026/09/30",
+      "contactSeq": "100001",
+      "contactTime": "17:00",
+      "contactTypeCode": "U05",
+      "contactTypeTitle": "学内連絡",
+      "importanceCategory": "1",
+      "subjectClassSemesterWeekHour": "",
+      "targetDate": "",
+      "title": "2026年度「学びの実態調査」の実施について【回答期間：10月1日(木)～11月15日(日)】"
+    },
+    {
+      "contactDate": "2026/08/27",
+      "contactSeq": "100002",
+      "contactTime": "11:11",
+      "contactTypeCode": "U06",
+      "contactTypeTitle": "教員連絡",
+      "importanceCategory": "1",
+      "subjectClassSemesterWeekHour": "論理回路\r\n前期前半/月9・10, 前期後半/月9・10",
+      "targetDate": "",
+      "title": "論理回路：成績報告完了と再試の場所日時(9/25,共21,12:45-)"
+    },
+    {
+      "contactDate": "2026/07/23",
+      "contactSeq": "100003",
+      "contactTime": "10:30",
+      "contactTypeCode": "U04",
+      "contactTypeTitle": "講義室変更",
+      "importanceCategory": "1",
+      "subjectClassSemesterWeekHour": "機械語と計算機械\r\n前期前半/金5・6, 前期前半/金7・8, 前期後半/金5・6, 前期後半/金7・8",
+      "targetDate": "2026/07/24",
+      "title": "7/24(金) B班の教室を科学実験室から共41に変更します"
+    },
+    {
+      "contactDate": "2026/08/03",
+      "contactSeq": "100004",
+      "contactTime": "13:40",
+      "contactTypeCode": "U23",
+      "contactTypeTitle": "小テスト登録通知",
+      "importanceCategory": "1",
+      "subjectClassSemesterWeekHour": "モデリング\r\n前期後半/水1・2",
+      "targetDate": "",
+      "title": "教員パート：期末課題"
+    },
+    {
+      "contactDate": "2026/08/02",
+      "contactSeq": "100005",
+      "contactTime": "08:00",
+      "contactTypeCode": "U24",
+      "contactTypeTitle": "レポート登録通知",
+      "importanceCategory": "1",
+      "subjectClassSemesterWeekHour": "信号処理基礎\r\n前期前半/金9・10, 前期後半/金9・10",
+      "targetDate": "",
+      "title": "信号処理基礎2026年度期末試験（在宅試験）"
+    },
+    {
+      "contactDate": "2026/07/21",
+      "contactSeq": "100006",
+      "contactTime": "23:55",
+      "contactTypeCode": "U26",
+      "contactTypeTitle": "小テスト催促通知",
+      "importanceCategory": "1",
+      "subjectClassSemesterWeekHour": "オートマトンと言語理論\r\n前期前半/水5・6, 前期後半/水5・6",
+      "targetDate": "",
+      "title": "第4回  小テスト"
+    },
+    {
+      "contactDate": "2026/08/07",
+      "contactSeq": "100007",
+      "contactTime": "06:00",
+      "contactTypeCode": "U27",
+      "contactTypeTitle": "レポート催促通知",
+      "importanceCategory": "1",
+      "subjectClassSemesterWeekHour": "信号処理基礎\r\n前期前半/金9・10, 前期後半/金9・10",
+      "targetDate": "",
+      "title": "信号処理基礎2026年度期末試験（在宅試験）"
+    }
+  ]
+}
