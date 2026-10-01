@@ -131,7 +131,7 @@ Codex versions that support streamable HTTP servers can use the daemon instead: 
 
 ### ChatGPT
 
-ChatGPT connects to remote MCP servers over public HTTPS. UniContext deliberately listens on loopback only, so ChatGPT's apps cannot reach it, and exposing your academic data through a public tunnel is not recommended. Use Claude or Codex locally, or the REST API (`/api/v1/*`) from your own tooling.
+ChatGPT on the web (developer-mode MCP app) and claude.ai connect to remote MCP servers over public HTTPS. UniContext listens on loopback only by default. If you want it there, enable the optional **read-only remote endpoint**: a separate listener with only read tools, published through a Cloudflare named tunnel and protected by OAuth 2.1 plus an owner passphrase on every authorization. It never exposes the REST API, the Web UI or the propose-only tools, and every remote tool call is audit-logged. Setup and revocation: [docs/remote.md](docs/remote.md) (`unicontext remote set-passphrase | tunnel-config | clients | revoke`).
 
 ## Web UI
 

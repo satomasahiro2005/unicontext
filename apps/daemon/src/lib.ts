@@ -14,3 +14,4 @@ export * from './service.js';
 export * from './client.js';
 export * from './dev.js';
 export * from './version.js';
+export * from './remote/index.js';

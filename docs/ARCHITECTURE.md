@@ -593,10 +593,23 @@ candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `Task
   syllabus module (`targetProvider`); `startWatchers` runs `watch()` of WatchableAdapters (local-files,
   chatgpt-record) into `SyncEngine.ingest` while the scheduler runs. `unicontext login` calls `authenticate()` and,
   when that is not enough, the adapter's interactive `login()` (InteractiveAuthAdapter).
+- Remote read-only endpoint (apps/daemon `src/remote/`, [docs/remote.md](remote.md)): when `config.remote.enabled`,
+  `startDaemon` starts a **second** Fastify instance on `127.0.0.1:remote.port` (default 17879) that a cloudflared
+  named tunnel publishes at `remote.publicUrl`. It has no REST/Web UI routes, only an OAuth 2.1 authorization server
+  (`OAuthServer`: RFC 9728/8414 metadata, PKCE S256 only, RFC 8707 resource binding, RFC 9207 `iss`, DCR and Client ID
+  Metadata Documents incl. `private_key_jwt`, redirect allowlist for ChatGPT/claude.ai, owner passphrase with
+  persistent lockout) and `/mcp` served by `handleMcpHttp` with `surface: 'remote'`. `createMcpServer({surface:
+'remote'})` skips every tool whose `readOnly` is false (the propose-only writes), uses `REMOTE_SERVER_INSTRUCTIONS`,
+  returns compact text, drops raw payloads from `get_source`, and reports every call to `onToolCall` (audit log
+  `logs/remote-audit.jsonl`). State (clients, grants, hashed tokens, scrypt passphrase) is a JSON file
+  `remote/oauth-state.json` written atomically by both the daemon and `unicontext remote …`; readers reload on mtime
+  change, so `remote revoke` applies on the next request. `X-Forwarded-*`/`CF-Connecting-IP` are trusted only from
+  `remote.trustedProxies`; the issuer and token audience always come from `remote.publicUrl`.
 - `@unicontext/cli` (apps/cli, bin `unicontext`) and `@unicontext/web` (apps/web: React, Vite, TanStack Router, built
   to `apps/web/dist` and served by the daemon).
-- Config additions in core (`ConfigSchema`): `daemon.port` (default 17878) and `notifications` (enabled, minPriority,
-  deadlineLeadTimes, sinks.console/desktop/webhook). Config keys that are not in the schema are dropped on load.
+- Config additions in core (`ConfigSchema`): `daemon.port` (default 17878), `notifications` (enabled, minPriority,
+  deadlineLeadTimes, sinks.console/desktop/webhook) and `remote` (enabled=false, port 17879, publicUrl,
+  trustedProxies, accessTokenTtl 1h, refreshTokenTtl 30d, extraRedirectUris, clientMetadataHosts). Config keys that are not in the schema are dropped on load.
 - Dev mode (`unicontextd --dev`, `unicontext --dev <cmd>`): the Shizuoka seed through the fake connector with the clock
   anchored at 2026-10-01 09:30 JST. Nothing contacts a university.
 

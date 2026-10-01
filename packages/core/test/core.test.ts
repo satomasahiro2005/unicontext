@@ -15,6 +15,7 @@ import {
   noneAiProvider,
   parseConfig,
   parseDuration,
+  parseProfile,
   PolicyViolationError,
   redact,
   resolveDataPaths,
@@ -166,6 +167,13 @@ describe('profile (§54)', () => {
     expect(p.academicCalendar.timezone).toBe('Asia/Tokyo');
     expect(p.sources.academic?.product).toBe('livecampusu');
     expect(p.academicCalendar.periods).toHaveLength(7);
+  });
+  it('carries the observed registration credit cap (履修制限科目 only)', () => {
+    const cap = loadProfile('shizuoka-university').registration?.creditCap;
+    expect(cap?.perTerm).toBe(24);
+    expect(cap?.perYear).toBeUndefined();
+    expect(cap?.note).toContain('履修制限科目');
+    expect(parseProfile('id: x\nacademicCalendar: {}\n').registration).toBeUndefined();
   });
   it('rejects unknown or unsafe profile ids', () => {
     expect(() => loadProfile('nope-university')).toThrow(/not found/);

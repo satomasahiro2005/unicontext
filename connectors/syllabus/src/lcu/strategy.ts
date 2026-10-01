@@ -107,9 +107,19 @@ export class LcuPublicStrategy implements SyllabusStrategy {
     return v;
   }
 
+  titleCodeFor(year: number, faculty: string): string | undefined {
+    return this.options.deployment.titles[String(year)]?.[faculty];
+  }
+
+  yearOfTitleCode(titleCode: string): number | undefined {
+    for (const [year, codes] of Object.entries(this.options.deployment.titles))
+      if (Object.values(codes).includes(titleCode) && /^\d+$/.test(year)) return Number(year);
+    return undefined;
+  }
+
   private titleCode(year: number | undefined, faculty: string | undefined): string | undefined {
     if (year === undefined || !faculty) return undefined;
-    return this.options.deployment.titles[String(year)]?.[faculty];
+    return this.titleCodeFor(year, faculty);
   }
 
   private queryFor(unit: SyllabusUnit): Query {
@@ -127,6 +137,18 @@ export class LcuPublicStrategy implements SyllabusStrategy {
         subjectCode: t.subjectCode,
         classCode: t.classCode,
         maxRows: 20,
+      };
+    }
+    if (unit.kind === 'catalog') {
+      const c = unit.catalog;
+      fields.title = c.titleCode;
+      fields.semester = c.semester;
+      return {
+        fields,
+        year: c.year,
+        subjectCode: undefined,
+        classCode: undefined,
+        maxRows: c.maxRows,
       };
     }
     const s: SyllabusSearch = unit.search;
@@ -234,6 +256,8 @@ export class LcuPublicStrategy implements SyllabusStrategy {
             year,
             categories: category ? [category] : [],
             columns: c,
+            url: `${this.search_}/init`,
+            ...(query.fields.title ? { titleCode: query.fields.title } : {}),
             handle: {
               query,
               queryKey,
@@ -249,11 +273,13 @@ export class LcuPublicStrategy implements SyllabusStrategy {
               ? `no syllabus found for ${unit.target.year}/${unit.target.subjectCode}`
               : 'search returned no rows',
           );
+        let truncated = false;
         if (out.length > query.maxRows) {
           warnings.push(`search returned ${out.length} rows, limited to ${query.maxRows}`);
           out.length = query.maxRows;
+          truncated = true;
         }
-        return { rows: out, warnings };
+        return { rows: out, warnings, ...(truncated ? { truncated } : {}) };
       }),
     );
   }

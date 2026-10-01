@@ -38,6 +38,20 @@ import {
   type McpEnvelope,
 } from './envelope.js';
 import { HIGH_RISK_SUBJECT_KINDS, isHighRiskPredicate, type ProposalStore } from './proposals.js';
+import {
+  CREDIT_SUMMARY_DESCRIPTION,
+  CREDIT_SUMMARY_TITLE,
+  creditSummaryShape,
+  GET_SYLLABUS_DESCRIPTION,
+  GET_SYLLABUS_TITLE,
+  getCreditSummary,
+  getSyllabus,
+  getSyllabusShape,
+  SEARCH_SYLLABUS_DESCRIPTION,
+  SEARCH_SYLLABUS_TITLE,
+  searchSyllabus,
+  searchSyllabusShape,
+} from './syllabus.js';
 
 export interface McpDeps {
   uc: UniContext;
@@ -46,6 +60,22 @@ export interface McpDeps {
   version?: string;
   /** Extra, already-safe source information (e.g. connector health) the daemon adds to `get_source`. */
   sourcesInfo?: () => unknown;
+  /**
+   * `local` (default): every tool, including the propose-only writes. `remote`: the read-only
+   * surface published through a tunnel to ChatGPT / claude.ai — tools that are not read-only are
+   * not registered at all, and `get_source` leaves out raw payloads.
+   */
+  surface?: McpSurface;
+  /** Called after every tool call (audit log of the remote surface). Never receives arguments. */
+  onToolCall?: (event: ToolCallEvent) => void;
+}
+
+export type McpSurface = 'local' | 'remote';
+
+export interface ToolCallEvent {
+  tool: string;
+  ok: boolean;
+  ms: number;
 }
 
 export const MCP_SERVER_NAME = 'unicontext';
@@ -62,6 +92,16 @@ export const SERVER_INSTRUCTIONS = [
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
   '書き込みは propose-only です。correct_fact は提案を作るだけで、ユーザー本人が確認するまで何も変更されません。課題の提出・履修登録や削除・成績に関わる操作はできません（提出済み status は提出システムからのみ反映されます）。',
   'Answers must cite sources, must report conflicting sources instead of picking one, and writes are propose-only.',
+].join('\n');
+
+/** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */
+export const REMOTE_SERVER_INSTRUCTIONS = [
+  'UniContextは学生本人の大学の予定・課題・お知らせ・講義録・シラバスを、情報源つきで返す読み取り専用のサーバーです。',
+  '回答するときは、各結果のcitations・answerHintに従い「根拠: 学務情報システム 10/1 09:42取得」のように出典を添えてください。',
+  'conflictsが空でないときは情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典を伝えてください。',
+  '情報がない・見つからないときは推測で補わず、そう伝えてください。',
+  'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
+  'Read-only: answers must cite sources and report conflicting sources instead of picking one.',
 ].join('\n');
 
 // ---------- shared plumbing ----------
@@ -85,9 +125,9 @@ const READ_ONLY = {
   openWorldHint: false,
 } as const;
 
-function envelopeResult(envelope: McpEnvelope): CallToolResult {
+function envelopeResult(envelope: McpEnvelope, compact = false): CallToolResult {
   return {
-    content: [{ type: 'text', text: JSON.stringify(envelope, null, 2) }],
+    content: [{ type: 'text', text: JSON.stringify(envelope, null, compact ? 0 : 2) }],
     structuredContent: envelope as unknown as Record<string, unknown>,
   };
 }
@@ -163,9 +203,10 @@ const jsonValueInput = z.union([
 export function createMcpServer(deps: McpDeps): McpServer {
   const { uc, proposals } = deps;
   const logger = deps.logger ?? silentLogger;
+  const remote = deps.surface === 'remote';
   const server = new McpServer(
     { name: MCP_SERVER_NAME, version: deps.version ?? DEFAULT_MCP_VERSION },
-    { instructions: SERVER_INSTRUCTIONS },
+    { instructions: remote ? REMOTE_SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS },
   );
 
   const courseId = (input: string | undefined): string | undefined =>
@@ -173,18 +214,29 @@ export function createMcpServer(deps: McpDeps): McpServer {
 
   function tool<S extends z.ZodRawShape>(
     name: string,
-    meta: { title: string; description: string; readOnly?: boolean },
+    meta: { title: string; description: string; remoteDescription?: string; readOnly?: boolean },
     shape: S,
     run: (args: z.infer<z.ZodObject<S>>) => ToolOutput | Promise<ToolOutput>,
   ): void {
+    // The remote surface is read-only by construction: a write tool is never registered there.
+    if (remote && meta.readOnly === false) return;
+    const audit = (ok: boolean, started: number): void => {
+      try {
+        deps.onToolCall?.({ tool: name, ok, ms: Date.now() - started });
+      } catch (e) {
+        logger.warn('mcp audit hook failed', { tool: name, error: errorMessage(e) });
+      }
+    };
     const callback = async (args: unknown): Promise<CallToolResult> => {
       const started = Date.now();
       try {
         const out = await run(args as z.infer<z.ZodObject<S>>);
         logger.debug('mcp tool', { tool: name, ms: Date.now() - started });
-        return envelopeResult(buildEnvelope(out.data, out.options));
+        audit(true, started);
+        return envelopeResult(buildEnvelope(out.data, out.options), remote);
       } catch (e) {
         logger.debug('mcp tool error', { tool: name, ms: Date.now() - started });
+        audit(false, started);
         return errorResult(e, logger, name, redactionOptions(uc));
       }
     };
@@ -192,7 +244,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       name,
       {
         title: meta.title,
-        description: meta.description,
+        description: remote ? (meta.remoteDescription ?? meta.description) : meta.description,
         inputSchema: shape,
         outputSchema: EnvelopeOutputShape,
         annotations:
@@ -400,6 +452,29 @@ export function createMcpServer(deps: McpDeps): McpServer {
     },
   );
 
+  // ----- syllabus / course planning (read-only) -----
+
+  tool(
+    'search_syllabus',
+    { title: SEARCH_SYLLABUS_TITLE, description: SEARCH_SYLLABUS_DESCRIPTION },
+    searchSyllabusShape,
+    (a) => searchSyllabus(uc, a),
+  );
+
+  tool(
+    'get_syllabus',
+    { title: GET_SYLLABUS_TITLE, description: GET_SYLLABUS_DESCRIPTION },
+    getSyllabusShape,
+    (a) => getSyllabus(uc, a),
+  );
+
+  tool(
+    'get_credit_summary',
+    { title: CREDIT_SUMMARY_TITLE, description: CREDIT_SUMMARY_DESCRIPTION },
+    creditSummaryShape,
+    (a) => getCreditSummary(uc, a),
+  );
+
   // ----- search / sources / conflicts -----
 
   tool(
@@ -428,6 +503,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: '出典の詳細',
       description:
         '回答の根拠をたどる。citations の sourceReferenceId（または rawItemId）から、出典の情報（システム・取得時刻・URL・位置）と、取得した元データの要約（機密は伏せ字、4000文字まで）を返す。 / Resolve a citation to its source reference and a redacted, truncated raw payload summary.',
+      remoteDescription:
+        '回答の根拠をたどる。citations の sourceReferenceId（または rawItemId）から、出典の情報（システム・取得時刻・URL・位置）と、その出典から得た事実の一覧を返す。 / Resolve a citation to its source reference and the facts it supports.',
     },
     {
       sourceReferenceId: z.string().min(1).optional().describe('citations[].sourceReferenceId'),
@@ -642,7 +719,17 @@ export function createMcpServer(deps: McpDeps): McpServer {
     if (a.rawItemId && !rawItem && !reference) throw new NotFoundError(`raw item ${a.rawItemId}`);
 
     let rawView: Record<string, unknown> | undefined;
-    if (rawItem) {
+    if (rawItem && remote) {
+      // The remote surface never ships raw source payloads, only what was read and when.
+      rawView = {
+        id: rawItem.id,
+        sourceId: rawItem.sourceId,
+        sourceType: rawItem.sourceType,
+        fetchedAt: rawItem.fetchedAt,
+        sourceUpdatedAt: rawItem.sourceUpdatedAt,
+        deletedAt: rawItem.deletedAt,
+      };
+    } else if (rawItem) {
       const payload = redact(rawItem.payload, ropts);
       const text = JSON.stringify(payload) ?? 'null';
       rawView = {
@@ -680,7 +767,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             observedAt: f.observedAt,
           }))
       : [];
-    const extra = deps.sourcesInfo?.();
+    const extra = remote ? undefined : deps.sourcesInfo?.();
     const citation: Citation | undefined = reference
       ? toCitation(reference, uc.timezone)
       : undefined;

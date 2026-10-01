@@ -78,6 +78,46 @@ export const ConfigSchema = z.object({
   daemon: z
     .object({ port: z.number().int().min(1024).max(65535).default(17878) })
     .default({ port: 17878 }),
+  /**
+   * Read-only remote MCP endpoint for ChatGPT / claude.ai (docs/remote.md). Off by default. It is a
+   * separate 127.0.0.1 listener that a tunnel (cloudflared) publishes at `publicUrl`; it serves
+   * only read tools plus the OAuth 2.1 authorization server, never the admin API or the Web UI.
+   */
+  remote: z
+    .object({
+      enabled: z.boolean().default(false),
+      port: z.number().int().min(1024).max(65535).default(17879),
+      /** Public https origin the tunnel serves, e.g. https://uc.example.ac.jp (no path). */
+      publicUrl: z.string().optional(),
+      /** Peers whose X-Forwarded-* / CF-Connecting-IP headers are trusted (the local tunnel). */
+      trustedProxies: z.array(z.string()).default(['127.0.0.1', '::1', '::ffff:127.0.0.1']),
+      accessTokenTtl: z.string().default('1h'),
+      refreshTokenTtl: z.string().default('30d'),
+      /**
+       * Extra exact redirect URIs to allow besides ChatGPT's and claude.ai's (e.g. MCP Inspector:
+       * http://localhost:6274/oauth/callback). Keep empty for normal use.
+       */
+      extraRedirectUris: z.array(z.string()).default([]),
+      /** Hosts (and their subdomains) whose Client ID Metadata Documents may be fetched. */
+      clientMetadataHosts: z
+        .array(z.string())
+        .default(['chatgpt.com', 'openai.com', 'claude.ai', 'claude.com', 'anthropic.com']),
+    })
+    .default({
+      enabled: false,
+      port: 17879,
+      trustedProxies: ['127.0.0.1', '::1', '::ffff:127.0.0.1'],
+      accessTokenTtl: '1h',
+      refreshTokenTtl: '30d',
+      extraRedirectUris: [],
+      clientMetadataHosts: [
+        'chatgpt.com',
+        'openai.com',
+        'claude.ai',
+        'claude.com',
+        'anthropic.com',
+      ],
+    }),
   /** Notification engine (§46). Webhook is off by default; its secret lives in the SecretStore. */
   notifications: z
     .object({

@@ -25,6 +25,10 @@ export interface SyllabusStrategy {
   readonly id: string;
   /** Site root; the session only talks to this origin. */
   readonly baseUrl: string;
+  /** Search form `title` value for a year x faculty code, when the system has such a table. */
+  titleCodeFor?(year: number, faculty: string): string | undefined;
+  /** Reverse of `titleCodeFor`: the academic year a title value belongs to, when known. */
+  yearOfTitleCode?(titleCode: string): number | undefined;
   /** Find candidate rows for a target or a search. Never opens details. */
   search(unit: SyllabusUnit, session: HttpSession): Promise<SyllabusSearchResult>;
   /** Open one row (as returned by `search`) and parse its syllabus. */

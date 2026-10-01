@@ -40,12 +40,17 @@ export function syllabusSections(p: SyllabusEntryPayload): Section[] {
     if (body && body.trim()) out.push({ heading, body: body.trim() });
   };
   const name = d.name ?? p.row['講義名'] ?? '';
+  const rowOnly = p.detailFetched === false;
+  const numbering = d.numbering ?? (p.row['ナンバリング'] || undefined);
+  const instructors = d.instructors.length ? d.instructors : splitRowNames(p.row['担当教員']);
   const overview = [
     `科目: ${name}${d.nameEn ? `（${d.nameEn}）` : ''}`,
-    `科目コード: ${p.subjectCode}${d.numbering ? ` / ナンバリング: ${d.numbering}` : ''}`,
+    `科目コード: ${p.subjectCode}${numbering ? ` / ナンバリング: ${numbering}` : ''}`,
     `クラス: ${d.className ?? p.className}`,
-    d.instructors.length ? `担当教員: ${d.instructors.join('、')}` : undefined,
-    `開講: ${[p.year ? `${p.year}年度` : undefined, d.semester, d.dayPeriod].filter(Boolean).join(' ')}`,
+    instructors.length ? `担当教員: ${instructors.join('、')}` : undefined,
+    `開講: ${[p.year ? `${p.year}年度` : undefined, d.semester ?? p.row['開講学期'], d.dayPeriod ?? p.row['曜日・時限']].filter(Boolean).join(' ')}`,
+    rowOnly && (d.grade ?? p.row['学年']) ? `対象学年: ${d.grade ?? p.row['学年']}` : undefined,
+    rowOnly && p.categories.length ? `カテゴリ: ${p.categories.join('、')}` : undefined,
     d.room ? `教室: ${d.room}` : undefined,
     d.credits !== undefined ? `単位数: ${d.credits}` : undefined,
     d.requirement ? `必修選択区分: ${d.requirement}` : undefined,
@@ -53,6 +58,7 @@ export function syllabusSections(p: SyllabusEntryPayload): Section[] {
     .filter((l): l is string => Boolean(l))
     .join('\n');
   add('概要', overview);
+  if (rowOnly) add('注記', 'シラバス詳細は未取得（一覧の情報のみ）');
   add('キーワード', d.keywords.join('、'));
   add('授業の目標', d.goals);
   add('学修内容', d.content);
@@ -122,7 +128,7 @@ export function createSyllabusNormalizer(): Normalizer {
           ...(d.nameEn ? { titleEn: d.nameEn } : {}),
           ...(d.credits !== undefined ? { credits: d.credits } : {}),
           ...(d.department ? { department: d.department } : {}),
-          extra: compact({ numbering: d.numbering }),
+          extra: compact({ numbering: d.numbering ?? (p.row['ナンバリング'] || undefined) }),
         },
         ref,
       });
@@ -158,14 +164,16 @@ export function createSyllabusNormalizer(): Normalizer {
             })),
             termSpan: d.termSpan,
             categories: p.categories,
-            grade: d.grade,
+            grade: d.grade ?? (p.row['学年'] || undefined),
             campus: d.campus,
             requirement: d.requirement,
+            credits: d.credits,
             delivery: d.delivery,
             officeHours: d.officeHours,
             laboratory: d.laboratory,
             instructorsEn: d.instructorsEn,
             title: p.title,
+            ...(p.detailFetched === false ? { detailFetched: false } : {}),
             ...(Object.keys(d.extra).length ? { unmapped: d.extra } : {}),
           }),
         },
@@ -207,6 +215,6 @@ export function createSyllabusNormalizer(): Normalizer {
 function splitRowNames(text: string | undefined): string[] {
   return (text ?? '')
     .split(/[、,，／/]/)
-    .map((s) => s.trim())
+    .map((s) => s.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 }

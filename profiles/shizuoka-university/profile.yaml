@@ -76,6 +76,15 @@ academicCalendar:
     - { date: '2026-07-17', dayOfWeek: 1, note: 月曜授業 }
     - { date: '2026-11-25', dayOfWeek: 1, note: 月曜授業 }
 
+# 履修登録の上限単位数. Observed on the LCU registration screen (履修登録 > 履修単位サマリ,
+# 上限単位数 今学期 24.0 / 年間 -) in 2026, see docs/research/lcu-registration.md §8. The screen
+# applies it to 履修制限科目 only (履修制限外科目 are counted separately), so it is not a cap on the
+# total number of credits a student can take.
+registration:
+  creditCap:
+    perTerm: 24
+    note: 履修登録画面の上限単位数（2026年に確認）。履修制限科目の登録単位にかかり、履修制限外科目は別枠。
+
 # Role → product (+ how to connect). `connector` = package dir; `module` picks one of several modules
 # in a package (docs/connectors/README.md).
 sources:

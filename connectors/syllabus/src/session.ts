@@ -1,5 +1,5 @@
 import type { HttpClient } from '@unicontext/connector-sdk';
-import { ConnectorError } from '@unicontext/core';
+import { type Clock, ConnectorError } from '@unicontext/core';
 
 /** The server refused to continue the screen flow (expired session, stale csrf, error screen). */
 export class SessionExpiredError extends ConnectorError {}
@@ -18,6 +18,12 @@ export interface SessionRequest {
   /** application/x-www-form-urlencoded body (encoded as UTF-8). */
   form?: Record<string, string>;
   signal?: AbortSignal;
+}
+
+/** Politeness: minimum gap between the end of one HTTP request and the start of the next. */
+export interface SessionPacing {
+  minIntervalMs: number;
+  clock: Clock;
 }
 
 function decode(buffer: ArrayBuffer, contentType: string | null): string {
@@ -42,11 +48,14 @@ export class HttpSession {
   private readonly origin: string;
   /** Free-form per-session state for strategies (csrf token, current screen). */
   readonly state = new Map<string, unknown>();
+  /** Clock time (ms) at which the last request finished. */
+  private lastRequestEnd: number | undefined;
 
   constructor(
     private readonly http: HttpClient,
     readonly baseUrl: string,
     private readonly maxRedirects = 8,
+    private readonly pacing?: SessionPacing,
   ) {
     this.origin = new URL(baseUrl).origin;
   }
@@ -62,6 +71,18 @@ export class HttpSession {
   reset(): void {
     this.cookies.clear();
     this.state.clear();
+  }
+
+  /** Sleep (on the injected clock) until `minIntervalMs` passed since the previous request ended. */
+  private async pace(signal: AbortSignal | undefined): Promise<void> {
+    const p = this.pacing;
+    if (!p || p.minIntervalMs <= 0 || this.lastRequestEnd === undefined) return;
+    const wait = this.lastRequestEnd + p.minIntervalMs - p.clock.now().getTime();
+    if (wait > 0) await p.clock.sleep(wait, signal);
+  }
+
+  private markRequestEnd(): void {
+    if (this.pacing) this.lastRequestEnd = this.pacing.clock.now().getTime();
   }
 
   hasCookie(name: string): boolean {
@@ -115,13 +136,19 @@ export class HttpSession {
       if (cookie) headers['cookie'] = cookie;
       if (body !== undefined)
         headers['content-type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
-      const res = await this.http.request(current, {
-        method,
-        headers,
-        redirect: 'manual',
-        ...(body !== undefined ? { body } : {}),
-        ...(request.signal ? { signal: request.signal } : {}),
-      });
+      await this.pace(request.signal);
+      let res: Response;
+      try {
+        res = await this.http.request(current, {
+          method,
+          headers,
+          redirect: 'manual',
+          ...(body !== undefined ? { body } : {}),
+          ...(request.signal ? { signal: request.signal } : {}),
+        });
+      } finally {
+        this.markRequestEnd();
+      }
       this.storeCookies(res);
       const location = res.headers.get('location');
       if ([301, 302, 303, 307, 308].includes(res.status) && location) {
@@ -136,6 +163,7 @@ export class HttpSession {
         continue;
       }
       const html = decode(await res.arrayBuffer(), res.headers.get('content-type'));
+      this.markRequestEnd();
       if (res.status >= 400)
         throw new ConnectorError(`HTTP ${res.status} from ${new URL(current).host}`, {
           details: { status: res.status },

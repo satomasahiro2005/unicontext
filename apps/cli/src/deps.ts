@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
+import { Writable } from 'node:stream';
 import { createSecretStore, MemorySecretStore } from '@unicontext/auth';
 import type { DataPaths, SecretStore } from '@unicontext/core';
 import {
@@ -68,6 +69,8 @@ export interface CliDeps {
   secretStore: (request: SecretStoreRequest) => Promise<SecretStore>;
   /** Asks one question on the terminal and returns the answer line. */
   prompt: (question: string) => Promise<string>;
+  /** Like prompt, but the typed answer is not echoed (passphrases). Falls back to prompt. */
+  promptSecret?: (question: string) => Promise<string>;
   probes: DoctorProbes;
   /** Run the daemon in this process (`daemon start --foreground`). */
   startDaemon: (options: DaemonOptions) => Promise<RunningDaemon>;
@@ -157,6 +160,32 @@ export function defaultPrompt(question: string): Promise<string> {
   });
 }
 
+/** Read one line from the terminal without echoing it. */
+export function defaultPromptSecret(question: string): Promise<string> {
+  const output = process.stderr;
+  output.write(question);
+  let muted = true;
+  const rl = createInterface({
+    input: process.stdin,
+    output: new Writable({
+      write(chunk: Buffer | string, _encoding, callback) {
+        if (!muted) output.write(chunk);
+        callback();
+      },
+    }),
+    terminal: process.stdin.isTTY === true,
+  });
+  return new Promise((resolve) => {
+    rl.question('', (answer) => {
+      muted = false;
+      output.write('\n');
+      rl.close();
+      resolve(answer);
+    });
+    rl.once('close', () => resolve(''));
+  });
+}
+
 export function defaultDeps(overrides: Partial<CliDeps> = {}): CliDeps {
   const deps: CliDeps = {
     stdout: (text) => void process.stdout.write(text),
@@ -174,6 +203,7 @@ export function defaultDeps(overrides: Partial<CliDeps> = {}): CliDeps {
         ? new MemorySecretStore()
         : createSecretStore({ backend: 'auto', ...(onFallback ? { onFallback } : {}) }),
     prompt: defaultPrompt,
+    promptSecret: defaultPromptSecret,
     probes: defaultProbes(),
     // heavy modules (Fastify, MCP SDK) are loaded only by the commands that need them
     startDaemon: async (options) => (await import('@unicontext/daemon')).startDaemon(options),

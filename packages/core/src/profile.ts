@@ -57,6 +57,20 @@ export const SubstituteDaySchema = z.object({
 export type SubstituteDay = z.infer<typeof SubstituteDaySchema>;
 
 /**
+ * Registration limits of the university (履修登録の上限単位数). Only what the deployment states;
+ * connectors and the credit summary never invent a cap.
+ */
+export const CreditCapSchema = z.object({
+  /** Max credits per term (学期). */
+  perTerm: z.number().positive().optional(),
+  /** Max credits per academic year (年間). */
+  perYear: z.number().positive().optional(),
+  /** Where the value comes from and what it covers (shown next to the number). */
+  note: z.string().optional(),
+});
+export type CreditCap = z.infer<typeof CreditCapSchema>;
+
+/**
  * University deployment profile (§54). Settings only: product code lives in connectors.
  * `products` holds per-product deployment settings (base URLs, auth strategy) consumed by connectors.
  */
@@ -73,6 +87,8 @@ export const ProfileSchema = z.object({
     /** Where these dates come from (document title / URL), shown in provenance. */
     source: z.string().optional(),
   }),
+  /** Registration rules (履修登録). */
+  registration: z.object({ creditCap: CreditCapSchema.optional() }).optional(),
   sources: z.record(z.string(), z.object({ product: z.string() }).passthrough()).default({}),
   products: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
   /** Optional authority overrides merged over the default conflict rules (§12). */

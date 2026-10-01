@@ -8,6 +8,7 @@ import { registerDoctor } from './commands/doctor.js';
 import { registerLogin } from './commands/login.js';
 import { registerMcp } from './commands/mcp.js';
 import { registerPace } from './commands/pace.js';
+import { registerRemote } from './commands/remote.js';
 import { registerService } from './commands/service.js';
 import { registerStatus } from './commands/status.js';
 import { registerSync } from './commands/sync.js';
@@ -65,6 +66,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerMcp(program, harness);
   registerService(program, harness);
   registerDaemon(program, harness);
+  registerRemote(program, harness);
   return program;
 }
 

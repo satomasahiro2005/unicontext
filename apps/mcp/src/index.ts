@@ -5,8 +5,11 @@ export {
   DEFAULT_MCP_VERSION,
   HOW_TO_CONFIRM,
   MCP_SERVER_NAME,
+  REMOTE_SERVER_INSTRUCTIONS,
   SERVER_INSTRUCTIONS,
   type McpDeps,
+  type McpSurface,
+  type ToolCallEvent,
 } from './server.js';
 export { handleMcpHttp, runStdioServer } from './transports.js';
 export {
@@ -25,3 +28,10 @@ export {
 } from './assignments.js';
 export { buildEnvelope, collect, type EnvelopeOptions, type McpEnvelope } from './envelope.js';
 export { listCourses, resolveCourse, type ResolvedCourse } from './courses.js';
+export {
+  getCreditSummary,
+  getSyllabus,
+  searchSyllabus,
+  SYLLABUS_CONNECTOR,
+  type SyllabusToolOutput,
+} from './syllabus.js';

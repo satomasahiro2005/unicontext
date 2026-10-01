@@ -98,6 +98,15 @@ user, who confirms with `unicontext confirm <id>` or in the Web UI. Only then do
 with `grade`, `submission` or `enrol` are refused. There are no tools for submitting assignments,
 enrolment changes or grades; a task's `submitted` status can only come from the submission system.
 
+### Remote surface (ChatGPT / claude.ai)
+
+`createMcpServer({ ..., surface: 'remote', onToolCall })` (used by the daemon's tunnelled listener,
+see [docs/remote.md](../../docs/remote.md)) registers only the read tools: `correct_fact` and
+`propose_pace_slot` do not exist there. It uses `REMOTE_SERVER_INSTRUCTIONS`, returns compact JSON
+text next to `structuredContent`, leaves raw payloads and `sourcesInfo` out of `get_source`, and
+calls `onToolCall({tool, ok, ms})` after every call (never with arguments) for the audit log.
+Tool descriptions avoid wording ChatGPT's connector scanner flags (tests check this).
+
 ## Resources (§40)
 
 All resources are `application/json` and use the same envelope.

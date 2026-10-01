@@ -1,6 +1,6 @@
 import { load, type CheerioAPI } from 'cheerio';
 import { parseDayPeriod } from '../schedule.js';
-import type { SyllabusDetail } from '../types.js';
+import { emptySyllabusDetail, type SyllabusDetail } from '../types.js';
 
 export { parseDayPeriod };
 
@@ -110,21 +110,6 @@ export function splitNames(text: string | undefined): string[] {
     .filter(Boolean);
 }
 
-function emptyDetail(): SyllabusDetail {
-  return {
-    instructors: [],
-    instructorsEn: [],
-    coInstructors: [],
-    slots: [],
-    keywords: [],
-    plan: [],
-    activeLearning: [],
-    practicalExperience: [],
-    delivery: [],
-    extra: {},
-  };
-}
-
 export interface ParsedDetail {
   detail: SyllabusDetail;
   /** Number of labels/sections the parser knew; 0 means the screen layout changed. */
@@ -214,7 +199,7 @@ function markedRows(rows: Rows, column: string): string[] {
 /** Parse the syllabus detail screen (SC_06001B00_22). */
 export function parseDetail(html: string): ParsedDetail {
   const $ = load(html);
-  const detail = emptyDetail();
+  const detail = emptySyllabusDetail();
   let recognized = 0;
   const extra = detail.extra;
 

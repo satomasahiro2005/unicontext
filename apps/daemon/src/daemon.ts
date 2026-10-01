@@ -17,6 +17,7 @@ import type { WatchHandle } from '@unicontext/connector-sdk';
 import type { FastifyInstance } from 'fastify';
 import { acquireLock, type DaemonLock } from './lock.js';
 import { createRestServer, defaultWebDir } from './rest.js';
+import { createRemoteServer } from './remote/server.js';
 import { buildLogger, createRuntime, type Runtime, type RuntimeOptions } from './runtime.js';
 import { startWatchers } from './wiring.js';
 import { loadOrCreateApiToken } from './token.js';
@@ -36,6 +37,18 @@ export interface DaemonOptions extends RuntimeOptions {
   noLock?: boolean;
   /** Install SIGINT/SIGTERM handlers (the bin does; tests do not). */
   handleSignals?: boolean;
+  /** Port of the remote (tunnelled) listener; 0 picks a free port. Defaults to config.remote.port. */
+  remotePort?: number;
+  /** Do not start the remote listener even when config.remote.enabled is true. */
+  noRemote?: boolean;
+}
+
+export interface RunningRemote {
+  app: FastifyInstance;
+  port: number;
+  /** Loopback URL the tunnel forwards to. */
+  url: string;
+  publicUrl: string;
 }
 
 export interface RunningDaemon {
@@ -46,6 +59,8 @@ export interface RunningDaemon {
   url: string;
   token: string;
   notifications: NotificationService | undefined;
+  /** The read-only remote listener, when config.remote.enabled. */
+  remote: RunningRemote | undefined;
   stop(): Promise<void>;
   /** Resolves when stop() has finished (after a signal or POST /api/v1/daemon/stop). */
   stopped: Promise<void>;
@@ -126,6 +141,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
 
   let runtime: Runtime | undefined;
   let app: FastifyInstance | undefined;
+  let remote: RunningRemote | undefined;
   let notifications: NotificationService | undefined;
   let watchers: WatchHandle[] = [];
   try {
@@ -151,6 +167,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
           notifications?.stop();
           rt.uc.scheduler.stop();
           await Promise.allSettled(watchers.map((w) => w.close()));
+          await remote?.app.close();
           await app?.close();
           // A scheduled sync may still be writing; closing the database under it would turn its
           // failure handling into an unhandled rejection.
@@ -198,6 +215,29 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
     const address = app.server.address();
     const actualPort = typeof address === 'object' && address ? address.port : port;
     lock?.setPort(actualPort);
+
+    if (rt.config.remote.enabled && !options.noRemote) {
+      // A misconfigured remote endpoint must not take the local daemon down with it.
+      try {
+        const { app: remoteApp } = await createRemoteServer({ runtime: rt, version: VERSION });
+        const wanted = options.remotePort ?? rt.config.remote.port;
+        await remoteApp.listen({ host: LOOPBACK_HOST, port: wanted });
+        const ra = remoteApp.server.address();
+        const remotePort = typeof ra === 'object' && ra ? ra.port : wanted;
+        remote = {
+          app: remoteApp,
+          port: remotePort,
+          url: `http://${LOOPBACK_HOST}:${remotePort}`,
+          publicUrl: rt.config.remote.publicUrl ?? '',
+        };
+        logger.info('remote MCP listener started', {
+          url: remote.url,
+          publicUrl: remote.publicUrl,
+        });
+      } catch (e) {
+        logger.error('remote MCP listener not started', { error: errorMessage(e) });
+      }
+    }
 
     if (!options.noNotifications && rt.config.notifications.enabled) {
       const sinks = dev
@@ -250,12 +290,14 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
       url: `http://${LOOPBACK_HOST}:${actualPort}`,
       token,
       notifications,
+      remote,
       stop,
       stopped,
     };
   } catch (e) {
     notifications?.stop();
     await Promise.allSettled(watchers.map((w) => w.close()));
+    await remote?.app.close().catch(() => undefined);
     await app?.close().catch(() => undefined);
     await runtime?.close().catch(() => undefined);
     lock?.release();

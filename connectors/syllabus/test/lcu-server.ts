@@ -10,7 +10,30 @@ export interface LoggedRequest {
   form: Record<string, string> | undefined;
 }
 
+/** One course of a generated result table (catalog tests). */
+export interface CatalogRow {
+  name: string;
+  teacher: string;
+  className?: string;
+  /** Search form `title` value that lists this row, e.g. "2243". */
+  titleCode: string;
+  /** Printed タイトル column, e.g. "2026年度 情報学部 [IN-B]". */
+  title: string;
+  category: string;
+  code: string;
+  numbering?: string;
+  grade: string;
+  semester: '前期' | '後期';
+  /** Printed 曜日・時限, e.g. "木3・4". */
+  slot: string;
+}
+
 export interface LcuServerOptions {
+  /**
+   * Serve a result table generated from these rows (filtered by the posted `title` and
+   * `semester` like the real search) instead of the static fixture.
+   */
+  catalog?: CatalogRow[] | undefined;
   /** Base path of the app, default "/lcu-web/". */
   basePath?: string;
   host?: string;
@@ -42,7 +65,35 @@ export function createLcuServer(options: LcuServerOptions = {}) {
   let screen: 'form' | 'results' | 'detail' | 'none' = 'none';
   let inflight = 0;
   let postCount = 0;
+  let currentRows: CatalogRow[] = [];
+  const catalogPage = (): string => {
+    const cell = (label: string, text: string): string =>
+      `<td class="content is-source " id="content" data-label="${label}">${text}</td>`;
+    const body = currentRows
+      .map(
+        (r, i) =>
+          `<tr class="is-unread" _index="${i}">` +
+          cell('講義名', r.name) +
+          cell('担当教員', r.teacher) +
+          cell('クラス', r.className ?? '1クラス') +
+          cell('タイトル', r.title) +
+          cell('カテゴリ', r.category) +
+          cell('科目コード', r.code) +
+          cell('ナンバリング', r.numbering ?? '') +
+          cell('学年', r.grade) +
+          cell('開講学期', r.semester) +
+          cell('曜日・時限', r.slot) +
+          ['', '', '', '61', r.semester === '前期' ? '1' : '2', '42']
+            .map((t) => cell('', t))
+            .join('') +
+          '</tr>',
+      )
+      .join('');
+    return resultsPage.replace(/<tbody>[\s\S]*<\/tbody>/, `<tbody>${body}</tbody>`);
+  };
   const state = {
+    /** Subject codes of the rows opened by linkselect, in order. */
+    openedCodes: [] as string[],
     maxInflight: 0,
     sessionsCreated: 0,
     searches: [] as Record<string, string>[],
@@ -110,7 +161,9 @@ export function createLcuServer(options: LcuServerOptions = {}) {
       }
       if (!session || !cookie?.includes(`JSESSIONID=${session}`)) return errorPage();
       if (method === 'GET' && rel === 'SC_06001B00_21')
-        return screen === 'results' ? html(resultsPage) : html(formPage);
+        return screen === 'results'
+          ? html(options.catalog ? catalogPage() : resultsPage)
+          : html(formPage);
       if (method === 'GET' && rel === 'SC_06001B00_22') return html(detailPage);
       if (method === 'POST') {
         postCount++;
@@ -121,12 +174,19 @@ export function createLcuServer(options: LcuServerOptions = {}) {
         if (!form || form['_csrf'] !== csrf) return errorPage();
         if (rel === 'SC_06001B00_21/search') {
           state.searches.push(form);
+          if (options.catalog)
+            currentRows = options.catalog.filter(
+              (r) =>
+                (!form['title'] || r.titleCode === form['title']) &&
+                (!form['semester'] || r.semester === (form['semester'] === '1' ? '前期' : '後期')),
+            );
           screen = 'results';
           return redirect(`${basePath}SC_06001B00_21`);
         }
         if (rel === 'SC_06001B00_21/linkselect') {
           if (screen !== 'results') return errorPage();
           state.linkselectRows.push(Number(form['rowIndex']));
+          state.openedCodes.push(currentRows[Number(form['rowIndex'])]?.code ?? '');
           screen = 'detail';
           return redirect(`${basePath}SC_06001B00_22`);
         }

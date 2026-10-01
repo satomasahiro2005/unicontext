@@ -21,6 +21,10 @@ unicontextd [--port 17878] [--data-dir DIR] [--config FILE] [--dev] [--no-keycha
 - Logs go to stderr and `logs/unicontextd.log`, always through the core redactor (§60). No telemetry (§61).
 - Single instance: `unicontextd.lock` in the data directory (pid + port, stale locks are recovered).
 
+## Remote read-only endpoint (`src/remote/`)
+
+Off by default. With `remote.enabled: true` and `remote.publicUrl` set, a second listener on `127.0.0.1:remote.port` (default 17879) serves an OAuth 2.1 authorization server and a read-only `/mcp` for ChatGPT / claude.ai through a cloudflared tunnel. It shares nothing with the local listener above except the runtime. Setup, threat model and revocation: [docs/remote.md](../../docs/remote.md). CLI: `unicontext remote status | set-passphrase | clients | revoke | tunnel-config`.
+
 ## Loading connectors (`src/registry.ts`)
 
 The daemon never imports connector packages statically. For each enabled entry under `sources:` it resolves a package name and imports it dynamically:

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { type ConnectorContext, RateLimiter } from '@unicontext/connector-sdk';
 import {
+  type Clock,
   type FetchLike,
   loadProfile,
   type SecretStore,
@@ -32,22 +33,27 @@ export function memorySecrets(): SecretStore {
 
 export const shizuokaProfile = (): UniversityProfile => loadProfile('shizuoka-university');
 
+/** Clock that never really waits (politeness sleeps would slow every test down). */
+export const fastClock: Clock = { ...systemClock, sleep: () => Promise.resolve() };
+
 export function makeContext<T>(
   config: T,
   fetchFn: FetchLike,
   profile?: UniversityProfile,
+  overrides: Partial<ConnectorContext<T>> = {},
 ): ConnectorContext<T> {
   return {
     sourceId: 'test',
     config,
     secrets: memorySecrets(),
     logger: silentLogger,
-    clock: systemClock,
+    clock: fastClock,
     // Tests must not sleep for politeness.
     rateLimiter: new RateLimiter({ capacity: 10_000, refillPerSecond: 10_000 }),
     profile,
     cacheDir: undefined,
     fetch: fetchFn,
+    ...overrides,
   };
 }
 

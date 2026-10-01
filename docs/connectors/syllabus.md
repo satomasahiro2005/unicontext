@@ -44,6 +44,8 @@ sources:
 ```
 
 Instead of (or in addition to) `targets:` the host can inject the student's courses, see below.
+To make the **coming term's whole catalog** searchable (not only the student's own courses), turn on
+the polite daily [`catalog`](#catalog-mode-whole-term-listing) mode.
 
 ## Config keys
 
@@ -57,6 +59,8 @@ Instead of (or in addition to) `targets:` the host can inject the student's cour
 | `targets[]`                                         | `[]`                 | `{year, subjectCode, faculty? \| titleCode?, classCode?}`. `titleCode` is the search form's `title` value (2243 = 2026 情報学部); `faculty` is looked up in `titles`; without both, all titles are searched and rows are filtered by `year`. `classCode` is matched against the row's クラス (`1クラス`) or its hidden class code. |
 | `searches[]`                                        | `[]`                 | `{year?, faculty?, title?, category?, subjectName?, jikanwariSubjectName?, staffName?, practitionerFlag?, semester?, term?, subjectCode?, numbering?, subjectType?, week?, period?, freeword?, maxRows=10}` (form field names of the search screen).                                                                               |
 | `unitsPerPage`                                      | `5`                  | Units per `sync()` page.                                                                                                                                                                                                                                                                                                           |
+| `catalog`                                           | absent (off)         | Whole-term catalog ingestion, see [below](#catalog-mode-whole-term-listing): `{faculties?, titleCodes?, terms=[current,next], detailsPerRun=30, detailMaxAgeDays=30, maxRows=1500}`.                                                                                                                                               |
+| `minRequestIntervalMs`                              | `1000`               | Minimum gap between two HTTP requests of this connector (on top of the shared rate limiter, which allows bursts of 5); `0` disables.                                                                                                                                                                                               |
 
 Deployment settings are resolved as: explicit source config > `profile.products.syllabus` >
 the named deployment (`src/profiles/shizuoka.ts`). A profile can therefore set
@@ -81,6 +85,73 @@ const module = createSyllabusConnector({
 });
 // or after instantiateConnector(...):  (instance.adapter as SyllabusAdapter).targetProvider = ...
 ```
+
+## Catalog mode (whole-term listing)
+
+`targets`/`searches` only read what you name, and opening a detail costs about six requests, so they
+cannot show "what is offered next term". `catalog:` is the polite way to list a whole term: it is
+**off unless configured**, runs with the normal daily schedule and spreads the expensive part over
+many days.
+
+```yaml
+sources:
+  syllabus:
+    catalog:
+      faculties: [IN-B, LA-S] # codes of the deployment title table (or titleCodes: ['2243'])
+      terms: [current, next] # default; or explicit [{ year: 2026, semester: '2' }]
+      detailsPerRun: 30 # max syllabus detail pages opened per sync run (default 30)
+      detailMaxAgeDays: 30 # re-open a detail after this many days (default 30)
+      maxRows: 1500 # safety cap of rows per (faculty, term) search (default 1500)
+```
+
+- **Terms** come from the clock (`ctx.clock`, in the profile's time zone) and the Japanese academic
+  year (April start): April-September is 前期 (`semester` `1`), October-March is 後期 (`2`; January-March
+  still belongs to the year that began the previous April). On 2026-10-01 `current` = 2026 後期 and
+  `next` = 2027 前期; in May 2026 `current` = 2026 前期 and `next` = 2026 後期.
+- **One search per (faculty, term)** (`title` = year x faculty code, `semester` = `1`/`2`). The result
+  table carries every row in one HTML page (講義名, 担当教員, クラス, タイトル, カテゴリ, 科目コード,
+  ナンバリング, 学年, 開講学期, 曜日・時限), and **every row becomes a `syllabus.entry`** (same
+  `externalId` rule as before) from that row alone.
+- If a year has no title code for a faculty (the university has not published it yet, e.g. 2027 in
+  the table above) the unit is **skipped with a warning**
+  (`syllabus for 2027 IN-B is not published/known yet (no title code)`); this never fails the run.
+  Add the code under `titles:` once the form lists it. `titleCodes` entries are used as given; their
+  year is looked up in the table, and a code of another year than the resolved terms is ignored.
+- **Details** (goals, plan, credits, 必修選択, room ...) need the per-row search + linkselect and are
+  therefore budgeted. Parsed details are cached as JSON in the source's cache directory
+  (`<cache>/<sourceId>/syllabus-details.json`, written atomically; in memory only when the host gives
+  no `cacheDir`) keyed by the row key `{detail, url, titleCode, fetchedAt}`. For each row: a cached
+  detail younger than `detailMaxAgeDays` is emitted without any request; otherwise the detail is
+  opened while the run's budget (`detailsPerRun`, **shared by all catalog searches**, the remainder
+  split evenly over the searches still to come) lasts - rows never fetched first, then the stalest;
+  otherwise the entry is emitted **row-only**: empty `detail` and `detailFetched: false`. A stale
+  cached detail is still emitted when its refresh does not fit the budget. Unchanged payloads are
+  dropped by the raw store's content hash, so re-emitting cached details is free. Cache entries of
+  rows the source no longer lists are dropped after a full pass.
+- **Row-only entries** normalize to the course, the course offering (name, teacher, 開講学期, 曜日・時限
+  slots, `extra.grade` from 学年) and a document built from the row;
+  `courseOffering.extra.detailFetched` is `false`. `extra.requirement` and `credits` (offering
+  `extra.credits`, `course.credits`) appear only once a detail was read. A later run replaces the
+  entry with the full one.
+- **Retirement stays safe.** `complete` is set only when every unit succeeded and found rows
+  (targets, searches and catalog searches alike); a failed, empty or row-capped (`maxRows`) search
+  means no entry is retired. Row-only entries count as seen. A failing detail page does not fail the
+  run (the row stays row-only, a warning is added, health becomes `degraded`, and after three
+  failures in a row no more details are opened in that run). Because `complete` retires every
+  entry that is not in the run, entries of terms that left the catalog window (and are not covered
+  by `targets`) are retired on the next complete run.
+
+### Request budget
+
+| Part                                 | Requests                                                          |
+| ------------------------------------ | ----------------------------------------------------------------- |
+| one catalog search (init, search)    | 4 (init + redirect, search + redirect)                            |
+| one detail (re-search + linkselect)  | about 6 (init, form, search, results, linkselect, detail)         |
+| one daily run, 2 faculties x 2 terms | 4 searches (16) + `detailsPerRun` 30 x 6 = about **200 requests** |
+
+At the default `minRequestIntervalMs` of 1000 that is a few minutes a day, one request at a time.
+With 800 rows per term it takes about a month to read every detail once; until then the remaining
+rows are searchable from their list row. Lower `detailsPerRun` (0 = list rows only) to be gentler.
 
 ## Auth
 
@@ -121,9 +192,9 @@ Entries like 集中 / 時間割外 have no slot.
 
 ## Raw types
 
-| Type             | externalId                               | Payload                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ---------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `syllabus.entry` | `<subjectCode>\|<class>\|<title>` (NFKC) | `{strategy, url, title, titleCode?, year?, subjectCode, className, categories[], row{<column>: text}, detail{...}}`; `detail` holds numbering, name/nameEn, className, instructors (+En), department, laboratory, coInstructors, grade, campus, semester, termSpan, dayPeriod, slots[], room, requirement, credits, keywords[], goals, content, planNote, plan[{no,content}], prerequisites, textbook, references, preparation, evaluation, officeHours, message, activeLearning[], practicalExperience[], teacherTraining, delivery[], onlineDetail and `extra` (unknown labels/sections). |
+| Type             | externalId                               | Payload                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `syllabus.entry` | `<subjectCode>\|<class>\|<title>` (NFKC) | `{strategy, url, title, titleCode?, year?, subjectCode, className, categories[], row{<column>: text}, detail{...}, detailFetched?}` (`detailFetched: false` = list row only, `detail` empty; absent = detail read); `detail` holds numbering, name/nameEn, className, instructors (+En), department, laboratory, coInstructors, grade, campus, semester, termSpan, dayPeriod, slots[], room, requirement, credits, keywords[], goals, content, planNote, plan[{no,content}], prerequisites, textbook, references, preparation, evaluation, officeHours, message, activeLearning[], practicalExperience[], teacherTraining, delivery[], onlineDetail and `extra` (unknown labels/sections). |
 
 ## Mapping
 
@@ -152,8 +223,11 @@ fails the lookup, and a run where every lookup fails throws (health `degraded`).
 
 ## Limits and known issues
 
-- About six HTTP requests per syllabus (init, search, linkselect, each with its redirect), rate limited.
-  Keep `targets` to the student's own courses.
+- About six HTTP requests per syllabus (init, search, linkselect, each with its redirect), rate limited
+  and spaced by `minRequestIntervalMs`. Keep `targets` to the student's own courses and use `catalog`
+  (budgeted) for whole terms.
+- A course listed in both semesters under the same class and title has one row key, so only the first
+  listing of a run is kept (the key has no semester).
 - The search `title` code changes every academic year; the Shizuoka table covers 2022-2026 and can be
   extended in `titles` (config/profile) or `registerDeployment`.
 - `linkselect` replays the result form's hidden inputs (`viewRowIndexArray` is sent as printed,

@@ -39,6 +39,42 @@ export const SyllabusSearchSchema = z.object({
 });
 export type SyllabusSearch = z.infer<typeof SyllabusSearchSchema>;
 
+/** `semester` as printed in config: '1' (前期) or '2' (後期); numbers are accepted too. */
+const SemesterCodeSchema = z
+  .union([z.literal('1'), z.literal('2'), z.literal(1), z.literal(2)])
+  .transform((v): '1' | '2' => (String(v) === '2' ? '2' : '1'));
+
+/** One academic term of the catalog: `current` / `next` follow the clock, or name year + semester. */
+export const SyllabusCatalogTermSchema = z.union([
+  z.enum(['current', 'next']),
+  z.object({ year: z.number().int(), semester: SemesterCodeSchema }),
+]);
+export type SyllabusCatalogTerm = z.infer<typeof SyllabusCatalogTermSchema>;
+
+/**
+ * Daily, polite catalog ingestion: one search per (faculty, term) puts every listed course into
+ * the store from the result row alone; syllabus detail pages are opened only up to a budget per
+ * run and cached (see docs/connectors/syllabus.md). Off unless configured.
+ */
+export const SyllabusCatalogSchema = z
+  .object({
+    /** Faculty codes of the deployment's title table (e.g. "IN-B"), looked up per year. */
+    faculties: z.array(z.string().min(1)).default([]),
+    /** Search form `title` values used directly (year is taken from the title table when known). */
+    titleCodes: z.array(z.string().min(1)).default([]),
+    terms: z.array(SyllabusCatalogTermSchema).min(1).default(['current', 'next']),
+    /** Max syllabus detail pages opened per sync run, shared by all catalog searches. */
+    detailsPerRun: z.number().int().nonnegative().default(30),
+    /** A cached detail older than this many days is opened again (budget permitting). */
+    detailMaxAgeDays: z.number().positive().default(30),
+    /** Safety cap of rows per (faculty, term) search. */
+    maxRows: z.number().int().positive().default(1500),
+  })
+  .refine((c) => c.faculties.length + c.titleCodes.length > 0, {
+    message: 'catalog needs at least one of faculties / titleCodes',
+  });
+export type SyllabusCatalog = z.infer<typeof SyllabusCatalogSchema>;
+
 export const SyllabusConfigSchema = DeploymentSettingsSchema.extend({
   /** Strategy id, default "lcu-public". */
   strategy: z.string().default('lcu-public'),
@@ -46,11 +82,28 @@ export const SyllabusConfigSchema = DeploymentSettingsSchema.extend({
   searches: z.array(SyllabusSearchSchema).default([]),
   /** Units (targets/searches) processed per sync() page. */
   unitsPerPage: z.number().int().positive().default(5),
+  /** Whole-term catalog ingestion (off when absent). */
+  catalog: SyllabusCatalogSchema.optional(),
+  /** Minimum gap between two HTTP requests of this connector (politeness), 0 disables. */
+  minRequestIntervalMs: z.number().int().nonnegative().default(1000),
 });
 export type SyllabusConfig = z.infer<typeof SyllabusConfigSchema>;
 
+/** One catalog search: a (faculty, term) pair already resolved to a search form `title` value. */
+export interface SyllabusCatalogUnit {
+  /** Academic year; undefined for a bare `titleCodes` entry that the title table does not know. */
+  year: number | undefined;
+  /** '1' = 前期, '2' = 後期 (the search form's `semester` value). */
+  semester: '1' | '2';
+  faculty?: string;
+  titleCode: string;
+  maxRows: number;
+}
+
 export type SyllabusUnit =
-  { kind: 'target'; target: SyllabusTarget } | { kind: 'search'; search: SyllabusSearch };
+  | { kind: 'target'; target: SyllabusTarget }
+  | { kind: 'search'; search: SyllabusSearch }
+  | { kind: 'catalog'; catalog: SyllabusCatalogUnit };
 
 /** Strategy-independent description of one search result row. */
 export interface SyllabusSearchRow {
@@ -65,6 +118,10 @@ export interface SyllabusSearchRow {
   categories: string[];
   /** Result columns by label (visible labels in Japanese, hidden columns by id). */
   columns: Record<string, string>;
+  /** Human-openable entry point of the syllabus search (used when only the row is stored). */
+  url?: string;
+  /** The form `title` value the row was found with, when known. */
+  titleCode?: string;
   /** Strategy-private data needed to open the detail (query + row index). */
   handle: unknown;
 }
@@ -72,6 +129,8 @@ export interface SyllabusSearchRow {
 export interface SyllabusSearchResult {
   rows: SyllabusSearchRow[];
   warnings: string[];
+  /** The result was cut at the unit's row cap: rows are missing, so it is not a full listing. */
+  truncated?: boolean;
 }
 
 /** Parsed syllabus detail page. Unknown labels end up in `extra`. */
@@ -126,6 +185,21 @@ export const SyllabusDetailSchema = z.object({
 });
 export type SyllabusDetail = z.infer<typeof SyllabusDetailSchema>;
 
+export function emptySyllabusDetail(): SyllabusDetail {
+  return {
+    instructors: [],
+    instructorsEn: [],
+    coInstructors: [],
+    slots: [],
+    keywords: [],
+    plan: [],
+    activeLearning: [],
+    practicalExperience: [],
+    delivery: [],
+    extra: {},
+  };
+}
+
 /** Raw type `syllabus.entry`: one course syllabus (list row + detail). */
 export const SyllabusEntryPayloadSchema = z.object({
   strategy: z.string(),
@@ -139,6 +213,11 @@ export const SyllabusEntryPayloadSchema = z.object({
   categories: z.array(z.string()),
   row: z.record(z.string(), z.string()),
   detail: SyllabusDetailSchema,
+  /**
+   * False when only the list row is stored (catalog mode ran out of its detail budget): `detail`
+   * is empty and everything comes from `row`. Absent means the detail page was read.
+   */
+  detailFetched: z.boolean().optional(),
 });
 export type SyllabusEntryPayload = z.infer<typeof SyllabusEntryPayloadSchema>;
 

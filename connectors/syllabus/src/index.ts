@@ -8,7 +8,17 @@ export type { SyllabusAdapterOptions, SyllabusTargetProvider } from './adapter.j
 export { createSyllabusNormalizer, syllabusSections } from './normalizer.js';
 export { createSyllabusConnector, metadata, syllabusConnector } from './connector.js';
 export { HttpSession, SessionExpiredError } from './session.js';
-export type { SessionRequest, SessionResponse } from './session.js';
+export type { SessionPacing, SessionRequest, SessionResponse } from './session.js';
+export {
+  currentTerm,
+  DETAIL_CACHE_FILE,
+  DetailCache,
+  nextTerm,
+  pickDetailsToOpen,
+  resolveCatalogTerms,
+  SEMESTER_LABEL,
+} from './catalog.js';
+export type { AcademicTerm, CachedDetail } from './catalog.js';
 export { createStrategy, registerSyllabusStrategy, SYLLABUS_PRODUCT } from './strategies.js';
 export type { StrategyFactory } from './strategies.js';
 export type { SyllabusDetailResult, SyllabusStrategy } from './strategy.js';
