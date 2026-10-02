@@ -171,7 +171,10 @@ export interface AssignmentItem {
   evidence: string | undefined;
   citations: Citation[];
 }
-/** GET /api/v1/assignments?status=pending,in_progress&course=<id> (default: not cancelled/completed/submitted... all open) and GET /api/v1/tasks */
+/**
+ * GET /api/v1/assignments?status=pending,in_progress&course=<id>&includePast=1 (default: open ones;
+ * unfinished work of ended terms, status `expired_past_term`, only with includePast) and GET /api/v1/tasks
+ */
 export interface AssignmentsResponse {
   assignments: AssignmentItem[];
 }

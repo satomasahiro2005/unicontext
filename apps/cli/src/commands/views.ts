@@ -92,26 +92,42 @@ export function registerViewCommands(program: Command, h: Harness): void {
       }),
     );
 
-  program
-    .command('assignments')
-    .description('課題の一覧（既定は未完了） / Assignments (open ones by default)')
-    .option('--course <id>', '科目で絞り込む（ID・コード・科目名） / filter by course')
-    .option('--all', '提出済み・完了・取消も含める / include finished and cancelled tasks')
-    .action(
-      action<{ course?: string; all?: boolean }>(h, async (ctx, { opts }) => {
-        const { uc } = await ctx.runtime();
-        const course = await courseId(ctx, opts.course);
-        const statuses: TaskStatus[] | undefined = opts.all ? [...TASK_STATUSES] : undefined;
-        const body: AssignmentsResponse = {
-          assignments: buildAssignments(uc, {
-            ...(statuses ? { statuses } : {}),
-            ...(course ? { courseOfferingId: course } : {}),
-          }),
-        };
-        if (ctx.json) ctx.printJson(body);
-        else printAssignments(ctx, body.assignments, uc.timezone);
-      }),
-    );
+  for (const [name, description] of [
+    ['assignments', '課題の一覧（既定は未完了） / Assignments (open ones by default)'],
+    ['tasks', 'やることの一覧（既定は未完了） / Tasks (open ones by default)'],
+  ] as const) {
+    program
+      .command(name)
+      .description(description)
+      .option('--course <id>', '科目で絞り込む（ID・コード・科目名） / filter by course')
+      .option(
+        '--all',
+        '提出済み・完了・取消・終了した学期も含める / include finished, cancelled and ended-term tasks',
+      )
+      .option(
+        '--include-past',
+        '終了した学期の未提出課題も含める / include unfinished work of terms that have ended',
+      )
+      .action(
+        action<{ course?: string; all?: boolean; includePast?: boolean }>(
+          h,
+          async (ctx, { opts }) => {
+            const { uc } = await ctx.runtime();
+            const course = await courseId(ctx, opts.course);
+            const statuses: TaskStatus[] | undefined = opts.all ? [...TASK_STATUSES] : undefined;
+            const body: AssignmentsResponse = {
+              assignments: buildAssignments(uc, {
+                ...(statuses ? { statuses } : {}),
+                ...(course ? { courseOfferingId: course } : {}),
+                ...(opts.includePast ? { includePast: true } : {}),
+              }),
+            };
+            if (ctx.json) ctx.printJson(body);
+            else printAssignments(ctx, body.assignments, uc.timezone);
+          },
+        ),
+      );
+  }
 
   program
     .command('deadlines')

@@ -20,6 +20,7 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   completed: '完了',
   cancelled: '取消',
   unknown: '不明',
+  expired_past_term: '終了した学期',
 };
 
 export const ORIGIN_LABELS: Record<FactOrigin, string> = {

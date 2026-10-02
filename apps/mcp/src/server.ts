@@ -50,7 +50,12 @@ import {
   WRITE_TOOLS,
   writeOutput,
 } from './additions.js';
-import { ALL_TASK_STATUSES, buildAssignments, type AssignmentFilter } from './assignments.js';
+import {
+  ALL_TASK_STATUSES,
+  buildAssignments,
+  PAST_TERM_STATUS,
+  type AssignmentFilter,
+} from './assignments.js';
 import { listCourses, resolveCourse } from './courses.js';
 import {
   buildEnvelope,
@@ -634,7 +639,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const statusInput = z
     .union([TaskStatusSchema, z.array(TaskStatusSchema)])
     .optional()
-    .describe('pending | in_progress | submitted | completed | cancelled | unknown（配列可）');
+    .describe(
+      'pending | in_progress | submitted | completed | cancelled | unknown | expired_past_term（配列可）',
+    );
+  const includePastField = z
+    .boolean()
+    .optional()
+    .describe(
+      '終了した学期の未提出課題（expired_past_term）も含める。既定は含めない / Include unfinished work of terms that have ended (default: no)',
+    );
   const toStatuses = (s: TaskStatus | TaskStatus[] | undefined): TaskStatus[] | undefined =>
     s === undefined ? undefined : Array.isArray(s) ? s : [s];
 
@@ -643,18 +656,20 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '課題一覧',
       description:
-        '課題・レポート・提出物の一覧（締切順）。既定は未完了のみで、includeCompleted=true で提出済み・完了も含める。status "submitted" は提出システムが確認した場合にのみ付く（AI は提出済みにできない）。 / Assignments sorted by due date. Default: open only. Task status `submitted` can only come from the submission system.',
+        '課題・レポート・提出物の一覧（締切順）。既定は未完了のみで、includeCompleted=true で提出済み・完了も含める。status "submitted" は提出システムが確認した場合にのみ付く（AI は提出済みにできない）。終了した学期の未提出課題（expired_past_term）は既定で出さず、includePast=true で含める。 / Assignments sorted by due date. Default: open only, without unfinished work of ended terms (includePast=true adds it). Task status `submitted` can only come from the submission system.',
     },
     {
       courseOfferingId: courseIdField.optional(),
       status: statusInput,
       includeCompleted: z.boolean().optional(),
+      includePast: includePastField,
     },
     (a) => {
       const filter: AssignmentFilter = opt({
         courseOfferingId: courseId(a.courseOfferingId),
         statuses: toStatuses(a.status),
         includeCompleted: a.includeCompleted,
+        includePast: a.includePast,
       });
       return { data: { assignments: buildAssignments(uc, filter) } };
     },
@@ -665,13 +680,22 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: 'タスク一覧',
       description:
-        'やること全般（課題・試験準備・お知らせから抽出した締切・本人が作ったタスク）。status で絞れる。省略時は取り消し以外すべて。 / All tasks (assignments, exam preparation, extracted deadlines, manual). Default: everything except cancelled.',
+        'やること全般（課題・試験準備・お知らせから抽出した締切・本人が作ったタスク）。status で絞れる。省略時は取り消しと終了した学期（expired_past_term）以外すべて。 / All tasks (assignments, exam preparation, extracted deadlines, manual). Default: everything except cancelled and ended-term work (includePast=true adds it).',
     },
-    { status: statusInput, courseOfferingId: courseIdField.optional() },
+    {
+      status: statusInput,
+      courseOfferingId: courseIdField.optional(),
+      includePast: includePastField,
+    },
     (a) => {
       const filter: AssignmentFilter = opt({
         courseOfferingId: courseId(a.courseOfferingId),
-        statuses: toStatuses(a.status) ?? ALL_TASK_STATUSES.filter((s) => s !== 'cancelled'),
+        statuses:
+          toStatuses(a.status) ??
+          ALL_TASK_STATUSES.filter(
+            (s) => s !== 'cancelled' && (a.includePast === true || s !== PAST_TERM_STATUS),
+          ),
+        includePast: a.includePast,
       });
       return { data: { tasks: buildAssignments(uc, filter) } };
     },

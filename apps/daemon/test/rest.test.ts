@@ -93,6 +93,8 @@ describe('read endpoints (§41)', () => {
     const all = json<AssignmentsResponse>(await get('/api/v1/assignments?status=all'));
     expect(all.assignments.length).toBeGreaterThanOrEqual(open.assignments.length);
     expect((await get('/api/v1/assignments?status=bogus')).statusCode).toBe(400);
+    const withPast = json<AssignmentsResponse>(await get('/api/v1/assignments?includePast=1'));
+    expect(withPast.assignments.length).toBeGreaterThanOrEqual(open.assignments.length);
   });
 
   it('GET /deadlines, /changes', async () => {
@@ -459,6 +461,16 @@ describe('write endpoints', () => {
     expect(
       (await post(`/api/v1/tasks/${encodeURIComponent(id)}/status`, { status: 'weird' }, bearer))
         .statusCode,
+    ).toBe(400);
+    // expired_past_term is derived from the calendar and cannot be set by hand
+    expect(
+      (
+        await post(
+          `/api/v1/tasks/${encodeURIComponent(id)}/status`,
+          { status: 'expired_past_term' },
+          bearer,
+        )
+      ).statusCode,
     ).toBe(400);
     const res = await post(
       `/api/v1/tasks/${encodeURIComponent(id)}/status`,

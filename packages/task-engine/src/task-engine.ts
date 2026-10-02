@@ -98,6 +98,9 @@ export interface DeriveReport {
   extractedFacts: number;
 }
 
+/** Why an unfinished assignment is classified as `expired_past_term`. */
+export type PastTermReason = 'term_ended' | 'past_academic_year' | 'before_current_term';
+
 const SUBMITTED_VALUES = new Set(['submitted', 'late', 'graded', 'returned']);
 
 /**
@@ -198,6 +201,11 @@ export class TaskEngine {
   ): Task {
     const t = this.get(taskId);
     if (!t) throw new NotFoundError(`task ${taskId}`);
+    if (status === 'expired_past_term') {
+      throw new PolicyViolationError(
+        'expired_past_term is derived from the academic calendar; it cannot be set by hand',
+      );
+    }
     if (options.actor === 'ai' && (status === 'submitted' || status === 'completed')) {
       throw new PolicyViolationError(
         `AI cannot mark a task as ${status}; only the user or the submission system can (§19)`,
@@ -380,6 +388,44 @@ export class TaskEngine {
     return { dueAt: a.dueAt, factIds: facts.map((f) => f.id) };
   }
 
+  /**
+   * Whether an assignment belongs to a term that has ended, so that leaving it unfinished is no
+   * longer actionable. Only the calendar decides; the source system's submission state is not read.
+   *
+   * 1. The offering (any linked id) has a term in the profile's calendar: past iff that term ended.
+   * 2. Otherwise a class team / offering of an earlier academic year is past.
+   * 3. Otherwise (current year, no usable term, or no offering at all) it is past when its due date
+   *    is before the start of the current term.
+   * Current-term work is never past, so an overdue current-term assignment stays 期限切れ.
+   */
+  pastTermReason(input: {
+    courseOfferingId?: string | undefined;
+    dueAt?: string | undefined;
+  }): PastTermReason | undefined {
+    const today = zonedDateString(this.clock.now(), this.tz);
+    const ids = input.courseOfferingId
+      ? [...new Set([input.courseOfferingId, ...this.expandCourse(input.courseOfferingId)])]
+      : [];
+    const offerings = ids
+      .map((id) => this.entities.getOfKind('courseOffering', id))
+      .filter((o): o is NonNullable<typeof o> => o !== undefined);
+    const term = offerings.map((o) => this.schedule.termOf(o)).find((t) => t !== undefined);
+    if (term) return term.end < today ? 'term_ended' : undefined;
+    const years = offerings.map((o) => o.academicYear).filter((y): y is number => y !== undefined);
+    const current = this.schedule.currentTerm(today);
+    if (years.length > 0) {
+      const [y, m] = today.split('-').map(Number) as [number, number];
+      const currentYear = current?.year ?? (m >= 4 ? y : y - 1);
+      if (Math.max(...years) < currentYear) return 'past_academic_year';
+    }
+    if (input.dueAt && current) {
+      const due = Date.parse(input.dueAt);
+      if (!Number.isNaN(due) && due < parseZonedDate(current.start, this.tz).getTime())
+        return 'before_current_term';
+    }
+    return undefined;
+  }
+
   /** How far behind the student is in an offering (any linked id). */
   paceStatusOf(offeringId: string): PaceStatus {
     return paceStatus(this.list({ courseOfferingId: offeringId }), this.clock.now(), this.tz);
@@ -558,9 +604,24 @@ export class TaskEngine {
         status = 'pending';
         statusSetBy = 'system';
         statusEvidenceFactId = undefined;
-      } else if (statusSetBy === 'system' && status === 'cancelled') {
+      } else if (
+        statusSetBy === 'system' &&
+        (status === 'cancelled' || status === 'expired_past_term')
+      ) {
         status = 'pending';
       }
+      // An unfinished assignment of an ended term leaves the open lists (today, deadlines, week,
+      // counts, notifications). The student's own status and the submission system's evidence win,
+      // and the classification is lifted again when the calendar no longer says so.
+      if (
+        statusSetBy === 'system' &&
+        (status === 'pending' || status === 'in_progress' || status === 'unknown') &&
+        this.pastTermReason({
+          ...(a.courseOfferingId ? { courseOfferingId: a.courseOfferingId } : {}),
+          dueAt,
+        })
+      )
+        status = 'expired_past_term';
       const task: Task = {
         id,
         title: a.title,

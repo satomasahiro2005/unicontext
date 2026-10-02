@@ -1,3 +1,5 @@
+import { type CanonicalEntityInput, stableId } from '@unicontext/canonical-model';
+import { EntityStore } from '@unicontext/database';
 import type {
   AssignmentsResponse,
   ChangesContext,
@@ -272,5 +274,79 @@ describe('output hygiene', () => {
     const r = await dev('today');
     expect(r.stdout).not.toContain('\u001b[2J');
     expect(r.stdout).not.toContain('\u0007');
+  });
+});
+
+describe('unfinished work of terms that have ended (synthetic Teams assignments)', () => {
+  let past: SharedRuntime;
+  const old = stableId('courseOffering', 'teams-web', 'team-2024');
+  const team2026 = stableId('courseOffering', 'teams-web', 'team-2026');
+
+  beforeAll(async () => {
+    past = await sharedDevRuntime();
+    const { uc } = past.runtime;
+    const store = new EntityStore(uc.db, { clock: uc.clock });
+    const put = (input: CanonicalEntityInput): void => {
+      store.upsert(input, { sourceId: 'teams-web' });
+    };
+    put({
+      id: old,
+      kind: 'courseOffering',
+      title: '過去のチーム',
+      academicYear: 2024,
+      instructorIds: [],
+      instructorNames: [],
+      schedule: [],
+    } as CanonicalEntityInput);
+    put({
+      id: team2026,
+      kind: 'courseOffering',
+      title: '今年のチーム',
+      academicYear: 2026,
+      term: '後期',
+      instructorIds: [],
+      instructorNames: [],
+      schedule: [],
+    } as CanonicalEntityInput);
+    for (const [key, course, dueAt] of [
+      ['古い課題', old, '2025-01-10T14:59:00Z'],
+      ['今期の期限切れ課題', team2026, '2026-10-01T00:00:00Z'],
+    ] as const)
+      put({
+        id: stableId('assignment', 'teams-web', key),
+        kind: 'assignment',
+        title: key,
+        courseOfferingId: course,
+        dueAt,
+      } as CanonicalEntityInput);
+    uc.tasks.derive();
+  }, 60_000);
+
+  afterAll(async () => {
+    await past.dispose();
+  });
+
+  const run = (...args: string[]) => exec(['--dev', ...args], past.overrides);
+
+  it('tasks and assignments leave them out by default and keep current-term overdue ones', async () => {
+    for (const command of ['tasks', 'assignments']) {
+      const open = json<AssignmentsResponse>(await run('--json', command));
+      const titles = open.assignments.map((a) => a.title);
+      expect(titles).not.toContain('古い課題');
+      expect(titles).toContain('今期の期限切れ課題');
+      expect(open.assignments.find((a) => a.title === '今期の期限切れ課題')?.overdue).toBe(true);
+    }
+    const deadlines = json<DeadlineContext>(await run('--json', 'deadlines'));
+    expect(deadlines.overdue.map((d) => d.title)).toEqual(['今期の期限切れ課題']);
+  });
+
+  it('--include-past lists them as 終了した学期', async () => {
+    const all = json<AssignmentsResponse>(await run('--json', 'tasks', '--include-past'));
+    const old = all.assignments.find((a) => a.title === '古い課題');
+    expect(old).toMatchObject({ status: 'expired_past_term', overdue: false });
+    const human = await run('tasks', '--include-past');
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain('古い課題');
+    expect(human.stdout).toContain('終了した学期');
   });
 });

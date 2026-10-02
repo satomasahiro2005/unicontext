@@ -139,6 +139,7 @@ describe('enums', () => {
       'completed',
       'cancelled',
       'unknown',
+      'expired_past_term',
     ]);
     expect(HEALTH_STATES).toEqual([
       'healthy',

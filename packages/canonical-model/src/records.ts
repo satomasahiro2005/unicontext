@@ -43,6 +43,12 @@ export const TASK_STATUSES = [
   'completed',
   'cancelled',
   'unknown',
+  /**
+   * An unfinished assignment of a term that has ended (or of a past academic year). Derived by the
+   * task engine, never set by a user or an AI, and never a value of a source system's own
+   * submission status (Teams' / LMS' stay on the submission entity untouched).
+   */
+  'expired_past_term',
 ] as const;
 export const TaskStatusSchema = z.enum(TASK_STATUSES);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;

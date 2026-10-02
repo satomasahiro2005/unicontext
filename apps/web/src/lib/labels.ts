@@ -149,6 +149,7 @@ const TASK_STATUS_LABELS: Record<string, string> = {
   completed: '完了',
   cancelled: '取消',
   unknown: '不明',
+  expired_past_term: '終了した学期',
 };
 
 export function taskStatusLabel(status: string): string {

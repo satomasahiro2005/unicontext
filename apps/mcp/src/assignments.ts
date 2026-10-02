@@ -27,10 +27,16 @@ export interface AssignmentFilter {
   includeCompleted?: boolean;
   /** Restrict to some task kinds (default: all). */
   kinds?: Task['taskKind'][];
+  /**
+   * Also list unfinished work of terms that have ended (status `expired_past_term`). Off by
+   * default: such tasks are not part of what the student still has to do.
+   */
+  includePast?: boolean;
 }
 
 export const OPEN_TASK_STATUSES: TaskStatus[] = ['pending', 'in_progress', 'unknown'];
 export const FINISHED_TASK_STATUSES: TaskStatus[] = ['submitted', 'completed'];
+export const PAST_TERM_STATUS: TaskStatus = 'expired_past_term';
 export const ALL_TASK_STATUSES: TaskStatus[] = [
   'pending',
   'in_progress',
@@ -38,6 +44,7 @@ export const ALL_TASK_STATUSES: TaskStatus[] = [
   'completed',
   'cancelled',
   'unknown',
+  PAST_TERM_STATUS,
 ];
 
 function taskCitations(uc: UniContext, t: Task): Citation[] {
@@ -50,12 +57,14 @@ function taskCitations(uc: UniContext, t: Task): Citation[] {
 
 /** Tasks as AssignmentItems, due-date order (undated last). Shared with the daemon's REST twin. */
 export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}): AssignmentItem[] {
-  const statuses =
+  const base =
     filter.statuses && filter.statuses.length > 0
       ? filter.statuses
       : filter.includeCompleted
         ? [...OPEN_TASK_STATUSES, ...FINISHED_TASK_STATUSES]
         : OPEN_TASK_STATUSES;
+  const statuses =
+    filter.includePast && !base.includes(PAST_TERM_STATUS) ? [...base, PAST_TERM_STATUS] : base;
   const now = uc.clock.now().getTime();
   return uc.tasks
     .list({
@@ -76,7 +85,7 @@ export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}):
         taskKind: t.taskKind,
         origin: t.origin,
         createdBy: t.createdBy,
-        overdue: hoursLeft !== undefined && hoursLeft < 0,
+        overdue: t.status !== PAST_TERM_STATUS && hoursLeft !== undefined && hoursLeft < 0,
         hoursLeft,
         evidence: t.evidence,
         citations: taskCitations(uc, t),

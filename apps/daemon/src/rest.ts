@@ -125,7 +125,13 @@ const PaceBodySchema = z.object({
 });
 const IdentityBodySchema = z.object({ leftId: z.string().min(1), rightId: z.string().min(1) });
 const TaskStatusBodySchema = z.object({
-  status: z.enum(TASK_STATUSES as unknown as [TaskStatus, ...TaskStatus[]]),
+  // expired_past_term is derived from the academic calendar and cannot be set by hand.
+  status: z.enum(
+    TASK_STATUSES.filter((x) => x !== 'expired_past_term') as unknown as [
+      TaskStatus,
+      ...TaskStatus[],
+    ],
+  ),
   note: z.string().max(2000).optional(),
 });
 
@@ -418,8 +424,12 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
               throw new ValidationError(`unknown status: ${s}`);
             return s as TaskStatus;
           });
+    const includePast = query.includePast === '1' || query.includePast === 'true';
     return {
-      assignments: buildAssignments(uc, opt({ statuses, courseOfferingId: query.course })),
+      assignments: buildAssignments(
+        uc,
+        opt({ statuses, courseOfferingId: query.course, includePast: includePast || undefined }),
+      ),
     };
   };
   app.get('/api/v1/assignments', assignments);

@@ -239,6 +239,14 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
       }
     }
 
+    // Terms end while the daemon is down or between syncs: bring derived task states (assignments of
+    // an ended term become expired_past_term) up to date before anything reads or notifies.
+    try {
+      rt.uc.tasks.derive();
+    } catch (e) {
+      logger.error('task refresh at start failed', { error: errorMessage(e) });
+    }
+
     if (!options.noNotifications && rt.config.notifications.enabled) {
       const sinks = dev
         ? [createConsoleSink()]

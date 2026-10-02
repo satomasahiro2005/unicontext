@@ -48,7 +48,12 @@ const WINDOWED_KINDS: ReadonlySet<NotificationKind> = new Set([
  * reclassification only repopulates state the user has already seen (or never needed to).
  */
 const GENUINE_ORIGINS: ReadonlySet<ChangeOrigin> = new Set(['sync', 'ingest']);
-const DONE_TASK_STATUSES: ReadonlySet<string> = new Set(['submitted', 'completed', 'cancelled']);
+const DONE_TASK_STATUSES: ReadonlySet<string> = new Set([
+  'submitted',
+  'completed',
+  'cancelled',
+  'expired_past_term',
+]);
 
 const PREDICATE_LABELS_JA: Record<string, string> = {
   room: '教室',
