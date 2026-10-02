@@ -1,0 +1,131 @@
+{
+  "_fixture": "Synthetic. Shape returned by READ_REPLY_CHAINS (the client's IndexedDB 'replychain-manager', store 'replychains', keyPath [conversationId, replyChainId]) per channel id. Observed 2026-10-02: originalArrivalTime is an epoch-ms number in the cache, properties.files a JSON string, properties.mentions an array or a JSON string, Assignments bot posts carry their adaptive card base64-encoded in <Swift b64>. Texts, names and ids are invented.",
+  "19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2": [
+    {
+      "replyChainId": "1790910000000",
+      "latestDeliveryTime": 1790913600000,
+      "messages": [
+        {
+          "id": "1790910000000",
+          "parentMessageId": "1790910000000",
+          "version": "1790910000000",
+          "type": "Message",
+          "messageType": "RichText/Html",
+          "contentType": "",
+          "originalArrivalTime": 1790910000000,
+          "imDisplayName": "Kyoin Hanako (教員 花子)",
+          "creator": "8:orgid:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "content": "<p>合成した本文です。<span itemtype=\"http://schema.skype.com/Mention\" itemscope itemid=\"0\">00_講義資料</span> に第1回の資料を置きました。</p><p><a href=\"https://example.sharepoint.com/sites/2026X_abc123/Shared%20Documents/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99/week1.pdf\" title=\"week1.pdf\">week1.pdf</a></p>",
+          "properties": {
+            "subject": "第1回の資料（合成）",
+            "importance": "",
+            "mentions": [
+              { "@type": "http://schema.skype.com/Mention", "itemid": 0, "mri": "19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2", "mentionType": "channel", "displayName": "00_講義資料" }
+            ],
+            "files": "[{\"@type\":\"http://schema.skype.com/File\",\"version\":2,\"id\":\"5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e\",\"itemid\":\"5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e\",\"fileName\":\"week1.pdf\",\"fileType\":\"pdf\",\"title\":\"week1.pdf\",\"type\":\"pdf\",\"objectUrl\":\"https://example.sharepoint.com/sites/2026X_abc123/Shared Documents/00_講義資料/week1.pdf\",\"fileInfo\":{\"itemId\":null,\"fileUrl\":\"https://example.sharepoint.com/sites/2026X_abc123/Shared Documents/00_講義資料/week1.pdf?tempauth=SYNTHETIC\",\"siteUrl\":\"https://example.sharepoint.com/sites/2026X_abc123/\"},\"sharepointIds\":{\"listItemUniqueId\":\"5B6C7D8E-9F0A-4B1C-8D2E-3F4A5B6C7D8E\",\"siteUrl\":\"https://example.sharepoint.com/sites/2026X_abc123\"}}]",
+            "links": "[]"
+          }
+        },
+        {
+          "id": "1790913600000",
+          "parentMessageId": "1790910000000",
+          "version": "1790913600000",
+          "type": "Message",
+          "messageType": "RichText/Html",
+          "contentType": "",
+          "originalArrivalTime": 1790913600000,
+          "imDisplayName": "Gakusei Taro (学生 太郎)",
+          "creator": "8:orgid:1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+          "isSentByCurrentUser": true,
+          "content": "<p><span itemtype=\"http://schema.skype.com/Mention\" itemscope itemid=\"0\">教員 花子</span> 先生、資料ありがとうございます。第2回はいつですか？</p>",
+          "properties": {
+            "mentions": "[{\"itemid\":0,\"mri\":\"8:orgid:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"mentionType\":\"person\",\"displayName\":\"教員 花子\"}]",
+            "files": "[]"
+          }
+        },
+        {
+          "id": "1790913700000",
+          "parentMessageId": "1790910000000",
+          "version": "1790913800000",
+          "type": "Message",
+          "messageType": "RichText/Html",
+          "originalArrivalTime": 1790913700000,
+          "imDisplayName": "Gakusei Jiro (学生 次郎)",
+          "creator": "8:orgid:2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b",
+          "content": "",
+          "properties": { "deletetime": "1790913800000", "systemdelete": "false" }
+        }
+      ]
+    },
+    {
+      "replyChainId": "1790905000000",
+      "latestDeliveryTime": 1790905000000,
+      "messages": [
+        {
+          "id": "1790905000000",
+          "parentMessageId": "1790905000000",
+          "type": "Message",
+          "messageType": "RichText/Html",
+          "originalArrivalTime": 1790905000000,
+          "imDisplayName": "Kyoin Hanako (教員 花子)",
+          "creator": "8:orgid:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "content": "<p>来週の授業は201講義室で行います。</p>",
+          "properties": { "importance": "high", "mentions": [], "files": "[]" }
+        }
+      ]
+    }
+  ],
+  "19:a1b2c3d4e5f60718293a4b5c6d7e8f90@thread.tacv2": [
+    {
+      "replyChainId": "1790800000000",
+      "latestDeliveryTime": 1790800000000,
+      "messages": [
+        {
+          "id": "1790800000000",
+          "parentMessageId": "1790800000000",
+          "type": "Message",
+          "messageType": "RichText/Media_Card",
+          "originalArrivalTime": 1790800000000,
+          "imDisplayName": "Assignments",
+          "creator": "28:7254e396-868c-4bf7-96b2-6fe763590b5a",
+          "content": "<URIObject type=\"SWIFT.1\">Card - access it on <a href=\"https://go.skype.com/cards.unsupported\">https://go.skype.com/cards.unsupported</a>. <Swift b64=\"eyJ0eXBlIjoibWVzc2FnZS9jYXJkIiwiZW50aXRpZXMiOltdLCJhdHRhY2htZW50cyI6W3siY29udGVudFR5cGUiOiJhcHBsaWNhdGlvbi92bmQubWljcm9zb2Z0LmNhcmQuYWRhcHRpdmUiLCJjb250ZW50Ijp7InR5cGUiOiJBZGFwdGl2ZUNhcmQiLCJ2ZXJzaW9uIjoiMS4yIiwiYm9keSI6W3sidHlwZSI6IkNvbnRhaW5lciIsIml0ZW1zIjpbeyJ0eXBlIjoiVGV4dEJsb2NrIiwic2l6ZSI6ImxhcmdlIiwid2VpZ2h0IjoiYm9sZGVyIiwid3JhcCI6dHJ1ZSwidGV4dCI6IuesrDLlm57jg6zjg53jg7zjg4jvvIjlkIjmiJDvvIkifV19LHsidHlwZSI6IkNvbnRhaW5lciIsIml0ZW1zIjpbeyJ0eXBlIjoiQ29sdW1uU2V0IiwiY29sdW1ucyI6W3sidHlwZSI6IkNvbHVtbiIsIml0ZW1zIjpbeyJ0eXBlIjoiVGV4dEJsb2NrIiwic2l6ZSI6InNtYWxsIiwid3JhcCI6dHJ1ZSwidGV4dCI6Iuacn+mZkCAxMOaciDnml6UifV19XX1dfV0sImFjdGlvbnMiOlt7InR5cGUiOiJBY3Rpb24uT3BlblVybCIsInRpdGxlIjoi6Kqy6aGM44KS6KGo56S6IiwidXJsIjoiaHR0cHM6Ly90ZWFtcy5taWNyb3NvZnQuY29tL2wvZW50aXR5LzY2YWVlZTkzLTUwN2QtNDc5YS1hM2VmLThmNDk0YWY0Mzk0NS9jbGFzc3Jvb20/Y29udGV4dD0lN0IlMjJjaGFubmVsSWQlMjIlM0ElMjIxOSUzQWExYjJjM2Q0ZTVmNjA3MTgyOTNhNGI1YzZkN2U4ZjkwJTQwdGhyZWFkLnRhY3YyJTIyJTJDJTIyc3ViRW50aXR5SWQlMjIlM0ElMjIlN0IlNUMlMjJ2ZXJzaW9uJTVDJTIyJTNBJTVDJTIyMS4wJTVDJTIyJTJDJTVDJTIyY29uZmlnJTVDJTIyJTNBJTdCJTVDJTIyY2xhc3NlcyU1QyUyMiUzQSU1QiU3QiU1QyUyMmlkJTVDJTIyJTNBJTVDJTIyM2Y2YjJjMWUtOGE0Ny00ZDJiLTljNWUtMWEyYjNjNGQ1ZTZmJTVDJTIyJTJDJTVDJTIyYXNzaWdubWVudElkcyU1QyUyMiUzQSU1QiU1QyUyMjdlOGY5YTBiLTFjMmQtNGUzZi05YTRiLTVjNmQ3ZThmOWEwYiU1QyUyMiU1RCU3RCU1RCU3RCUyQyU1QyUyMmFjdGlvbiU1QyUyMiUzQSU1QyUyMm5hdmlnYXRlJTVDJTIyJTJDJTVDJTIydmlldyU1QyUyMiUzQSU1QyUyMmFzc2lnbm1lbnQtdmlld2VyJTVDJTIyJTJDJTVDJTIyZGVlcGxpbmtUeXBlJTVDJTIyJTNBMCU3RCUyMiU3RCJ9XX19XX0=\"></Swift></URIObject>",
+          "properties": {}
+        }
+      ]
+    },
+    {
+      "replyChainId": "1790700000000",
+      "latestDeliveryTime": 1790700000000,
+      "messages": [
+        {
+          "id": "1790700000000",
+          "parentMessageId": "1790700000000",
+          "type": "Message",
+          "messageType": "Event/Call",
+          "originalArrivalTime": 1790700000000,
+          "imDisplayName": "Kyoin Hanako (教員 花子)",
+          "creator": "8:orgid:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "content": "<partlist type=\"started\"></partlist>",
+          "properties": {}
+        }
+      ]
+    },
+    {
+      "replyChainId": "1790600000000",
+      "latestDeliveryTime": 1790600000000,
+      "messages": [
+        {
+          "id": "1790600000000",
+          "parentMessageId": "1790600000000",
+          "type": "Message",
+          "messageType": "Text",
+          "originalArrivalTime": 1790600000000,
+          "imDisplayName": "Gakusei Jiro (学生 次郎)",
+          "creator": "8:orgid:2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b",
+          "content": "レポートの提出先はどこですか？",
+          "properties": {}
+        }
+      ]
+    }
+  ]
+}

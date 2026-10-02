@@ -24,7 +24,8 @@ export function playwrightDriver(
         headless: options.headless,
         locale: options.locale ?? 'ja-JP',
         timezoneId: options.timezoneId ?? 'Asia/Tokyo',
-        viewport: null,
+        viewport: options.viewport ?? null,
+        ...(options.serviceWorkers ? { serviceWorkers: options.serviceWorkers } : {}),
       };
       if (options.executablePath) {
         return (await chromium.launchPersistentContext(userDataDir, {

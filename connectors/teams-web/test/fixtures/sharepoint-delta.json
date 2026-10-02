@@ -1,0 +1,73 @@
+{
+  "_fixture": "Synthetic. GET /sites/{site}/_api/v2.0/drive/root/delta from a page on the team's SharePoint site (same-origin, the page's own session), observed 2026-10-02: first call without a token lists the whole library (folders, files, the root), later calls with the @odata.deltaLink return changes and deleted items. '@content.downloadUrl' (tempauth) appears on some responses and is dropped before storage. Values invented.",
+  "full": {
+    "@odata.deltaLink": "https://example.sharepoint.com/sites/2026X_abc123/_api/v2.0/drive/root/view.delta?token=SYNTHETIC-DELTA-1",
+    "@delta.hasMoreData": false,
+    "@delta.syncStatus": "FullData",
+    "value": [
+      { "id": "01ROOT", "name": "root", "root": {}, "folder": { "childCount": 3 }, "parentReference": { "driveType": "documentLibrary", "driveId": "b!SYNTHETIC" } },
+      {
+        "id": "01FOLDER00",
+        "name": "00_講義資料",
+        "folder": { "childCount": 2 },
+        "parentReference": { "driveId": "b!SYNTHETIC", "id": "01ROOT", "path": "/drive/root:" },
+        "webUrl": "https://example.sharepoint.com/sites/2026X_abc123/Shared%20Documents/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99"
+      },
+      {
+        "id": "01FILEWEEK1",
+        "name": "week1.pdf",
+        "size": 123456,
+        "eTag": "\"{5B6C7D8E-9F0A-4B1C-8D2E-3F4A5B6C7D8E},3\"",
+        "cTag": "\"c:{5B6C7D8E-9F0A-4B1C-8D2E-3F4A5B6C7D8E},3\"",
+        "createdDateTime": "2026-09-18T01:48:19Z",
+        "lastModifiedDateTime": "2026-10-02T01:48:19Z",
+        "createdBy": { "user": { "email": "kyoin.hanako@example.ac.jp", "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "displayName": "Kyoin Hanako (教員 花子)" } },
+        "lastModifiedBy": { "user": { "email": "kyoin.hanako@example.ac.jp", "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "displayName": "Kyoin Hanako (教員 花子)" } },
+        "parentReference": { "driveType": "documentLibrary", "driveId": "b!SYNTHETIC", "id": "01FOLDER00", "name": "00_講義資料", "path": "/drive/root:/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99" },
+        "webUrl": "https://example.sharepoint.com/sites/2026X_abc123/Shared%20Documents/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99/week1.pdf",
+        "@content.downloadUrl": "https://example.sharepoint.com/sites/2026X_abc123/_layouts/15/download.aspx?UniqueId=5b6c7d8e&tempauth=SYNTHETIC-TEMPAUTH",
+        "file": { "mimeType": "application/pdf", "hashes": { "quickXorHash": "U1lOVEhFVElDSEFTSA==" } },
+        "shared": { "effectiveRoles": ["read"], "scope": "users" }
+      },
+      {
+        "id": "01FILESLIDES",
+        "name": "第1回スライド.pptx",
+        "size": 2048,
+        "eTag": "\"{11111111-2222-4333-8444-555555555555},1\"",
+        "cTag": "\"c:{11111111-2222-4333-8444-555555555555},1\"",
+        "createdDateTime": "2026-09-18T02:00:00Z",
+        "lastModifiedDateTime": "2026-09-18T02:00:00Z",
+        "lastModifiedBy": { "user": { "displayName": "Kyoin Hanako (教員 花子)" } },
+        "parentReference": { "driveId": "b!SYNTHETIC", "id": "01FOLDER00", "path": "/drive/root:/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99/%E3%82%B9%E3%83%A9%E3%82%A4%E3%83%89" },
+        "webUrl": "https://example.sharepoint.com/sites/2026X_abc123/Shared%20Documents/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99/%E3%82%B9%E3%83%A9%E3%82%A4%E3%83%89/slides1.pptx",
+        "file": { "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation" }
+      },
+      {
+        "id": "01FILEROOT",
+        "name": "シラバス.docx",
+        "size": 999,
+        "lastModifiedDateTime": "2026-09-01T00:00:00Z",
+        "parentReference": { "driveId": "b!SYNTHETIC", "id": "01ROOT", "path": "/drive/root:" },
+        "webUrl": "https://example.sharepoint.com/sites/2026X_abc123/Shared%20Documents/syllabus.docx",
+        "file": { "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }
+      }
+    ]
+  },
+  "incremental": {
+    "@odata.deltaLink": "https://example.sharepoint.com/sites/2026X_abc123/_api/v2.0/drive/root/view.delta?token=SYNTHETIC-DELTA-2",
+    "value": [
+      { "id": "01FILEROOT", "name": "シラバス.docx", "deleted": { "state": "deleted" }, "parentReference": { "driveId": "b!SYNTHETIC" } },
+      {
+        "id": "01FILEWEEK2",
+        "name": "week2.pdf",
+        "size": 2222,
+        "eTag": "\"{22222222-3333-4444-8555-666666666666},1\"",
+        "cTag": "\"c:{22222222-3333-4444-8555-666666666666},1\"",
+        "lastModifiedDateTime": "2026-10-03T00:00:00Z",
+        "parentReference": { "driveId": "b!SYNTHETIC", "id": "01FOLDER00", "path": "/drive/root:/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99" },
+        "webUrl": "https://example.sharepoint.com/sites/2026X_abc123/Shared%20Documents/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99/week2.pdf",
+        "file": { "mimeType": "application/pdf" }
+      }
+    ]
+  }
+}

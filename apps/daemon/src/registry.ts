@@ -27,6 +27,7 @@ export const CONNECTOR_PACKAGES: Readonly<Record<string, string>> = {
   'chatgpt-record': '@unicontext/chatgpt-record',
   record: '@unicontext/chatgpt-record',
   'wordpress-portal': '@unicontext/wordpress-portal',
+  'teams-web': '@unicontext/teams-web',
   // One package, two modules: the public 休講 page is `module: public-cancellations` of syllabus.
   'lcu-public-cancellations': '@unicontext/syllabus',
 };

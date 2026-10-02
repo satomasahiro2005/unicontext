@@ -49,6 +49,13 @@ export interface LaunchOptions {
   executablePath?: string;
   locale?: string;
   timezoneId?: string;
+  /**
+   * 'block' keeps service workers from registering, so requests a page (or its dedicated workers)
+   * makes reach the network and are visible to response listeners and routes.
+   */
+  serviceWorkers?: 'allow' | 'block';
+  /** Fixed viewport (default: none, the window size). */
+  viewport?: { width: number; height: number };
 }
 
 /** Opens a persistent (on-disk) browser profile. */

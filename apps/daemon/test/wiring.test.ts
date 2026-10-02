@@ -26,8 +26,14 @@ describe('effectiveSources', () => {
       'local-files',
       'microsoft365',
       'syllabus',
+      'teams-web',
       'wordpress-portal',
     ]);
+    expect(s['teams-web']).toMatchObject({
+      enabled: true,
+      connector: 'teams-web',
+      schedule: '30m',
+    });
     expect(s['lcu-public-cancellations']).toMatchObject({
       enabled: true,
       connector: 'syllabus',

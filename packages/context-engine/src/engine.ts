@@ -713,11 +713,20 @@ export class ContextEngine {
   }
 
   /** Announcements and messages of thread-based platforms for the offerings, newest first. */
-  private discussionFor(courseIds: readonly string[] | undefined): DiscussionItem[] {
+  private discussionFor(
+    courseIds: readonly string[] | undefined,
+    options: { since?: number; platform?: (p: string | undefined) => boolean; limit?: number } = {},
+  ): DiscussionItem[] {
     const threads = new Map<string, Thread>(
       this.entities.list('thread').map((t) => [t.id, t] as const),
     );
-    const out: { at: string | undefined; item: DiscussionItem }[] = [];
+    const out: { at: string | undefined; id: string; make: () => DiscussionItem }[] = [];
+    const keep = (at: string | undefined, platform: string | undefined): boolean => {
+      if (options.platform && !options.platform(platform)) return false;
+      if (options.since === undefined) return true;
+      const t = at ? Date.parse(at) : Number.NaN;
+      return !Number.isNaN(t) && t >= options.since;
+    };
     let messages: Message[];
     if (courseIds) {
       const threadIds = [...threads.values()]
@@ -734,15 +743,17 @@ export class ContextEngine {
       const thread = m.threadId ? threads.get(m.threadId) : undefined;
       const platform = this.platformOf(m.extra, thread);
       if (!platform && !m.threadId) continue;
-      out.push({ at: m.sentAt, item: this.messageItem(m, thread, platform) });
+      if (!keep(m.sentAt, platform)) continue;
+      out.push({ at: m.sentAt, id: m.id, make: () => this.messageItem(m, thread, platform) });
     }
     const announcements = this.entities
       .list('announcement', courseIds ? { where: { courseOfferingId: courseIds } } : {})
       .filter((a) => extraString(a.extra, 'platform') !== undefined);
-    for (const a of announcements) out.push({ at: a.publishedAt, item: this.postItem(a) });
-    return out
-      .sort((x, y) => (y.at ?? '').localeCompare(x.at ?? '') || x.item.id.localeCompare(y.item.id))
-      .map((x) => x.item);
+    for (const a of announcements)
+      if (keep(a.publishedAt, extraString(a.extra, 'platform')))
+        out.push({ at: a.publishedAt, id: a.id, make: () => this.postItem(a) });
+    out.sort((x, y) => (y.at ?? '').localeCompare(x.at ?? '') || x.id.localeCompare(y.id));
+    return (options.limit !== undefined ? out.slice(0, options.limit) : out).map((x) => x.make());
   }
 
   private messageItem(
@@ -789,7 +800,7 @@ export class ContextEngine {
   private filesFor(
     courseIds: readonly string[] | undefined,
     filter: (d: Document) => boolean = () => true,
-  ): CourseFileItem[] {
+  ): Omit<CourseFileItem, 'citations'>[] {
     const materialKinds = new Map<string, string>();
     for (const m of this.entities.list(
       'material',
@@ -800,7 +811,7 @@ export class ContextEngine {
     return this.entities
       .list('document', courseIds ? { where: { courseOfferingId: courseIds } } : {})
       .filter((d) => d.courseOfferingId !== undefined && filter(d))
-      .map((d): CourseFileItem => ({
+      .map((d): Omit<CourseFileItem, 'citations'> => ({
         id: d.id,
         title: d.title,
         path: d.path,
@@ -812,9 +823,12 @@ export class ContextEngine {
         url: d.url,
         mimeType: d.mimeType,
         materialKind: materialKinds.get(d.id),
-        citations: this.citationsFor([d.id]),
       }))
       .sort(compareFiles);
+  }
+
+  private cited(files: Omit<CourseFileItem, 'citations'>[]): CourseFileItem[] {
+    return files.map((f) => ({ ...f, citations: this.citationsFor([f.id]) }));
   }
 
   /** Assignments of the offerings with their submission state, newest due first (undated last). */
@@ -1152,8 +1166,8 @@ export class ContextEngine {
         .slice(0, 10)
         .map((a) => this.announcementItem(a)),
       materials: this.materialsFor(ids),
-      discussion: this.discussionFor(ids).slice(0, 20),
-      files: files.slice(0, COURSE_FILES_LIMIT),
+      discussion: this.discussionFor(ids, { limit: 20 }),
+      files: this.cited(files.slice(0, COURSE_FILES_LIMIT)),
       filesTotal: files.length,
       assignments: this.assignmentsFor(ids),
       changes: this.changes
@@ -1222,13 +1236,19 @@ export class ContextEngine {
       const t = v ? Date.parse(v) : Number.NaN;
       return !Number.isNaN(t) && t >= sinceMs;
     };
-    const posts = this.discussionFor(ids)
-      .filter((p) => isTeams(p.platform) && after(p.sentAt))
-      .slice(0, options.limit ?? 50);
-    const files = this.filesFor(
-      ids,
-      (d) => isTeams(extraString(d.extra, 'platform')) && after(d.modifiedAt),
-    ).sort((a, b) => (b.modifiedAt ?? '').localeCompare(a.modifiedAt ?? '') || compareFiles(a, b));
+    const posts = this.discussionFor(ids, {
+      since: sinceMs,
+      platform: isTeams,
+      limit: options.limit ?? 50,
+    });
+    const files = this.cited(
+      this.filesFor(
+        ids,
+        (d) => isTeams(extraString(d.extra, 'platform')) && after(d.modifiedAt),
+      ).sort(
+        (a, b) => (b.modifiedAt ?? '').localeCompare(a.modifiedAt ?? '') || compareFiles(a, b),
+      ),
+    );
     const touched = new Set<string>();
     for (const c of this.changes.list({ since, types: ['updated'] })) {
       if (c.entityKind === 'assignment') touched.add(c.entityId);
@@ -1274,7 +1294,7 @@ export class ContextEngine {
       course: { id: c.id, title: c.title, courseCode: c.courseCode, linkedIds: c.linkedIds },
       path,
       folders,
-      files: all.filter((f) => f.folder === path),
+      files: this.cited(all.filter((f) => f.folder === path)),
     };
   }
 

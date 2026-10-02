@@ -13,6 +13,7 @@ registers with the sync engine (`instantiateConnector` → `SyncEngine.register`
 | [lcu-public-cancellations](lcu-public-cancellations.md) | `@unicontext/syllabus` (`public-cancellations`) | native HTTP (public)          | unofficial   | 15m              |
 | [wordpress-portal](wordpress-portal.md)                 | `@unicontext/wordpress-portal`                  | native HTTP (WP REST)         | official     | 1h               |
 | [microsoft365](microsoft365.md)                         | `@unicontext/microsoft365`                      | Graph API (PKCE)              | official     | 15m (delta)      |
+| [teams-web](teams-web.md)                               | `@unicontext/teams-web`                         | Teams web client (browser)    | unofficial   | 30m              |
 | [local-files](local-files.md)                           | `@unicontext/local-files`                       | filesystem                    | official     | event            |
 | [chatgpt-record](chatgpt-record.md)                     | `@unicontext/chatgpt-record`                    | filesystem / manual import    | official     | event            |
 | [adapter-browser](adapter-browser.md)                   | `@unicontext/adapter-browser`                   | Playwright                    | —            | —                |

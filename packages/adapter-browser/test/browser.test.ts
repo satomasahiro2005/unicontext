@@ -450,3 +450,84 @@ describe('browser page-snapshot connector', () => {
     await expect(inst.adapter.sync({ mode: 'initial' })).rejects.toBeInstanceOf(AuthRequiredError);
   });
 });
+
+describe('shared profiles and page-only sessions', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const tmp = (): string => {
+    const d = mkdtempSync(join(tmpdir(), 'uc-shared-'));
+    dirs.push(d);
+    return d;
+  };
+
+  it('runs sessions of different sources on one profile directory one after another', async () => {
+    const dir = tmp();
+    const driver = new FakeBrowserDriver({ screens: { [HOME]: { title: 'ホーム', html: '' } } });
+    const make = (sourceId: string) =>
+      new BrowserSession({
+        sourceId,
+        profileDir: dir,
+        secrets: new MemorySecretStore(),
+        driver,
+        startUrl: HOME,
+        isAuthenticated: () => true,
+        cookieUrls: [],
+      });
+    const a = make('a');
+    const b = make('b');
+    const order: string[] = [];
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const first = a.withPage(async () => {
+      order.push('a:start');
+      await gate;
+      order.push('a:end');
+    });
+    const second = b.withPage(() => {
+      order.push('b');
+      return Promise.resolve();
+    });
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(order).toEqual(['a:start']);
+    release();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['a:start', 'a:end', 'b']);
+  });
+
+  it('exports no cookies when cookieUrls is empty and prepares each new context', async () => {
+    const dir = tmp();
+    const secrets = new MemorySecretStore();
+    const driver = new FakeBrowserDriver({
+      screens: { [HOME]: { title: 'ホーム', html: '' } },
+      cookies: [sessionCookie],
+    });
+    const prepared: unknown[] = [];
+    const session = new BrowserSession({
+      sourceId: 'page-only',
+      profileDir: dir,
+      secrets,
+      driver,
+      startUrl: HOME,
+      isAuthenticated: () => true,
+      cookieUrls: [],
+      launch: { serviceWorkers: 'block', viewport: { width: 1000, height: 800 } },
+      prepareContext: (ctx) => {
+        prepared.push(ctx);
+        return Promise.resolve();
+      },
+    });
+    expect((await session.refresh()).status).toBe('authenticated');
+    expect(await secrets.get(secretKey('page-only', COOKIE_SECRET_NAME))).toBeUndefined();
+    expect(prepared).toHaveLength(1);
+    expect(driver.launches[0]?.options).toMatchObject({
+      headless: true,
+      serviceWorkers: 'block',
+      viewport: { width: 1000, height: 800 },
+    });
+  });
+});

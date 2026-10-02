@@ -316,3 +316,67 @@ Name: `connectors/teams-web` on `@unicontext/adapter-browser`; metadata `apiStab
 Sanitizing: people → 教員 花子 / 学生 太郎, emails → `example.ac.jp`, SharePoint host → `example.sharepoint.com`,
 ids randomized consistently (the team `groupId` and thread ids match across files), message text
 synthetic, tokens/sync tokens/download URLs removed. Microsoft's global Assignments app/bot ids are kept.
+
+## 10. Spike results (2026-10-02, Playwright 1.63, installed Chrome, headless)
+
+Run against the real tenant in the UniContext browser profile (the LiveCampusU profile, whose SSO
+had already signed the student in to Microsoft; no password or MFA prompt appeared, headless). All
+requests that are not reads were aborted by a context route from the first navigation on. Only
+counts and shapes were recorded; fixtures are synthetic
+(`connectors/teams-web/test/fixtures/*.json`).
+
+1. **Worker traffic is visible.** With `serviceWorkers: 'block'`, `context.on('response')` delivered
+   the data worker's CSA/chatsvc/middle-tier responses with bodies (e.g. `GET
+   /api/csa/apac/api/v3/teams/users/me`, `GET /api/csa/apac/api/v1/containers/{channelId}/posts`;
+   posts body keys `posts, hasMoreForward, hasMoreBackward, hasMore,
+   lastModifiedTimeOfLastReturnedReplyChain, rcMetadataStatusCode`; no paging header in the
+   response, the client sends `x-ms-*` headers only). `context.route` also sees and can abort the
+   worker's requests.
+2. **But the client does not refetch what it has cached.** The full team list
+   (`teams/users/me`) came only on the profile's first boot; later boots asked
+   `teams/users/me/updates` (delta). Opening a channel the client already cached produced no posts
+   request at all. So the connector reads teams/channels and posts from the client's own IndexedDB
+   cache (read-only transactions) after the client booted / opened the channel; response capture is
+   used for Assignments. (Fallback of §6.5, with the reason above.)
+3. **Navigation.** `page.goto('/l/channel/…')` lands on the desktop-app launcher
+   (`/dl/launcher/launcher.html`). `https://teams.cloud.microsoft/_#/l/channel/…` opens the web app
+   directly, and once it runs, setting `location.hash = '#/l/channel/…'` switches channels in-app in
+   ~0.5 s; a never-opened channel then triggers its posts request and ~20 reply chains are cached,
+   two scroll-ups load ~20 more each. `history.pushState` alone did not route. The `/l/app/<id>`
+   deep link shows the store dialog (and triggers `POST …/sharetoteams/installApp`, blocked); the
+   app-bar button `button[data-tid="66aeee93-507d-479a-a3ef-8f494af43945"]` opens 課題 without it.
+4. **Mark-read is a client write.** Viewing a channel makes the client send `PUT
+   /api/chatsvc/jp/v1/users/ME/conversations/{id}/properties?name=consumptionhorizon`; the route
+   aborted it every time and the client kept working. Other non-read calls blocked without visible
+   effect: `registrar/prod/V2/registrations` (push), `mcps/initArtifactFolder`,
+   `users/{id}/cookiev2`, `tps/…/metadata/pushupdates`, telemetry. Read POSTs that must pass:
+   `authsvc/v1.0/authz`, `skypetokenauth`, `aadtokenauth`, `beta/users/fetch*`, `effectivePolicies`,
+   `useraggregatesettings`, `groupsSettings`, `apps/aggregatedEntitlements|eligibilities|batchedDefinitions`,
+   `presence/getpresence`.
+5. **Assignments.** Production host `https://assignments.edu.cloud.microsoft`. Each tab issues its
+   own `GET /api/v1.0/edu/me/work?$filter&$top&$orderby&$expand=submissions($expand=outcomes),categories,submissionAggregates`
+   (今後の予定: assigned/not completed with `dueDateTime ge` today, 期限を経過: `dueDateTime le` now,
+   完了: completed or inactive), paging via `@odata.nextLink` (`$skiptoken`) when the list is
+   scrolled. Past (overdue, completed) items are included: 88 for this student across 2024–2026.
+   `instructions` is `null` in list responses; `createdBy.user.id` is the teacher's object id;
+   submission `status` values seen: `working`, `submitted`, `returned`. 20 assignment cards in
+   channels pointed at assignments the service did not list (old classes): the service is taken as
+   authoritative.
+6. **Cache shapes (real).** `originalArrivalTime` is an epoch-ms **number** in `replychain-manager`
+   (the research sample showed a string); `properties.files` is a JSON string; `properties.mentions`
+   an array or a JSON string; announcement-style posts carry `properties.title`/`subject`;
+   deleted posts keep `properties.deletetime`. The DB name
+   `Teams:conversation-manager:react-web-client:<userId>:<tenantId>:<locale>` gives the student's
+   own MRI (for `mentionsMe`).
+7. **SharePoint.** `GET {site}/_api/web` answered 403 before the site was opened; loading the site
+   page completes the SSO (a form POST to `/_forms/default.aspx`, which the route allows) and after
+   that same-origin `fetch` of `/_api/v2.0/drive/root/delta` works for every site on the host
+   (255 items in 2 pages for one class team; 1 190 files across the 9 teams). Delta items carried no
+   `@content.downloadUrl` here; the connector strips it anyway.
+8. **Session lifetime.** Not measured beyond this day; headless boots kept working across ~15
+   launches. When Entra asks again, the run ends with `auth_required` (no window opens).
+
+First real sync (in-process, daemon stopped): 9 teams (7 class), 49 channels, 46 read in the first
+full pass, 524 cached messages → 134 announcements + 299 messages, 1 190 files, 88 assignments with
+88 submission states; 2 of 7 class teams linked automatically to the academic system / syllabus
+(the 5 others are 2024–2025 teams with no offering of that year in UniContext).

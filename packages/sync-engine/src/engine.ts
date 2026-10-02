@@ -39,6 +39,7 @@ import {
   createStores,
   type HealthRecord,
   type RawItemRecord,
+  rawItemId,
   type Stores,
   type UniContextDatabase,
 } from '@unicontext/database';
@@ -273,6 +274,7 @@ export class SyncEngine {
       let pageToken: string | undefined;
       let last: SyncResult | undefined;
       const completeTypes = new Set<string>();
+      const backfill = new Set<string>();
       let version: { product: string; version: string } | undefined;
       do {
         const result = await source.adapter.sync({
@@ -283,6 +285,8 @@ export class SyncEngine {
         });
         pages++;
         const r = this.ingestPage(sourceId, result, seen);
+        for (const it of result.items)
+          if (it.backfill) backfill.add(rawItemId(sourceId, it.sourceType, it.externalId));
         for (const k of Object.keys(raw) as (keyof IngestReport)[]) raw[k] += r[k];
         for (const t of result.complete?.sourceTypes ?? []) completeTypes.add(t);
         if (result.productVersion) version = result.productVersion;
@@ -309,6 +313,7 @@ export class SyncEngine {
       const normalized = await this.normalizePending(sourceId, {
         emitCreates: hadPreviousSync,
         origin: hadPreviousSync && mode !== 'initial' ? 'sync' : 'initial',
+        ...(backfill.size ? { backfillRawItemIds: backfill } : {}),
       });
       this.stores.raw.touchSourceSync(sourceId, this.clock.now().toISOString());
       const health = await this.recordSuccess(source, version);
@@ -429,6 +434,8 @@ export class SyncEngine {
     sourceId: string,
     options: {
       emitCreates?: boolean;
+      /** Raw items the adapter marked as backfill: no `created` events for their entities. */
+      backfillRawItemIds?: ReadonlySet<string>;
       runPostProcessors?: boolean;
       /** What the events of this pass are tagged with (default 'sync'). */
       origin?: ChangeOrigin;
@@ -477,7 +484,14 @@ export class SyncEngine {
           };
           const output = await source.normalizer.normalize(view, ctx);
           this.db.transaction(() =>
-            this.applyOutput(source, item, output, report, options.emitCreates ?? true, itemEvents),
+            this.applyOutput(
+              source,
+              item,
+              output,
+              report,
+              (options.emitCreates ?? true) && !options.backfillRawItemIds?.has(item.id),
+              itemEvents,
+            ),
           );
           if (output.drift?.length) {
             const fresh = this.stores.drift.record(

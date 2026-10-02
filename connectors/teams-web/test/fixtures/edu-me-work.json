@@ -1,0 +1,80 @@
+{
+  "_fixture": "Synthetic. GET https://assignments.edu.cloud.microsoft/api/v1.0/edu/me/work?$filter=…&$top&$orderby&$expand=submissions($expand=outcomes),categories,submissionAggregates as received by the Assignments app inside Teams (observed 2026-10-02; the student's tabs 今後の予定 / 期限を経過 / 完了 each issue their own $filter, paging via @odata.nextLink with $skiptoken). instructions is null in list responses. Keys trimmed to the ones seen; values invented.",
+  "@odata.context": "https://assignments.edu.cloud.microsoft/api/v1.0/edu/$metadata",
+  "value": [
+    {
+      "additionalClassIds": [],
+      "classId": "3f6b2c1e-8a47-4d2b-9c5e-1a2b3c4d5e6f",
+      "displayName": "第3回レポート（合成）",
+      "closeDateTime": null,
+      "dueDateTime": "2026-10-16T14:59:00Z",
+      "assignedDateTime": "2026-10-02T01:00:00Z",
+      "createdDateTime": "2026-10-01T09:00:00Z",
+      "lastModifiedDateTime": "2026-10-02T01:00:00Z",
+      "allowLateSubmissions": true,
+      "resourcesFolderUrl": "https://graph.microsoft.com/v1.0/drives/b!SYNTHETICdriveid/items/01SYNTHETIC",
+      "status": "assigned",
+      "isCompleted": false,
+      "webUrl": "https://teams.microsoft.com/l/entity/66aeee93-507d-479a-a3ef-8f494af43945/classroom?context=%7B%22subEntityId%22%3A%22synthetic%22%7D",
+      "id": "aaaaaaaa-0000-4000-8000-000000000003",
+      "instructions": null,
+      "grading": { "@odata.type": "#microsoft.education.assignments.api.educationAssignmentPointsGradeType", "maxPoints": 10 },
+      "createdBy": { "application": null, "device": null, "user": { "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "displayName": null } },
+      "submissions": [
+        {
+          "status": "working",
+          "submittedDateTime": null,
+          "returnedDateTime": null,
+          "id": "bbbbbbbb-0000-4000-8000-000000000003",
+          "recipient": { "@odata.type": "#microsoft.education.assignments.api.educationSubmissionIndividualRecipient", "userId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d" },
+          "outcomes": [
+            { "@odata.type": "#microsoft.education.assignments.api.educationFeedbackOutcome", "id": "c1", "feedback": null, "publishedFeedback": null },
+            { "@odata.type": "#microsoft.education.assignments.api.educationPointsOutcome", "id": "c2", "points": null, "publishedPoints": null }
+          ]
+        }
+      ],
+      "categories": [],
+      "submissionAggregates": null
+    },
+    {
+      "classId": "3f6b2c1e-8a47-4d2b-9c5e-1a2b3c4d5e6f",
+      "displayName": "第2回レポート（合成）",
+      "dueDateTime": "2026-10-09T14:59:00Z",
+      "assignedDateTime": "2026-09-25T01:00:00Z",
+      "lastModifiedDateTime": "2026-09-25T01:00:00Z",
+      "status": "assigned",
+      "isCompleted": true,
+      "webUrl": "https://teams.microsoft.com/l/entity/66aeee93-507d-479a-a3ef-8f494af43945/classroom?context=%7B%7D",
+      "id": "7e8f9a0b-1c2d-4e3f-9a4b-5c6d7e8f9a0b",
+      "instructions": { "content": "<p>合成した説明です。</p>", "contentType": "html" },
+      "grading": null,
+      "createdBy": { "user": { "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "displayName": null } },
+      "submissions": [
+        { "status": "submitted", "submittedDateTime": "2026-10-10T03:00:00Z", "id": "bbbbbbbb-0000-4000-8000-000000000002", "outcomes": [] }
+      ]
+    },
+    {
+      "classId": "3f6b2c1e-8a47-4d2b-9c5e-1a2b3c4d5e6f",
+      "displayName": "第1回小テスト（合成）",
+      "dueDateTime": "2026-09-20T14:59:00Z",
+      "assignedDateTime": "2026-09-15T01:00:00Z",
+      "lastModifiedDateTime": "2026-09-22T01:00:00Z",
+      "status": "assigned",
+      "isCompleted": true,
+      "id": "aaaaaaaa-0000-4000-8000-000000000001",
+      "grading": { "maxPoints": 5 },
+      "createdBy": { "user": { "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" } },
+      "submissions": [
+        {
+          "status": "returned",
+          "submittedDateTime": "2026-09-19T03:00:00Z",
+          "returnedDateTime": "2026-09-22T01:00:00Z",
+          "id": "bbbbbbbb-0000-4000-8000-000000000001",
+          "outcomes": [
+            { "@odata.type": "#microsoft.education.assignments.api.educationPointsOutcome", "id": "c3", "points": { "points": 4 }, "publishedPoints": { "points": 4 } }
+          ]
+        }
+      ]
+    }
+  ]
+}

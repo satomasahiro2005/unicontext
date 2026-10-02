@@ -1,0 +1,66 @@
+{
+  "_fixture": "Synthetic. Shape returned by READ_CONVERSATIONS from the Teams web client's IndexedDB 'conversation-manager' (observed 2026-10-02 against teams.cloud.microsoft, build v2): Space rows = teams, Topic rows = non-General channels. Names, ids and texts are invented; ids match the other teams-*.json fixtures.",
+  "userId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "tenantId": "00000000-1111-2222-3333-444444444444",
+  "spaces": [
+    {
+      "id": "19:a1b2c3d4e5f60718293a4b5c6d7e8f90@thread.tacv2",
+      "lastMessageTimeUtc": 1790900000000,
+      "threadProperties": {
+        "spaceThreadTopic": "2026データベース演習X(情報科)",
+        "spaceType": "class",
+        "threadType": "space",
+        "description": "合成した説明文です。",
+        "groupId": "3f6b2c1e-8a47-4d2b-9c5e-1a2b3c4d5e6f",
+        "tenantid": "00000000-1111-2222-3333-444444444444",
+        "creator": "8:orgid:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        "createdat": "1756700000000",
+        "sharepointSiteUrl": "https://example.sharepoint.com/sites/2026X_abc123",
+        "sharepointRootLibrary": "Shared Documents",
+        "channelDocsFolderRelativeUrl": "/sites/2026X_abc123/Shared Documents/General",
+        "isdeleted": "false",
+        "topics": "[{\"id\":\"19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2\",\"name\":\"00_講義資料\",\"isdeleted\":false,\"createdat\":\"1756700100000\"},{\"id\":\"19:5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a@thread.tacv2\",\"name\":\"質問\",\"isdeleted\":false,\"createdat\":\"1756700200000\"},{\"id\":\"19:dededededededededededededededede@thread.tacv2\",\"name\":\"旧チャネル\",\"isdeleted\":true,\"createdat\":\"1756700300000\"}]"
+      }
+    },
+    {
+      "id": "19:b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0@thread.tacv2",
+      "lastMessageTimeUtc": 1790000000000,
+      "threadProperties": {
+        "spaceThreadTopic": "研究室ゼミ（合成）",
+        "spaceType": "edu",
+        "threadType": "space",
+        "groupId": "6c6c6c6c-1111-4222-8333-444444444444",
+        "tenantid": "00000000-1111-2222-3333-444444444444",
+        "creator": "8:orgid:77777777-7777-4777-8777-777777777777",
+        "createdat": "1745000000000",
+        "sharepointSiteUrl": "https://example.sharepoint.com/sites/LabZemi",
+        "isdeleted": "false",
+        "topics": "[]"
+      }
+    }
+  ],
+  "topics": [
+    {
+      "id": "19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2",
+      "teamId": "19:a1b2c3d4e5f60718293a4b5c6d7e8f90@thread.tacv2",
+      "lastMessageTimeUtc": 1790910000000,
+      "threadProperties": {
+        "topic": "00_講義資料",
+        "threadType": "topic",
+        "groupId": "3f6b2c1e-8a47-4d2b-9c5e-1a2b3c4d5e6f",
+        "channelDocsFolderRelativeUrl": "/sites/2026X_abc123/Shared Documents/00_講義資料"
+      }
+    },
+    {
+      "id": "19:5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a@thread.tacv2",
+      "teamId": "19:a1b2c3d4e5f60718293a4b5c6d7e8f90@thread.tacv2",
+      "lastMessageTimeUtc": 1790800000000,
+      "threadProperties": {
+        "topic": "質問",
+        "threadType": "topic",
+        "groupId": "3f6b2c1e-8a47-4d2b-9c5e-1a2b3c4d5e6f",
+        "channelDocsFolderRelativeUrl": "/sites/2026X_abc123/Shared Documents/質問"
+      }
+    }
+  ]
+}

@@ -17,7 +17,13 @@ import {
   type InterstitialHandler,
   runInterstitials,
 } from './interstitial.js';
-import type { BrowserContextLike, BrowserCookie, BrowserDriver, PageLike } from './types.js';
+import type {
+  BrowserContextLike,
+  BrowserCookie,
+  BrowserDriver,
+  LaunchOptions,
+  PageLike,
+} from './types.js';
 
 /** SecretStore entry holding the exported session cookies: "<sourceId>/browser-cookies". */
 export const COOKIE_SECRET_NAME = 'browser-cookies';
@@ -44,8 +50,18 @@ export interface BrowserSessionOptions {
   isAuthenticated: (page: PageLike) => Promise<boolean> | boolean;
   /** Interstitial handlers run on every poll (never on credential/MFA pages). */
   handlers?: InterstitialHandler[];
-  /** URLs whose cookies are exported to the SecretStore after login. */
+  /**
+   * URLs whose cookies are exported to the SecretStore after login. Empty = export nothing (for
+   * connectors that only read through the page and must never take cookies out of the browser).
+   */
   cookieUrls: string[];
+  /** Extra launch options (e.g. `serviceWorkers: 'block'`, a fixed viewport). */
+  launch?: Pick<LaunchOptions, 'serviceWorkers' | 'viewport'>;
+  /**
+   * Runs on every newly launched context before the first navigation (e.g. to install request
+   * routes that keep the session read-only).
+   */
+  prepareContext?: (context: BrowserContextLike) => Promise<void>;
   channel?: string;
   executablePath?: string;
   /** Max wait for the human in login() (default 10 min). */
@@ -54,6 +70,18 @@ export interface BrowserSessionOptions {
   refreshTimeoutMs?: number;
   /** Poll interval while waiting for the logged-in state (default 1 s). */
   pollIntervalMs?: number;
+}
+
+/**
+ * One queue per persistent profile directory for the whole process: Chrome cannot open a profile
+ * twice, and several sources may share one profile (e.g. a university SSO profile reused by a
+ * second connector), so their logins, refreshes and page sessions run one after another.
+ */
+const profileQueues = new Map<string, Promise<unknown>>();
+
+function queueKey(dir: string): string {
+  const resolved = dir.replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 /** `<data dir>/cache/<sourceId>/browser-profile`, or under the connector's cacheDir. */
@@ -83,7 +111,6 @@ export class BrowserSession {
    * refresh, withPage, clear): one browser context per profile at a time, so a scheduled sync can
    * never close the window a human is logging in with, and logout cannot race a cookie export.
    */
-  private chain: Promise<unknown> = Promise.resolve();
   lastResult: AuthResult | undefined;
 
   constructor(private readonly options: BrowserSessionOptions) {
@@ -127,8 +154,14 @@ export class BrowserSession {
   }
 
   private serial<T>(fn: () => Promise<T>): Promise<T> {
-    const next = this.chain.then(fn, fn);
-    this.chain = next.catch(() => undefined);
+    const key = queueKey(this.options.profileDir);
+    const prev = profileQueues.get(key) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    const tail = next.catch(() => undefined);
+    profileQueues.set(key, tail);
+    void tail.then(() => {
+      if (profileQueues.get(key) === tail) profileQueues.delete(key);
+    });
     return next;
   }
 
@@ -156,8 +189,10 @@ export class BrowserSession {
       headless,
       ...(this.options.channel ? { channel: this.options.channel } : {}),
       ...(this.options.executablePath ? { executablePath: this.options.executablePath } : {}),
+      ...(this.options.launch ?? {}),
     });
     this.contextHeadless = headless;
+    if (this.options.prepareContext) await this.options.prepareContext(this.context);
     return this.context;
   }
 
@@ -262,6 +297,8 @@ export class BrowserSession {
   }
 
   private async exportCookies(context: BrowserContextLike, finalUrl: string): Promise<void> {
+    // Never call cookies([]) — Playwright treats an empty list as "all cookies".
+    if (this.options.cookieUrls.length === 0) return;
     const cookies = await context.cookies(this.options.cookieUrls);
     const stored: StoredBrowserSession = {
       exportedAt: this.clock.now().toISOString(),

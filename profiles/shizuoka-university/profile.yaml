@@ -90,6 +90,10 @@ registration:
 sources:
   academic: { product: livecampusu, connector: livecampusu, schedule: 15m }
   collaboration: { product: microsoft365, connector: microsoft365, schedule: 15m }
+  # Teams through the official web client in the shared browser profile (Graph consent is blocked
+  # in this tenant, docs/research/teams-web.md). Every 30 min; the daily full file listing runs at
+  # night (connector setting files.fullListingHours).
+  teams: { product: teams-web, connector: teams-web, schedule: 30m }
   syllabus: { product: syllabus, connector: syllabus, schedule: 1d }
   cancellations:
     product: lcu-public-cancellations
@@ -134,6 +138,10 @@ products:
   wordpress-portal:
     deployment: shizuoka
     label: 学生教務ポータル
+  teams-web:
+    sourceLabel: Teams
+    # The LiveCampusU browser profile already holds the Microsoft sign-in (same Entra tenant).
+    browserProfile: livecampusu
   local-files:
     sourceLabel: ローカルファイル
   chatgpt-record:

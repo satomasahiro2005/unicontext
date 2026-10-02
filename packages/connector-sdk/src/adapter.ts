@@ -50,6 +50,12 @@ export interface RawItem {
   payload: unknown;
   sourceUpdatedAt?: string;
   blobs?: RawBlobPayload[];
+  /**
+   * Old content seen for the first time (e.g. a channel read for the first time after the source's
+   * initial run): stored and normalized as usual, but its new entities are not reported as
+   * `created` changes, so a backfill spread over several runs does not look like news.
+   */
+  backfill?: boolean;
 }
 
 export interface RawDeletion {

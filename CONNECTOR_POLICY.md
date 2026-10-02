@@ -28,7 +28,10 @@ third-party ones.
 3. **Read-only by default (§50).** Connectors do not change state in the source. If an endpoint
    has a side effect, it goes on a hard-coded denylist in the connector's HTTP layer, and a test
    proves the request is refused before anything is sent. Examples are marking notices read,
-   ToDo flags, calendar additions, report or file exports, submissions and registration. Writes
+   ToDo flags, calendar additions, report or file exports, submissions and registration. A
+   connector that drives an official web client (teams-web) installs a browser route that aborts
+   every non-read request of that client (mark-read, presence, posting, joining, turning in)
+   before the first navigation, with the same test obligation. Writes
    that may come later must go through propose → confirm → execute in the apps, and high-risk
    writes (§51: registration, submission, anything about grades) are never run automatically.
 4. **Polite traffic (§37).** Use the connector SDK `RateLimiter` (token bucket, Retry-After,

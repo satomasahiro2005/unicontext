@@ -32,6 +32,17 @@ The profile directory is `<cacheDir>/browser-profile`. Without a cacheDir it is
 cookie store (IdP and Entra SSO), protected by your OS user account. Exported service cookies are
 stored only in the OS keychain (§32). `logout()` removes both.
 
+### Shared profiles and page-only sessions
+
+- One queue per profile directory for the whole process: Chrome cannot open a profile twice, so
+  sessions of different sources on the same directory (teams-web reuses the LiveCampusU profile,
+  which already holds the Microsoft sign-in) run one after another.
+- `cookieUrls: []` exports nothing. Connectors that read only inside the page (teams-web) use it,
+  so no service cookie ever reaches the keychain.
+- `launch` passes extra launch options (`serviceWorkers: 'block'`, a fixed `viewport`), and
+  `prepareContext(context)` runs on every new context before the first navigation (teams-web
+  installs its read-only request route there).
+
 ## Interstitial handlers
 
 Handlers form a narrow allow-list:

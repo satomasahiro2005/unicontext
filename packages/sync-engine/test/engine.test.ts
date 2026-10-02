@@ -101,6 +101,42 @@ describe('SyncEngine', () => {
     expect(engine.health('lms')?.state).toBe('healthy');
   });
 
+  it('stores and normalizes backfill items without reporting them as created (§13)', async () => {
+    await engine.sync('lms');
+    fake.adapter.dataset.assignments = [
+      ...dataset().assignments,
+      {
+        id: 'a3',
+        courseId: 'c1',
+        title: '過去の課題',
+        due: '2026-04-20T23:59:00+09:00',
+        updatedAt: '2026-04-01T00:00:00Z',
+      },
+      {
+        id: 'a4',
+        courseId: 'c1',
+        title: '新しい課題',
+        due: '2026-10-20T23:59:00+09:00',
+        updatedAt: '2026-10-01T00:00:00Z',
+      },
+    ];
+    const sync = fake.adapter.sync.bind(fake.adapter);
+    fake.adapter.sync = async (input) => {
+      const r = await sync(input);
+      return {
+        ...r,
+        items: r.items.map((i) => (i.externalId === 'a3' ? { ...i, backfill: true } : i)),
+      };
+    };
+    await engine.sync('lms', { mode: 'full' });
+    expect(engine.stores.entities.getOfKind('assignment', id('assignment', 'a3'))?.title).toBe(
+      '過去の課題',
+    );
+    const created = engine.stores.changes.list({ types: ['created'] }).map((c) => c.entityId);
+    expect(created).toContain(id('assignment', 'a4'));
+    expect(created).not.toContain(id('assignment', 'a3'));
+  });
+
   it('emits ChangeEvents with before/after for a changed deadline (§13, §45)', async () => {
     await engine.sync('lms');
     const seen: ChangeEvent[] = [];
