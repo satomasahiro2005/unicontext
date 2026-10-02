@@ -213,3 +213,57 @@ describe('expired_past_term classification', () => {
     expect(statusOf(bare, 'bare-cur')).toBe('pending');
   });
 });
+
+describe('expired_past_term for deadlines heard in notices and posts', () => {
+  function notice(key: string, course: string | undefined, dueAt: string): void {
+    put(
+      {
+        id: stableId('announcement', 'x', key),
+        kind: 'announcement',
+        title: `投稿 ${key}`,
+        body: 'x',
+        scope: course ? 'course' : 'university',
+        category: course ? undefined : '期限',
+        ...(course ? { courseOfferingId: course } : {}),
+      } as CanonicalEntityInput,
+      'submission-system',
+      {
+        deadline: { dueAt, phrase: `期限 ${key}`, ...(course ? { courseOfferingId: course } : {}) },
+      },
+    );
+  }
+  const extracted = (key: string) =>
+    engine.list().find((t) => t.taskKind === 'extracted' && t.title === `期限 ${key}`)?.status;
+
+  it('follows the same rule as assignments and keeps current-term overdue ones visible', () => {
+    const spring = offering('spring', { academicYear: 2030, term: '前期' });
+    const autumn = offering('autumn', { academicYear: 2030, term: '後期' });
+    const team = offering('team-2028', { academicYear: 2028 });
+    notice('spring', spring, '2030-07-20T14:59:00Z');
+    notice('team-2028', team, '2029-01-10T14:59:00Z');
+    notice('autumn-overdue', autumn, '2030-10-01T03:00:00Z');
+    notice('autumn-ahead', autumn, '2030-10-20T14:59:00Z');
+    notice('free-old', undefined, '2030-05-01T14:59:00Z');
+    notice('free-overdue', undefined, '2030-10-01T10:00:00Z');
+    engine.derive();
+    expect(extracted('spring')).toBe('expired_past_term');
+    expect(extracted('team-2028')).toBe('expired_past_term');
+    expect(extracted('free-old')).toBe('expired_past_term');
+    expect(extracted('autumn-overdue')).toBe('pending');
+    expect(extracted('autumn-ahead')).toBe('pending');
+    expect(extracted('free-overdue')).toBe('pending');
+  });
+
+  it('keeps what the student set and lifts the classification with the calendar', () => {
+    const spring = offering('spring', { academicYear: 2030, term: '前期' });
+    notice('spring', spring, '2030-07-20T14:59:00Z');
+    notice('mine', spring, '2030-07-21T14:59:00Z');
+    engine.derive();
+    const mine = engine.list().find((t) => t.title === '期限 mine');
+    engine.setStatus(mine?.id as string, 'in_progress', { actor: 'user' });
+    clock.set('2030-09-01T00:00:00Z');
+    engine.derive();
+    expect(extracted('spring')).toBe('pending');
+    expect(extracted('mine')).toBe('in_progress');
+  });
+});

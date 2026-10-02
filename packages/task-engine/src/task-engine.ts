@@ -81,7 +81,8 @@ export interface TaskEngineOptions {
 /**
  * How a deadline found in free text relates to the student:
  * - personal: about the student's own course, the academic system's personal deadline widget, or a
- *   message addressed to them → a task, kept (and shown overdue) after the deadline;
+ *   message addressed to them → a task, kept (and shown overdue) after the deadline, unless it
+ *   belongs to a term that has ended (then it is `expired_past_term`, see pastTermReason);
  * - general: a university-wide notice that asks every student to do something (履修登録, 申請 …) →
  *   a task only while the deadline is ahead; it is not kept as an overdue task;
  * - informational: campaigns and general information → no task (the fact stays searchable).
@@ -426,6 +427,18 @@ export class TaskEngine {
     return undefined;
   }
 
+  /** `expired_past_term` for system-owned open work of an ended term; otherwise `status` as is. */
+  private expireIfPast(
+    status: TaskStatus,
+    prev: Task | undefined,
+    input: { courseOfferingId?: string; dueAt?: string },
+  ): TaskStatus {
+    const open = status === 'pending' || status === 'in_progress' || status === 'unknown';
+    return open && (prev?.statusSetBy ?? 'system') === 'system' && this.pastTermReason(input)
+      ? 'expired_past_term'
+      : status;
+  }
+
   /** How far behind the student is in an offering (any linked id). */
   paceStatusOf(offeringId: string): PaceStatus {
     return paceStatus(this.list({ courseOfferingId: offeringId }), this.clock.now(), this.tz);
@@ -576,7 +589,9 @@ export class TaskEngine {
     };
     // A task the system cancelled because its origin disappeared comes back when the origin does.
     const revived = (prev: Task | undefined): TaskStatus =>
-      !prev || (prev.status === 'cancelled' && prev.statusSetBy === 'system')
+      !prev ||
+      ((prev.status === 'cancelled' || prev.status === 'expired_past_term') &&
+        prev.statusSetBy === 'system')
         ? 'pending'
         : prev.status;
 
@@ -715,7 +730,11 @@ export class TaskEngine {
           ...(course ? { courseOfferingId: course as Task['courseOfferingId'] } : {}),
           sourceFactIds: [f.id],
           dueAt: v.dueAt,
-          status: revived(prev),
+          // A deadline heard in a notice or post of an ended term is no longer actionable.
+          status: this.expireIfPast(revived(prev), prev, {
+            ...(course ? { courseOfferingId: course } : {}),
+            dueAt: v.dueAt,
+          }),
           createdBy: 'extractor',
           taskKind: 'extracted',
           origin: 'extracted',
