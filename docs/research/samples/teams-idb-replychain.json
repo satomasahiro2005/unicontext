@@ -1,0 +1,71 @@
+{
+  "_fixture": "Teams web client IndexedDB, DB 'Teams:replychain-manager:...' v2, store 'replychains' (keyPath ['conversationId','replyChainId']), observed 2026-10-02. One channel post (root) with one reply, as normalized by the client (camelCase fields; the wire format from chatsvc/CSA uses lower-case names such as messagetype/imdisplayname/composetime). 140 reply chains / 208 messages were cached for 15 of 50 channels, at most 20 chains per channel: the client only caches channels it has opened. Text is synthetic; ids randomized; names replaced.",
+  "conversationId": "19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2",
+  "replyChainId": "1790910000000",
+  "latestDeliveryTime": 1790913600000,
+  "originalArrivalTime": 1790910000000,
+  "parentMessageVersion": 1790910000000,
+  "messageMap": {
+    "1790910000000": {
+      "id": "1790910000000",
+      "parentMessageId": "1790910000000",
+      "conversationId": "19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2",
+      "clientMessageId": "1234567890123456789",
+      "sequenceId": 3,
+      "version": "1790910000000",
+      "type": "Message",
+      "messageType": "RichText/Html",
+      "contentType": "",
+      "threadType": "topic",
+      "originalArrivalTime": "2026-10-01T05:19:00.000Z",
+      "clientArrivalTime": "2026-10-01T05:19:00.100Z",
+      "imDisplayName": "Kyoin Hanako (教員 花子)",
+      "creator": "8:orgid:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "content": "<p>合成した本文です。<span itemtype=\"http://schema.skype.com/Mention\" itemscope itemid=\"0\">00_講義資料</span> に資料を置きました。</p><p><a href=\"https://example.sharepoint.com/sites/2026X_abc123/Shared%20Documents/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99/week1.pdf\" rel=\"noreferrer noopener\" title=\"week1.pdf\" target=\"_blank\">week1.pdf</a></p>",
+      "properties": {
+        "subject": "第1回の資料（合成）",
+        "importance": "",
+        "mentions": [
+          {
+            "@type": "http://schema.skype.com/Mention",
+            "itemid": 0,
+            "mri": "19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2",
+            "mentionType": "channel",
+            "displayName": "00_講義資料"
+          }
+        ],
+        "files": "[{\"@type\":\"http://schema.skype.com/File\",\"version\":2,\"id\":\"5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e\",\"itemid\":\"5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e\",\"fileName\":\"week1.pdf\",\"fileType\":\"pdf\",\"title\":\"week1.pdf\",\"type\":\"pdf\",\"state\":\"active\",\"objectUrl\":\"https://example.sharepoint.com/sites/2026X_abc123/Shared Documents/00_講義資料/week1.pdf\",\"baseUrl\":\"https://example.sharepoint.com/sites/2026X_abc123/\",\"fileInfo\":{\"itemId\":null,\"fileUrl\":\"https://example.sharepoint.com/sites/2026X_abc123/Shared Documents/00_講義資料/week1.pdf\",\"siteUrl\":\"https://example.sharepoint.com/sites/2026X_abc123/\",\"serverRelativeUrl\":\"\",\"shareUrl\":\"https://example.sharepoint.com/:b:/s/2026X_abc123/<shareId>\",\"shareId\":\"<shareId>\"},\"sharepointIds\":{\"listId\":\"<guid>\",\"listItemUniqueId\":\"5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e\",\"siteId\":\"<guid>\",\"siteUrl\":\"https://example.sharepoint.com/sites/2026X_abc123\",\"webId\":\"<guid>\"},\"permissionScope\":\"users\",\"chicletBreadcrumbs\":[],\"fileChicletState\":{},\"botFileProperties\":{},\"filePreview\":{},\"providerData\":\"\",\"isUploadError\":false,\"progressComplete\":true}]",
+        "links": "[]",
+        "cards": "[]"
+      }
+    },
+    "1790913600000": {
+      "id": "1790913600000",
+      "parentMessageId": "1790910000000",
+      "conversationId": "19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2",
+      "version": "1790913600000",
+      "type": "Message",
+      "messageType": "RichText/Html",
+      "contentType": "",
+      "threadType": "topic",
+      "originalArrivalTime": "2026-10-01T06:20:00.000Z",
+      "imDisplayName": "Gakusei Taro (学生 太郎)",
+      "creator": "8:orgid:1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "content": "<p>合成した返信です。</p>",
+      "properties": {
+        "mentions": [],
+        "files": "[]",
+        "emotions": "<reaction list; shape not inspected>"
+      }
+    }
+  },
+  "_notes": {
+    "valueEncoding": "properties.files is a JSON string in every cached message; properties.mentions was an array in this cache (the counting code handled both). A normalizer must accept both a JSON string and an array.",
+    "messageTypesSeen": ["RichText/Html", "Text", "RichText/Media_Card", "Event/Call", "ThreadActivity/AddMember", "ThreadActivity/UpdateFavDefault"],
+    "mentionTypesSeen": {"person": 24, "channel": 1},
+    "creatorPrefixes": {"8:orgid:{guid}": "user", "28:{appId}": "bot (Assignments posts its cards as 28:7254e396-868c-4bf7-96b2-6fe763590b5a)", "19:...@thread.tacv2": "thread/system activity"},
+    "propertiesKeysSeen": ["subject", "importance", "mentions", "files", "links", "cards", "emotions", "deltaEmotions", "edittime", "composetime", "deletetime", "hardDeleteTime", "systemdelete", "deletedBy", "notification", "activity", "meeting", "formatVariant", "languageStamp", "ams_references", "atp", "s2spartnername"],
+    "htmlTagsSeen": ["p", "br", "span[class|style]", "span[itemtype=Mention][itemid]", "strong", "i", "u", "a[href|rel|title|target]", "a[itemtype][itemid]", "pre[class][itemid] > code", "h1", "h2", "blockquote", "img[itemtype=AMSImage][src]"],
+    "inlineImage": "<img itemtype=\"http://schema.skype.com/AMSImage\" src=\"https://jp-prod.asyncgw.teams.microsoft.com/v1/objects/{objId}/views/imgo\"> (cookie-authenticated after the client's POST /v1/skypetokenauth)"
+  }
+}

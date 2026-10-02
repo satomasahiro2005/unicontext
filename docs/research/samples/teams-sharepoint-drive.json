@@ -1,0 +1,81 @@
+{
+  "_fixture": "SharePoint team site of a class team, read with same-origin fetch from a page on https://<tenant>.sharepoint.com/sites/<site>/ using only the browser's SharePoint session cookies (no Authorization header), observed 2026-10-02. All GET, HTTP 200, Accept: application/json;odata=nometadata. Values sanitized: host -> example.sharepoint.com, site -> 2026X_abc123, names -> 教員 花子, emails -> example.ac.jp, ids randomized but kept in their observed formats; '@content.downloadUrl' (contains a tempauth token) removed.",
+  "GET /sites/{site}/_api/v2.0/drive/root:/{channelFolder}:/children": {
+    "_note": "4 items (2 folders, 2 files) in the channel folder '00_講義資料'. One file shown.",
+    "response": {
+      "@odata.context": "https://example.sharepoint.com/sites/2026X_abc123/_api/v2.0/$metadata#items",
+      "value": [
+        {
+          "@content.downloadUrl": "<removed: pre-authenticated URL with tempauth token>",
+          "@content.downloadUrlNoAuth": "<removed>",
+          "createdBy": { "user": { "email": "kyoin.hanako@example.ac.jp", "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "displayName": "Kyoin Hanako (教員 花子)" } },
+          "createdDateTime": "2026-09-18T01:48:19Z",
+          "eTag": "\"{5B6C7D8E-9F0A-4B1C-8D2E-3F4A5B6C7D8E},3\"",
+          "id": "01ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+          "lastModifiedBy": { "user": { "email": "kyoin.hanako@example.ac.jp", "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "displayName": "Kyoin Hanako (教員 花子)" } },
+          "lastModifiedDateTime": "2026-10-02T01:48:19Z",
+          "name": "2026実験Xスケジュール_配布.pdf",
+          "parentReference": {
+            "driveType": "documentLibrary",
+            "driveId": "b!AbCdEfGhIj01kL2_mNoPq3rStUvWxYz4567aBcDeF8gHiJkLmNoP9qRsTu0v1wX",
+            "id": "01ABCDEFGHIJKLMNOPQRSTUVWXYZ765432",
+            "name": "00_講義資料",
+            "path": "/drive/root:/00_講義資料",
+            "siteId": "12a3b456-7c8d-9ef0-a123-bcde456789fa"
+          },
+          "webUrl": "https://example.sharepoint.com/sites/2026X_abc123/Shared%20Documents/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99/2026%E5%AE%9F%E9%A8%93X%E3%82%B9%E3%82%B1%E3%82%B8%E3%83%A5%E3%83%BC%E3%83%AB_%E9%85%8D%E5%B8%83.pdf",
+          "cTag": "\"c:{5B6C7D8E-9F0A-4B1C-8D2E-3F4A5B6C7D8E},3\"",
+          "file": {
+            "fileExtension": "pdf",
+            "hashes": { "quickXorHash": "<base64 hash>" },
+            "irmEffectivelyEnabled": false,
+            "irmEnabled": false,
+            "mimeType": "application/pdf"
+          },
+          "fileSystemInfo": { "createdDateTime": "2026-09-18T01:48:19Z", "lastModifiedDateTime": "2026-10-02T01:48:19Z" },
+          "isAuthoritative": true,
+          "shared": { "effectiveRoles": ["read"], "scope": "users" },
+          "size": 123456
+        }
+      ]
+    }
+  },
+  "GET /sites/{site}/_api/v2.0/drive/root/delta": {
+    "_note": "First call without a token returned the whole library (40 items: 9 folders incl. root, 31 files) in one page. Item keys are the same as children minus '@content.downloadUrl'; the root item has 'root' and no createdBy/eTag/shared. Next call: follow '@odata.deltaLink' as-is.",
+    "response": {
+      "@odata.context": "https://example.sharepoint.com/sites/2026X_abc123/_api/v2.0/$metadata#items",
+      "@odata.deltaLink": "https://example.sharepoint.com/sites/2026X_abc123/_api/v2.0/drive/root/view.delta?token=<removed>",
+      "@delta.hasMoreData": false,
+      "@delta.syncStatus": "FullData",
+      "@delta.token": "<removed>",
+      "value": [
+        {
+          "id": "01ABCDEFGHIJKLMNOPQRSTUVWXYZ765432",
+          "name": "00_講義資料",
+          "folder": { "childCount": 4 },
+          "parentReference": { "driveType": "documentLibrary", "driveId": "b!AbCdEfGhIj01kL2_mNoPq3rStUvWxYz4567aBcDeF8gHiJkLmNoP9qRsTu0v1wX", "id": "01ABCDEFGHIJKLMNOPQRSTUVWXYZROOT00", "path": "/drive/root:" },
+          "webUrl": "https://example.sharepoint.com/sites/2026X_abc123/Shared%20Documents/00_%E8%AC%9B%E7%BE%A9%E8%B3%87%E6%96%99",
+          "createdDateTime": "2026-09-12T00:00:00Z",
+          "lastModifiedDateTime": "2026-10-02T01:48:19Z",
+          "fileSystemInfo": { "createdDateTime": "2026-09-12T00:00:00Z", "lastModifiedDateTime": "2026-10-02T01:48:19Z" },
+          "isAuthoritative": true,
+          "size": 456789,
+          "createdBy": { "user": { "email": "kyoin.hanako@example.ac.jp", "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "displayName": "Kyoin Hanako (教員 花子)" } },
+          "lastModifiedBy": { "user": { "email": "kyoin.hanako@example.ac.jp", "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", "displayName": "Kyoin Hanako (教員 花子)" } },
+          "eTag": "\"{6C7D8E9F-0A1B-4C2D-9E3F-4A5B6C7D8E9F},1\"",
+          "shared": { "effectiveRoles": ["read"], "scope": "users" }
+        }
+      ]
+    }
+  },
+  "GET /sites/{site}/_api/web/GetFolderByServerRelativePath(decodedurl='{folder}')?$expand=Folders,Files": {
+    "_note": "Classic SharePoint REST, also cookie-authenticated. Top-level keys and per-file keys only.",
+    "topLevelKeys": ["Files", "Folders", "Exists", "ExistsAllowThrowForPolicyFailures", "ExistsWithException", "IsWOPIEnabled", "ItemCount", "Name", "ProgID", "ServerRelativeUrl", "TimeCreated", "TimeLastModified", "UniqueId", "WelcomePage"],
+    "fileKeys": ["CheckInComment", "CheckOutType", "ContentTag", "CustomizedPageStatus", "ETag", "Exists", "ExistsAllowThrowForPolicyFailures", "ExistsWithException", "IrmEnabled", "Length", "Level", "LinkingUri", "LinkingUrl", "MajorVersion", "MinorVersion", "Name", "ServerRelativeUrl", "TimeCreated", "TimeLastModified", "Title", "UIVersion", "UIVersionLabel", "UniqueId"]
+  },
+  "GET /sites/{site}/_api/web/lists/GetByTitle('ドキュメント')?$select=CurrentChangeToken,Id,Title,LastItemModifiedDate,ItemCount": {
+    "_note": "200 with keys CurrentChangeToken, Id, ItemCount, LastItemModifiedDate, Title (observed). The inner shape of CurrentChangeToken ({StringValue}) is from SharePoint docs, not inspected. The library title is localized ('ドキュメント'); prefer the drive API or the list id over the title.",
+    "response": { "CurrentChangeToken": { "StringValue": "<removed>" }, "Id": "<guid>", "ItemCount": 40, "LastItemModifiedDate": "2026-10-02T01:48:19Z", "Title": "ドキュメント" }
+  },
+  "_responseHeadersSeen": ["ms-cv", "spclientservicerequestduration", "splogid", "sprequestguid", "x-sp-serverstate", "x-ms-invokeapp", "microsoftsharepointteamservices"]
+}

@@ -1,0 +1,99 @@
+{
+  "_fixture": "Teams web client (teams.cloud.microsoft, build 26090315820) IndexedDB cache, observed 2026-10-02. DB 'Teams:conversation-manager:react-web-client:{userId}:{tenantId}:ja-jp' v3, store 'conversations' (keyPath 'id'). This is the client's own cache of what it fetched from CSA/chatsvc (internal shape, not a wire response). One class team (type Space) and one of its channels (type Topic). All ids randomized consistently across teams-*.json; names/text synthetic; tokens and sync tokens removed. Fields that were undefined are omitted.",
+  "_observedTypeCounts": {
+    "Topic/topic": 41,
+    "Space/space/class": 7,
+    "Space/space/edu": 2,
+    "Chat/chat": 3,
+    "Conversation/streamofannotations": 1,
+    "StreamOfNotes/streamofnotes": 1,
+    "Thread": 1
+  },
+  "space": {
+    "id": "19:a1b2c3d4e5f60718293a4b5c6d7e8f90@thread.tacv2",
+    "type": "Space",
+    "version": 1790900000000,
+    "threadVersion": 1790900000000,
+    "isUserMember": true,
+    "threadProperties": {
+      "topic": "General",
+      "topicThreadTopic": "General",
+      "threadType": "space",
+      "spaceType": "class",
+      "spaceThreadTopic": "2026情報科学実験X",
+      "description": "合成した説明文です。",
+      "groupId": "3f6b2c1e-8a47-4d2b-9c5e-1a2b3c4d5e6f",
+      "tenantid": "00000000-1111-2222-3333-444444444444",
+      "creator": "8:orgid:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "createdat": "1756700000000",
+      "lastjoinat": "1756800000000",
+      "visibility": "hiddenMembership",
+      "isdeleted": "false",
+      "favDefault": "false",
+      "csav1": "False",
+      "sharepointSiteUrl": "https://example.sharepoint.com/sites/2026X_abc123",
+      "sharepointRootLibrary": "Shared Documents",
+      "channelDocsFolderRelativeUrl": "/sites/2026X_abc123/Shared Documents/General",
+      "channelDocsDocumentLibraryId": null,
+      "notebookId": "{0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9}",
+      "teamSmtpAddress": "2026X_abc123@example.ac.jp",
+      "pictureETag": "\"<sha256 hex>\"",
+      "classification": null,
+      "dynamicMembership": false,
+      "isTeamLocked": false,
+      "teamStatus": "{\"exchangeTeamCreationStatus\":0,\"sharePointSiteCreationStatus\":0,\"teamNotebookCreationStatus\":0,\"groupRenewalStatus\":{\"isEligibleForRenewal\":false,\"groupExpiryTime\":\"2027-09-01T00:00:00Z\"}}",
+      "topics": "[{\"id\":\"19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2\",\"name\":\"00_講義資料\",\"picture\":null,\"isShared\":false,\"createdat\":\"1756700100000\",\"isdeleted\":false}]",
+      "spaceAdminSettings": "<1.8 KB JSON string of team settings, omitted>"
+    }
+  },
+  "topic": {
+    "id": "19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2",
+    "type": "Topic",
+    "teamId": "19:a1b2c3d4e5f60718293a4b5c6d7e8f90@thread.tacv2",
+    "version": 1790910000000,
+    "lastMessageTimeUtc": 1790910000000,
+    "isUserMember": true,
+    "properties": {
+      "consumptionhorizon": "1790900000000;1790900000001;0",
+      "favorite": "false",
+      "ispinned": "false"
+    },
+    "rosterSummary": {
+      "memberCount": 60,
+      "botCount": 1,
+      "readerCount": 0,
+      "roleCounts": {},
+      "externalMemberCount": 0
+    },
+    "threadProperties": {
+      "topic": "00_講義資料",
+      "threadType": "topic",
+      "spaceId": "19:a1b2c3d4e5f60718293a4b5c6d7e8f90@thread.tacv2",
+      "groupId": "3f6b2c1e-8a47-4d2b-9c5e-1a2b3c4d5e6f",
+      "description": "",
+      "createdat": "1756700100000",
+      "isdeleted": "false",
+      "channelDocsFolderRelativeUrl": "/sites/2026X_abc123/Shared Documents/00_講義資料",
+      "sharepointRootLibrary": "Shared Documents"
+    },
+    "lastMessage": {
+      "_note": "Wire-style (lower-case) message fields as cached on the conversation. 'from' and 'conversationLink' were rewritten by the client ('worker/...', 'conversation/...'); on the wire they are chatsvc URLs [inferred].",
+      "id": "1790910000000",
+      "type": "Message",
+      "messagetype": "RichText/Html",
+      "contenttype": "",
+      "content": "<p>合成した本文です。</p>",
+      "imdisplayname": "Kyoin Hanako (教員 花子)",
+      "from": "worker/8:orgid:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "fromUserId": "8:orgid:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "composetime": "2026-10-01T05:19:00.000Z",
+      "originalarrivaltime": "2026-10-01T05:19:00.000Z",
+      "clientmessageid": "1234567890123456789",
+      "conversationLink": "conversation/19:0f1e2d3c4b5a69788796a5b4c3d2e1f0@thread.tacv2;messageid=1790910000000",
+      "version": "1790910000000",
+      "sequenceId": "3",
+      "threadtype": "topic",
+      "isSanitized": true
+    }
+  }
+}
