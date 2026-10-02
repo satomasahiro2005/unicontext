@@ -1,4 +1,4 @@
-<!-- UniContext fixture. 連絡詳細 SC_17001B00_02 (reached by POST SC_17001B00_01/rowSelect with TableForm rowIndex; no stable URL), logged in, 2026-10-01. <main> only, scripts removed. Notice title genericized, body text replaced by （本文）, sender (連絡元) was empty in this item; when present it would be a teacher name (use 教員 花子). Actions on page: SC_17001B00_02/back, SC_17001B00_02/addTodo (state-changing, never call). Attachment list is filled by the dropzone widget (download endpoint not observed). -->
+<!-- UniContext fixture. 連絡詳細 SC_17001B00_02 (reached by POST SC_17001B00_01/rowSelect with TableForm rowIndex; no stable URL), logged in, 2026-10-01. <main> only, scripts removed. Notice title genericized, body text replaced by （本文）, sender (連絡元) was empty in this item; when present it would be a teacher name (use 教員 花子). Actions on page: SC_17001B00_02/back, SC_17001B00_02/addTodo (state-changing, never call). Attachment list is filled by the dropzone widget: its inline script (kept, token zeroed) POSTs /lcu-web/fileUpload/load/fi02 (X-CSRF-TOKEN header, no body) and gets JSON {prefix, temporaryFileList:[{temporaryId, physicalFileName, fileSize, fileStatusType}], ...}; downloads are fileUpload/download/<prefix>/<temporaryId>/?X-CSRF-TOKEN=… (session-bound, never called). -->
 <main class="c-container">
  <div class="c-contents">
  <div class="c-breadcrumbs">
@@ -108,6 +108,25 @@
  </div>
  </output>
 </div>
+<script>
+    function loadFileUploadComponent_fi02() {
+    	const _fileUploadOption = {
+       	    contextPath: "/lcu-web",
+       	    csrfHeader: "X-CSRF-TOKEN",
+       	    csrfToken: "00000000-0000-0000-0000-000000000000",
+       	};
+        $.ajax({
+            url: "/lcu-web/fileUpload/load/fi02",
+            type: "POST",
+            dataType: "json",
+        }).done(function(_temporaryPrefix, _textStatus, _jqXHR) {
+            loadFileUploadComponent(_temporaryPrefix, _fileUploadOption);
+        }).fail(function(jqXHR, textStatus, errorThrown) {
+        	console.log(`loadFileUploadComponent_fi02 is error.`);
+        });
+    }
+    loadFileUploadComponent_fi02();
+</script>
  </td>
  </tr>
  </tbody>

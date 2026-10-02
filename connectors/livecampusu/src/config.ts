@@ -20,9 +20,17 @@ export const LiveCampusUConfigSchema = z.looseObject({
   /** Grades are personal and sensitive: opt-in. */
   grades: z.boolean().default(false),
   attendance: z.boolean().default(true),
-  /** Fetch bodies of READ notices whose list row changed (unread notices are never opened). */
+  /**
+   * Fetch the body (and attachment names) of every notice that is READ in LCU, once, and again when
+   * its list row changes. Unread notices are never opened: opening marks them read and LCU cannot
+   * set a notice back to unread. Their bodies are fetched after the student reads them in LCU.
+   */
   noticeDetails: z.boolean().default(true),
-  maxNoticeDetailsPerRun: z.number().int().nonnegative().default(20),
+  /**
+   * Details per sync run (about 4 requests each at minRequestIntervalMs). The default covers the
+   * whole first backfill in one run; progress is checkpointed after every notice.
+   */
+  maxNoticeDetailsPerRun: z.number().int().nonnegative().default(300),
   /** Minimum gap between two requests to LCU, in ms (politeness). */
   minRequestIntervalMs: z.number().int().nonnegative().default(1000),
   browser: z

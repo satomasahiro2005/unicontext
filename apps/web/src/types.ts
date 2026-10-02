@@ -4,6 +4,8 @@
  */
 export type {
   AdminContext,
+  AnnouncementResponse,
+  AnnouncementsResponse,
   AssignmentItem,
   AssignmentsResponse,
   ChangesContext,
@@ -49,6 +51,8 @@ export type {
 export type { IdentityLink } from '@unicontext/canonical-model';
 
 export type {
+  AnnouncementAttachment,
+  AnnouncementDetail,
   AnnouncementItem,
   ChangeItem,
   MaterialItem,

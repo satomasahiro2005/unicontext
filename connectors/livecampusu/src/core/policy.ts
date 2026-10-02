@@ -18,6 +18,15 @@ import { PolicyViolationError } from '@unicontext/core';
  *   unless the caller holds the notice-detail grant (issued only for rows the list shows as READ —
  *   opening an unread notice marks it read);
  * - grade screens unless grades were enabled in the config (opt-in).
+ *
+ * `readMark` stays denied with every grant. It only ever marks rows READ (observed 2026-10-02: a
+ * POST with a read row checked leaves it read; there is no 未読にする button on the list or the
+ * detail screen), so it cannot restore a notice to unread and has no use for this connector.
+ *
+ * One narrow exception to the `upload` rule: with the `notice-attachments` grant (issued by
+ * LcuSession.loadNoticeAttachments() while the detail of a READ notice is open), exactly
+ * `POST fileUpload/load/<id>` is allowed — the read-only file-list call the detail screen makes on
+ * every view. Downloads, uploads and deletes (fileUpload / fileUploadDb) stay denied.
  */
 
 /** Action segments (case-insensitive, full segment) that are never requested. */
@@ -48,7 +57,10 @@ const DEFAULT_NOTICE_DETAIL_SCREENS = ['SC_17001B00_02'];
 const DEFAULT_GRADE_SCREENS = ['SC_10004B00_01', 'SC_10004B00_02', 'SC_15005B00_01'];
 const GRADE_ACTIONS = /^(grede|grade)information$/i;
 
-export type PolicyGrant = 'notice-detail';
+export type PolicyGrant = 'notice-detail' | 'notice-attachments';
+
+/** `fileUpload/load/<id>`: the only fileUpload* call ever made (notice-attachments grant). */
+const ATTACHMENT_LIST_PATH = /^fileUpload\/load\/[A-Za-z0-9]{1,16}$/;
 
 export interface PolicyContext {
   gradesEnabled: boolean;
@@ -81,6 +93,13 @@ export function assertRequestAllowed(method: string, path: string, ctx: PolicyCo
     );
   };
   if (segments.some((s) => s === '..' || s === '.')) deny('path traversal');
+  if (
+    ctx.grant === 'notice-attachments' &&
+    method.toUpperCase() === 'POST' &&
+    ATTACHMENT_LIST_PATH.test(segments.join('/')) &&
+    segments.join('/') === clean.replace(/^\/+/, '')
+  )
+    return;
   const extraScreens = new Set(ctx.extraDeniedScreens ?? []);
   const noticeDetailScreens = new Set([
     ...DEFAULT_NOTICE_DETAIL_SCREENS,

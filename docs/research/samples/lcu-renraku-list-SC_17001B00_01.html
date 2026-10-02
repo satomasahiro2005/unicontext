@@ -1,4 +1,4 @@
-<!-- UniContext fixture. 連絡一覧 SC_17001B00_01: server HTML of #dataTable01 (GET /lcu-web/SC_17001B00_01 after POST SC_17001B00_01/init), logged in, 2026-10-01. 2 of 277 rows kept. Hidden sort columns: contactTypeOrder (code + importance digit), titleOrder (importance digit + title), subjectCode (year + 8-digit subject code + 2-char class), toDoAttachmentOrder. Row detail: datatablesSubmitLinkForm('dataTable01','TableForm','SC_17001B00_01/rowSelect',_index,true) -> SC_17001B00_02. toDoIcon/readMark change state: never call. -->
+<!-- UniContext fixture. 連絡一覧 SC_17001B00_01: server HTML of #dataTable01 (GET /lcu-web/SC_17001B00_01 after POST SC_17001B00_01/init), logged in, 2026-10-01. 2 of 277 rows kept. Hidden sort columns: contactTypeOrder (code + importance digit), titleOrder (importance digit + title), subjectCode (year + 8-digit subject code + 2-char class), toDoAttachmentOrder. Row detail: datatablesSubmitLinkForm('dataTable01','TableForm','SC_17001B00_01/rowSelect',_index,true) -> SC_17001B00_02. toDoIcon/readMark change state: never call. Read state: every row carries tr.is-unread; the real unread rows are the ones the inline script below (「検索結果一覧の未読行のスタイル適用」, exact structure kept) makes bold (observed 2026-10-02: same set as the 「未読のみ」 search; opening a detail removes the row from it). Attachments: toDoAttachmentOrder x1 and a commented-out ico_clip01 in the ToDo cell. -->
 <table id="dataTable01" class="c-table c-table-pd-narrow c-table-omitted hover" style="visibility: hidden;"><thead><tr><th class="-center u-w25-pc u-w80-sp" _sortable="false"><div class="c-form-box -center"><label class="checkbox" style=""><input type="checkbox" id="checkAllId" name="checkAll" onclick="javascript:checkAllControl('TableForm', 'checkAll', 'checkArray', 'dataTable01')"><span class="no-text"></span></label></div></th><th class="title -w-space-normal " id="contactTypeOrder" _visible="false" _sortkey="" _sortkey2="" _sortable="true" _type=""><p></p></th>
 <th class="title -w-space-normal u-w100-pc u-w120-sp" id="contactTypeCategoryName" _visible="true" _sortkey="contactTypeOrder" _sortkey2="" _sortable="true" _type=""><p>連絡種別（カテゴリ）</p></th>
 <th class="title -w-space-normal " id="titleOrder" _visible="false" _sortkey="" _sortkey2="" _sortable="true" _type=""><p></p></th>
@@ -22,7 +22,52 @@
 <p class="c-status-notice c-omitted-text">
 7/24(金) B班の教室を科学実験室から共41に変更します</p></div>
 </td><td class="content is-source=" id="content" data-label="">20267740122061</td><td class="content is-source=" id="content" data-label="講義名&lt;br&gt;学期/曜日・時限">機械語と計算機械
-前期前半/金5・6, 前期前半/金7・8, 前期後半/金5・6, 前期後半/金7・8</td><td class="content is-source=" id="content" data-label="">00</td><td class="content is-source=" id="content" data-label="ToDo">
+前期前半/金5・6, 前期前半/金7・8, 前期後半/金5・6, 前期後半/金7・8</td><td class="content is-source=" id="content" data-label="">01</td><td class="content is-source=" id="content" data-label="ToDo">
 <a href="javascript:void(0);" onclick="datatablesSubmitLinkForm('dataTable01', 'TableForm', 'SC_17001B00_01/toDoIcon', 46, true);" class=""><img alt="" src="/lcu-web/img/ico_flag03.svg"></a>
-<!-- -->
+<!-- <img alt="" src="/lcu-web/img/ico_clip01.svg"> -->
 </td><td class="content is-source=" id="content" data-label="対象日">2026/07/24</td><td class="content is-source=" id="content" data-label="連絡日">2026/07/23 10:30</td></tr></tbody></table>
+<script>
+/**
+ * 検索結果一覧の未読行のスタイル適用
+ */
+$(document).ready(function() {
+	
+	
+		
+			
+				$("[_index='0']").css("background-color", "#DAEEF3");
+				$("[_index='0']").css("font-weight", "bold");
+				
+				
+					$("[_index='0'] td:nth-child(5)").css("color", "#0070C0");
+				
+				$("[_index='0']").hover(function() {
+					// カーソルが当たった時の処理
+					$(this).css("background-color", "#CDE9EF");
+				}, function() {
+					// カーソルが離れた時の処理
+					$(this).css("background-color", "#DAEEF3");
+				});
+			
+			$("[_index='0'] td:nth-child(7)").text($("[_index='0'] td:nth-child(7)").text().trim());
+		
+			
+				$("[_index='46']").css("background-color", "#DAEEF3");
+				$("[_index='46']").css("font-weight", "bold");
+				
+				
+					$("[_index='46'] td:nth-child(5)").css("color", "#0070C0");
+				
+				$("[_index='46']").hover(function() {
+					// カーソルが当たった時の処理
+					$(this).css("background-color", "#CDE9EF");
+				}, function() {
+					// カーソルが離れた時の処理
+					$(this).css("background-color", "#DAEEF3");
+				});
+			
+			$("[_index='46'] td:nth-child(7)").text($("[_index='46'] td:nth-child(7)").text().trim());
+		
+	
+} );
+</script>

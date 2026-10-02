@@ -43,7 +43,7 @@ import {
   uniquePeriodOnDay,
 } from './text.js';
 
-export const NORMALIZER_VERSION = '4';
+export const NORMALIZER_VERSION = '5';
 export const SELF_PERSON_KEY = 'self';
 
 export interface LiveCampusUNormalizerOptions {
@@ -234,19 +234,31 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
           const subject = subjectText ? parseSubjectText(subjectText) : undefined;
           const coId = offering(p.context.offeringKey);
           const category = imp?.contactTypeTitle || p.typeTitle || row?.category || undefined;
-          const ref = refFor(p.source.screen, p.source.selector, {
-            ...(imp?.contactSeq ? { location: { messageId: imp.contactSeq } } : {}),
-          });
+          const detail = p.detail;
+          // With a body, the reference points at the detail screen's 内容 cell (the list row is the
+          // locator: the detail has no stable URL and is reached via the list's rowSelect).
+          const ref = refFor(
+            detail ? d.screens.noticeDetail : p.source.screen,
+            detail
+              ? `table.c-table-line 内容 (from ${p.source.screen} ${p.source.selector ?? ''})`
+              : p.source.selector,
+            {
+              ...(imp?.contactSeq ? { location: { messageId: imp.contactSeq } } : {}),
+            },
+          );
+          const targetDateIso = slashDateToIso(imp?.targetDate || row?.targetDate);
+          const bodyStatus = p.bodyStatus ?? (detail ? 'fetched' : undefined);
           entities.push({
             entity: {
               id: ctx.id('announcement', p.key),
               kind: 'announcement',
               title,
-              body: p.detail?.body ?? '',
+              body: detail?.body ?? '',
               ...(publishedAt ? { publishedAt } : {}),
-              ...(p.detail?.sender ? { authorName: p.detail.sender } : {}),
+              ...(detail?.sender ? { authorName: detail.sender } : {}),
               importance: classifyNoticeImportance({
                 title,
+                ...(detail?.body ? { body: detail.body } : {}),
                 kind,
                 courseLinked: coId !== undefined || subject !== undefined,
               }).importance,
@@ -260,6 +272,27 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
                   : {}),
                 ...(imp?.contactSeq ? { contactSeq: imp.contactSeq } : {}),
                 ...(subjectText ? { subject: subjectText } : {}),
+                // UniContext's mirror of LCU's own read state (list row; unknown without the list).
+                ...(row ? { read: !row.unread } : {}),
+                ...(bodyStatus ? { bodyStatus } : {}),
+                ...(targetDateIso ? { targetDate: targetDateIso } : {}),
+                ...(detail
+                  ? {
+                      attachments: detail.attachments.map((a) => ({
+                        name: a.name,
+                        ...(a.size !== undefined ? { size: a.size } : {}),
+                      })),
+                      ...(detail.attachmentsComplete === false
+                        ? { attachmentsComplete: false }
+                        : {}),
+                      ...(detail.links?.length ? { links: detail.links } : {}),
+                      ...(detail.courses.length ? { courses: detail.courses } : {}),
+                      ...(detail.importance ? { lcuImportance: detail.importance } : {}),
+                      ...(detail.fetchedAt ? { bodyFetchedAt: detail.fetchedAt } : {}),
+                    }
+                  : row?.hasAttachment
+                    ? { hasAttachment: true }
+                    : {}),
               },
             },
             ref,

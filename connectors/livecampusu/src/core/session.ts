@@ -19,7 +19,7 @@ import {
   screenIdFromUrl,
   stripJsessionid,
 } from './html.js';
-import { parseNoticeList } from './parsers/notices.js';
+import { noticeAttachmentLoadPath, parseNoticeList } from './parsers/notices.js';
 import { assertRequestAllowed, type PolicyGrant } from './policy.js';
 
 /** The session is gone (login screen, error screen, CSRF failure, idle timeout, IdP redirect). */
@@ -198,7 +198,7 @@ export class LcuSession {
   }
 
   /** POST a JSON endpoint (`$.ajaxPostJSON`: X-CSRF-TOKEN header + `_csrf` in the body). */
-  postJson(path: string, body: Record<string, unknown>): Promise<unknown> {
+  postJson(path: string, body: Record<string, unknown> = {}): Promise<unknown> {
     this.check('POST', path);
     return this.run('op', () => this.jsonRequest('POST', path, body));
   }
@@ -239,9 +239,30 @@ export class LcuSession {
             : 'Refusing to open an unread notice: opening it would mark it as read',
         );
       return this.pageRequest('POST', path, {
-        form: [[this.d.actions.rowIndexField, String(proof.rowIndex)]],
+        form: [
+          [this.d.actions.rowIndexField, String(proof.rowIndex)],
+          ['viewRowIndexArray', ''],
+        ],
         grant: 'notice-detail',
       });
+    });
+  }
+
+  /**
+   * Attachment list of the notice detail that is currently open: the same read-only
+   * `POST fileUpload/load/<id>` (X-CSRF-TOKEN, empty body) the detail screen makes on every view.
+   * Returns undefined when the page has no file widget. Refused unless the current screen is the
+   * notice detail (which is only ever opened for READ notices).
+   */
+  loadNoticeAttachments(): Promise<unknown> {
+    return this.run('op', async () => {
+      const page = this.current;
+      if (page?.screenId !== this.d.screens.noticeDetail)
+        throw new PolicyViolationError('Attachment list requested while not on a notice detail');
+      const path = noticeAttachmentLoadPath(page.html);
+      if (!path) return undefined;
+      this.check('POST', path, 'notice-attachments');
+      return this.jsonRequest('POST', path, undefined, { grant: 'notice-attachments' });
     });
   }
 
@@ -495,6 +516,7 @@ export class LcuSession {
     method: 'GET' | 'POST',
     path: string,
     body: Record<string, unknown> | undefined,
+    opts: { grant?: PolicyGrant } = {},
   ): Promise<unknown> {
     const headers: Record<string, string> = {
       accept: 'application/json, text/javascript, */*; q=0.01',
@@ -503,13 +525,16 @@ export class LcuSession {
     let payload: string | undefined;
     if (method === 'POST') {
       if (!this.tokens.csrf) throw new SessionLostError('no CSRF token for a JSON POST');
-      headers['content-type'] = 'application/json;charset=utf-8';
       headers['x-csrf-token'] = this.tokens.csrf;
-      payload = JSON.stringify({ ...(body ?? {}), _csrf: this.tokens.csrf });
+      if (body !== undefined) {
+        headers['content-type'] = 'application/json;charset=utf-8';
+        payload = JSON.stringify({ ...body, _csrf: this.tokens.csrf });
+      } else payload = ''; // jQuery $.ajax({type: 'POST'}) without data
     }
     const { res, url } = await this.fetchFollow(method, path, {
       headers,
       ...(payload !== undefined ? { body: payload } : {}),
+      ...(opts.grant ? { grant: opts.grant } : {}),
     });
     const text = await res.text();
     const type = res.headers.get('content-type') ?? '';

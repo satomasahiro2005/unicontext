@@ -8,6 +8,9 @@
  */
 import type {
   AdminContext,
+  AnnouncementAttachment,
+  AnnouncementDetail,
+  AnnouncementItem,
   ChangesContext,
   ClassItem,
   ConflictItem,
@@ -48,6 +51,9 @@ import type { SyncRunReport } from '@unicontext/sync-engine';
 
 export type {
   AdminContext,
+  AnnouncementAttachment,
+  AnnouncementDetail,
+  AnnouncementItem,
   ChangesContext,
   ClassItem,
   Citation,
@@ -149,6 +155,16 @@ export interface AssignmentItem {
 /** GET /api/v1/assignments?status=pending,in_progress&course=<id> (default: not cancelled/completed/submitted... all open) and GET /api/v1/tasks */
 export interface AssignmentsResponse {
   assignments: AssignmentItem[];
+}
+
+/** GET /api/v1/announcements?since=&unreadOnly=1&course=<id>&limit=<n> (newest first, bodies truncated) */
+export interface AnnouncementsResponse {
+  announcements: AnnouncementItem[];
+}
+
+/** GET /api/v1/announcements/:id (full body; 404 when unknown) */
+export interface AnnouncementResponse {
+  announcement: AnnouncementDetail;
 }
 
 /** GET /api/v1/conflicts (open conflicts) */

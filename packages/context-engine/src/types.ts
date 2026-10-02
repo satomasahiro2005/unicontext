@@ -109,6 +109,28 @@ export interface AnnouncementItem extends Cited {
   scope: string;
   author: string | undefined;
   course: CourseRef | undefined;
+  category: string | undefined;
+  /** Read state mirrored from the source system (true = read). Undefined = unknown / not tracked. */
+  read: boolean | undefined;
+  /** 'fetched' | 'notOpened' | 'pending' from the connector. 'notOpened' = unread at the source, body deliberately not fetched. */
+  bodyStatus: string | undefined;
+  attachments: AnnouncementAttachment[];
+}
+
+export interface AnnouncementAttachment {
+  name: string;
+  size?: number;
+}
+
+/** One announcement with its full (untruncated) body and detail-screen fields. */
+export interface AnnouncementDetail extends AnnouncementItem {
+  url: string | undefined;
+  /** URLs found in the body. */
+  links: string[];
+  /** 講義名 targets from the detail screen. */
+  courses: string[];
+  /** 対象日 (YYYY-MM-DD). */
+  targetDate: string | undefined;
 }
 
 export interface MaterialItem extends Cited {

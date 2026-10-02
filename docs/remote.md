@@ -21,7 +21,7 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
 
 - **Tools**: only read tools (`get_today`, `get_week`, `get_course`, `get_deadlines`,
   `get_assignments`, `get_tasks`, `search`, `get_source`, `get_conflicts`, `prepare_for_class`,
-  `review_class`, `get_recent_changes`, `search_syllabus`, `get_syllabus`, `get_credit_summary`, …).
+  `review_class`, `get_recent_changes`, `get_announcements`, `get_announcement`, `search_syllabus`, `get_syllabus`, `get_credit_summary`, …).
   Every tool carries `readOnlyHint: true` and an output schema. The propose-only tools
   (`correct_fact`, `propose_pace_slot`) are **not registered** on this surface, so a call to them
   fails as an unknown tool. `get_source` returns the citation and the facts it supports, but no raw

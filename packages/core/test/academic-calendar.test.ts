@@ -157,4 +157,18 @@ describe('rule-based notice importance', () => {
     expect(imp('図書館の開館時間について')).toBe('normal');
     expect(imp('【重要】システム停止のお知らせ')).toBe('high');
   });
+
+  it('the body raises only titles that say nothing either way', () => {
+    // A neutral title with a personal procedure or a 【重要】 mark in its text.
+    expect(imp('お知らせ', { body: '学生証の更新手続きを10月20日までに行ってください。' })).toBe(
+      'high',
+    );
+    expect(imp('お知らせ', { body: '【重要】必ず確認してください。' })).toBe('high');
+    expect(imp('お知らせ', { body: '図書館の開館時間が変わります。' })).toBe('normal');
+    // Campaigns stay low and optional applications stay normal whatever the body says.
+    expect(imp('就職支援室メルマガ', { body: '【重要】提出期限は明日です' })).toBe('low');
+    expect(imp('アンケートのお願い', { body: '提出期限：10月31日' })).toBe('low');
+    expect(imp('奨学金の申込みについて', { body: '提出期限：10月31日' })).toBe('normal');
+    expect(imp('お知らせ', { body: '奨学金の申込みは提出期限：10月31日' })).toBe('normal');
+  });
 });

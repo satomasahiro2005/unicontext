@@ -128,6 +128,60 @@ describe('hard-coded request policy (denylist)', () => {
   });
 });
 
+describe('notice grants', () => {
+  const grants = [undefined, 'notice-detail', 'notice-attachments'] as const;
+
+  it('readMark stays denied with every grant (it can only mark read, never restore unread)', () => {
+    for (const grant of grants)
+      for (const [m, p] of [
+        ['POST', 'SC_17001B00_01/readMark'],
+        ['POST', 'SC_17001B00_02/readMark'],
+        ['GET', 'SC_17001B00_01/readMark'],
+        ['POST', 'SC_17001B00_01/toDoIcon'],
+        ['POST', 'SC_17001B00_02/addTodo'],
+      ] as const)
+        expect(() => assertRequestAllowed(m, p, { ...POLICY, grant })).toThrow(
+          PolicyViolationError,
+        );
+  });
+
+  it('the attachment grant allows exactly POST fileUpload/load/<id>', () => {
+    const g: PolicyContext = { ...POLICY, grant: 'notice-attachments' };
+    expect(() => assertRequestAllowed('POST', 'fileUpload/load/fi02', g)).not.toThrow();
+    for (const [m, p, ctx] of [
+      ['POST', 'fileUpload/load/fi02', POLICY],
+      ['POST', 'fileUpload/load/fi02', { ...POLICY, grant: 'notice-detail' }],
+      ['GET', 'fileUpload/load/fi02', g],
+      ['POST', 'fileUpload/load/submit/x', g],
+      ['POST', 'fileUpload/load/fi02;x=1', g],
+      ['POST', 'fileUpload/load/fi02%2F..%2Fupload', g],
+      ['POST', 'fileUpload/upload/fi02', g],
+      ['GET', 'fileUpload/download/fi02/abc/', g],
+      ['POST', 'fileUploadDb/load/fi02', g],
+      ['POST', 'fileUploadDb/delete/fi02/abc', g],
+      ['POST', 'SC_17001B00_01/rowSelect', g],
+      ['GET', 'SC_17001B00_02', g],
+      ['POST', 'SC_14002B00_03/submit', g],
+    ] as const)
+      expect(() => assertRequestAllowed(m, p, ctx as PolicyContext)).toThrow(PolicyViolationError);
+  });
+
+  it('loadNoticeAttachments is refused unless a notice detail is open', async () => {
+    const { server, session } = setup();
+    await session.bootstrap();
+    const before = server.log.length;
+    await expect(session.loadNoticeAttachments()).rejects.toThrow(PolicyViolationError);
+    await session.open('SC_17001B00_01');
+    await expect(session.loadNoticeAttachments()).rejects.toThrow(PolicyViolationError);
+    expect(
+      server
+        .paths()
+        .slice(before)
+        .filter((p) => /fileUpload/.test(p)),
+    ).toEqual([]);
+  });
+});
+
 describe('LcuSession', () => {
   it('refuses denylisted calls before any fetch happens', async () => {
     const { server, session } = setup();

@@ -25,6 +25,8 @@ import { toCitation } from '@unicontext/provenance';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type {
+  AnnouncementResponse,
+  AnnouncementsResponse,
   AssignmentsResponse,
   ConflictsResponse,
   CoursesResponse,
@@ -412,6 +414,32 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
       opt({ limit: Math.min(limit ?? 20, 100), courseOfferingId: query.course }),
     );
   });
+
+  app.get('/api/v1/announcements', async (request): Promise<AnnouncementsResponse> => {
+    const query = q(request);
+    if (query.since !== undefined && Number.isNaN(new Date(query.since).getTime()))
+      throw new ValidationError('since must be an ISO-8601 timestamp');
+    const limit = intParam(query.limit, 'limit');
+    return {
+      announcements: uc.context.listAnnouncements(
+        opt({
+          since: query.since,
+          unreadOnly: query.unreadOnly === '1' || query.unreadOnly === 'true' ? true : undefined,
+          courseOfferingId: query.course ? resolveCourse(uc, query.course).ref.id : undefined,
+          limit: Math.min(limit ?? 50, 200),
+        }),
+      ),
+    };
+  });
+
+  app.get<{ Params: { id: string } }>(
+    '/api/v1/announcements/:id',
+    async (request): Promise<AnnouncementResponse> => {
+      const announcement = uc.context.getAnnouncement(request.params.id);
+      if (!announcement) throw new NotFoundError(`announcement ${request.params.id}`);
+      return { announcement };
+    },
+  );
 
   app.get('/api/v1/conflicts', async (): Promise<ConflictsResponse> => ({
     conflicts: uc.context.admin().conflicts,

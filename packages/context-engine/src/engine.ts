@@ -8,6 +8,7 @@ import {
   type Enrollment,
   entityLabel,
   type Exam,
+  type Importance,
   type JsonValue,
   type Lecture,
   type Material,
@@ -20,6 +21,7 @@ import {
   formatDateJa,
   formatShortJa,
   NotFoundError,
+  ValidationError,
   parseZonedDate,
   startOfZonedDay,
   startOfZonedWeek,
@@ -53,8 +55,10 @@ import {
   weekStartOf,
   weekStartOfDue,
 } from '@unicontext/task-engine';
+import { readAnnouncementExtra } from './announcements.js';
 import type {
   AdminContext,
+  AnnouncementDetail,
   AnnouncementItem,
   ChangeItem,
   ChangesContext,
@@ -456,6 +460,7 @@ export class ContextEngine {
   }
 
   announcementItem(a: Announcement): AnnouncementItem {
+    const extra = readAnnouncementExtra(a.extra);
     return {
       id: a.id,
       title: a.title,
@@ -465,8 +470,70 @@ export class ContextEngine {
       scope: a.scope,
       author: a.authorName,
       course: this.courseRef(a.courseOfferingId),
+      category: a.category,
+      read: extra.read,
+      bodyStatus: extra.bodyStatus,
+      attachments: extra.attachments,
       citations: this.citationsFor([a.id]),
     };
+  }
+
+  /** One announcement with its full body and detail-screen fields, or undefined when unknown. */
+  getAnnouncement(id: string): AnnouncementDetail | undefined {
+    const a = this.entities.getOfKind('announcement', id);
+    if (!a) return undefined;
+    const extra = readAnnouncementExtra(a.extra);
+    return {
+      ...this.announcementItem(a),
+      body: a.body,
+      url: a.url,
+      links: extra.links,
+      courses: extra.courses,
+      targetDate: extra.targetDate,
+    };
+  }
+
+  /**
+   * Announcements newest first. `since` is inclusive and `until` exclusive (ISO date or instant);
+   * announcements without a publish time only appear when neither bound is given.
+   */
+  listAnnouncements(
+    opts: {
+      since?: string;
+      until?: string;
+      unreadOnly?: boolean;
+      courseOfferingId?: string;
+      importance?: readonly Importance[];
+      limit?: number;
+    } = {},
+  ): AnnouncementItem[] {
+    const bound = (label: string, v: string | undefined): number | undefined => {
+      if (v === undefined) return undefined;
+      const t = Date.parse(v);
+      if (Number.isNaN(t)) throw new ValidationError(`${label} must be an ISO date or time: ${v}`);
+      return t;
+    };
+    const since = bound('since', opts.since);
+    const until = bound('until', opts.until);
+    const ids = opts.courseOfferingId ? this.linkedIdsOf(opts.courseOfferingId) : undefined;
+    const rows = this.entities
+      .list('announcement', ids ? { where: { courseOfferingId: ids } } : {})
+      .filter((a) => {
+        if (opts.importance && !opts.importance.includes(a.importance)) return false;
+        if (opts.unreadOnly && readAnnouncementExtra(a.extra).read !== false) return false;
+        if (since !== undefined || until !== undefined) {
+          const t = a.publishedAt ? Date.parse(a.publishedAt) : Number.NaN;
+          if (Number.isNaN(t)) return false;
+          if (since !== undefined && t < since) return false;
+          if (until !== undefined && t >= until) return false;
+        }
+        return true;
+      })
+      .map((a) => ({ a, t: a.publishedAt ? Date.parse(a.publishedAt) : Number.NEGATIVE_INFINITY }))
+      .sort((x, y) => (y.t === x.t ? x.a.id.localeCompare(y.a.id) : y.t - x.t))
+      .map((x) => x.a);
+    const limited = opts.limit !== undefined ? rows.slice(0, Math.max(0, opts.limit)) : rows;
+    return limited.map((a) => this.announcementItem(a));
   }
 
   materialItem(m: Material): MaterialItem {

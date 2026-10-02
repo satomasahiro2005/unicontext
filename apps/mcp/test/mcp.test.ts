@@ -86,6 +86,8 @@ const REQUIRED_TOOLS = [
   'get_source',
   'get_conflicts',
   'get_tasks',
+  'get_announcements',
+  'get_announcement',
   'correct_fact',
   'propose_pace_slot',
 ];
@@ -631,6 +633,105 @@ describe('MCP resources (§40)', () => {
       client.readResource({ uri: 'unicontext://lecture/lecture:nope' }),
     ).rejects.toThrow();
     expect((await call('get_today')).isError).toBe(false);
+  });
+});
+
+describe('announcements (LiveCampusU notices)', () => {
+  const read = stableId('announcement', 'lcu', 'mcp-read');
+  const unread = stableId('announcement', 'lcu', 'mcp-unread');
+  const entities = (): typeof uc.sync.stores.entities => uc.sync.stores.entities;
+
+  beforeAll(() => {
+    entities().upsert({
+      id: read,
+      kind: 'announcement',
+      title: 'MCPテスト既読のお知らせ',
+      body: `詳細は https://example.com/x を参照
+${'あ'.repeat(500)}`,
+      publishedAt: '2026-09-30T05:00:00Z',
+      authorName: '教務課',
+      category: '教務',
+      scope: 'university',
+      extra: {
+        read: true,
+        bodyStatus: 'fetched',
+        attachments: [{ name: '案内.pdf', size: 2048 }],
+        links: ['https://example.com/x'],
+        targetDate: '2026-10-05',
+      },
+    });
+    entities().upsert({
+      id: unread,
+      kind: 'announcement',
+      title: 'MCPテスト未読のお知らせ',
+      body: '',
+      publishedAt: '2026-09-30T06:00:00Z',
+      scope: 'university',
+      extra: { read: false, bodyStatus: 'notOpened' },
+    });
+  });
+  afterAll(() => {
+    entities().hardDelete(read);
+    entities().hardDelete(unread);
+  });
+
+  it('get_announcements lists newest first with read state and truncated bodies', async () => {
+    const r = await call('get_announcements', { since: '2026-09-30', limit: 100 });
+    expect(r.isError, r.text).toBe(false);
+    const list = r.envelope.data.announcements as {
+      id: string;
+      read?: boolean;
+      bodyStatus?: string;
+      body: string;
+      attachments: unknown[];
+    }[];
+    const ids = list.map((a) => a.id);
+    expect(ids.indexOf(unread)).toBeLessThan(ids.indexOf(read));
+    const a = list.find((x) => x.id === read);
+    expect(a).toMatchObject({
+      read: true,
+      bodyStatus: 'fetched',
+      attachments: [{ name: '案内.pdf', size: 2048 }],
+    });
+    expect(a?.body.length).toBeLessThanOrEqual(401);
+    const unreadOnly = await call('get_announcements', { unreadOnly: true });
+    expect((unreadOnly.envelope.data.announcements as { id: string }[]).map((x) => x.id)).toContain(
+      unread,
+    );
+    expect(
+      (unreadOnly.envelope.data.announcements as { id: string }[]).map((x) => x.id),
+    ).not.toContain(read);
+    expect((await call('get_announcements', { limit: 101 })).isError).toBe(true);
+    expect((await call('get_announcements', { since: 'not a date' })).isError).toBe(true);
+  });
+
+  it('get_announcement returns the full body and details; unknown ids are errors', async () => {
+    const r = await call('get_announcement', { id: read });
+    expect(r.isError, r.text).toBe(false);
+    const d = r.envelope.data.announcement as Record<string, unknown>;
+    expect((d.body as string).length).toBeGreaterThan(500);
+    expect(d).toMatchObject({
+      links: ['https://example.com/x'],
+      targetDate: '2026-10-05',
+      author: '教務課',
+      category: '教務',
+    });
+    const u = await call('get_announcement', { id: unread });
+    expect(u.envelope.data.announcement).toMatchObject({
+      read: false,
+      bodyStatus: 'notOpened',
+      body: '',
+    });
+    expect((await call('get_announcement', { id: 'announcement:nope' })).text).toContain(
+      'not_found',
+    );
+    expect((await call('get_announcement', { id: 'document:nope' })).isError).toBe(true);
+  });
+
+  it('search announcement hits carry the entity id', async () => {
+    const r = await call('search', { query: 'MCPテスト既読' });
+    const hits = r.envelope.data.hits as { id: string; kind: string }[];
+    expect(hits.find((h) => h.kind === 'announcement')?.id).toBe(read);
   });
 });
 

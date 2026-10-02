@@ -146,6 +146,7 @@ const contextSchema = z.object({ offeringKey: str.optional(), offeringTitle: str
 export const NoticeListRowPayloadSchema = z.object({
   rowIndex: z.number(),
   unread: z.boolean(),
+  hasAttachment: z.boolean().optional(),
   typeCode: str.optional(),
   importanceDigit: str.optional(),
   category: str,
@@ -164,7 +165,14 @@ export const NoticeDetailPayloadSchema = z.object({
   importance: str.optional(),
   contactDateTime: str.optional(),
   sender: str.optional(),
-  attachments: z.array(str),
+  attachments: z.array(z.object({ name: str, size: z.number().optional() })),
+  /** False when the attachment list could not be read (names may be missing). */
+  attachmentsComplete: z.boolean().optional(),
+  links: z.array(str).optional(),
+  /** When the detail screen was read (ISO). */
+  fetchedAt: str.optional(),
+  /** LCU read state of the row when the detail was opened (always read: unread rows are never opened). */
+  openedWhileRead: z.boolean().optional(),
 });
 export type NoticeDetailPayload = z.infer<typeof NoticeDetailPayloadSchema>;
 
@@ -176,6 +184,11 @@ export const NoticePayloadSchema = z.object({
   important: ImportantNoticeSchema.optional(),
   listRow: NoticeListRowPayloadSchema.omit({ rowIndex: true }).optional(),
   detail: NoticeDetailPayloadSchema.optional(),
+  /**
+   * fetched: detail.body is the notice text; notOpened: unread in LCU, so the detail is not opened
+   * (opening marks it read and LCU cannot set it back to unread); pending: read, not fetched yet.
+   */
+  bodyStatus: z.enum(['fetched', 'notOpened', 'pending']).optional(),
   context: contextSchema,
   source: sourceSchema,
 });

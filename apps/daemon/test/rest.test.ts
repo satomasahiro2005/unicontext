@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
+  AnnouncementResponse,
+  AnnouncementsResponse,
   AssignmentsResponse,
   ConflictsResponse,
   CoursesResponse,
@@ -107,6 +109,64 @@ describe('read endpoints (§41)', () => {
     const res = await get(`/api/v1/search?q=${encodeURIComponent('正規化')}`);
     expect(res.statusCode).toBe(200);
     expect(json<{ hits: unknown[] }>(res).hits.length).toBeGreaterThan(0);
+  });
+
+  it('GET /announcements and /announcements/:id expose read state and the full body', async () => {
+    const entities = s.runtime.uc.sync.stores.entities;
+    const read = 'announcement:lcu:rest-read';
+    const unread = 'announcement:lcu:rest-unread';
+    const body = `${'あ'.repeat(500)}
+https://example.com/a`;
+    entities.upsert({
+      id: read,
+      kind: 'announcement',
+      title: 'RESTテスト既読',
+      body,
+      publishedAt: '2026-09-30T05:00:00Z',
+      authorName: '教務課',
+      category: '教務',
+      scope: 'university',
+      extra: { read: true, bodyStatus: 'fetched', attachments: [{ name: '案内.pdf', size: 10 }] },
+    });
+    entities.upsert({
+      id: unread,
+      kind: 'announcement',
+      title: 'RESTテスト未読',
+      body: '',
+      publishedAt: '2026-09-30T06:00:00Z',
+      scope: 'university',
+      extra: { read: false, bodyStatus: 'notOpened' },
+    });
+    try {
+      const list = json<AnnouncementsResponse>(await get('/api/v1/announcements?since=2026-09-30'));
+      const ids = list.announcements.map((a) => a.id);
+      expect(ids.indexOf(unread)).toBeGreaterThanOrEqual(0);
+      expect(ids.indexOf(unread)).toBeLessThan(ids.indexOf(read));
+      const item = list.announcements.find((a) => a.id === read);
+      expect(item).toMatchObject({ read: true, category: '教務', bodyStatus: 'fetched' });
+      expect(item?.body.length).toBeLessThanOrEqual(401);
+      const only = json<AnnouncementsResponse>(
+        await get('/api/v1/announcements?unreadOnly=1&limit=5'),
+      );
+      expect(only.announcements.map((a) => a.id)).toContain(unread);
+      expect(only.announcements.map((a) => a.id)).not.toContain(read);
+      expect((await get('/api/v1/announcements?since=nope')).statusCode).toBe(400);
+      expect((await get('/api/v1/announcements?limit=x')).statusCode).toBe(400);
+
+      const one = await get(`/api/v1/announcements/${encodeURIComponent(read)}`);
+      expect(one.statusCode).toBe(200);
+      expect(json<AnnouncementResponse>(one).announcement.body).toBe(body);
+      expect(
+        json<AnnouncementResponse>(await get(`/api/v1/announcements/${encodeURIComponent(unread)}`))
+          .announcement,
+      ).toMatchObject({ read: false, bodyStatus: 'notOpened', body: '' });
+      const missing = await get('/api/v1/announcements/announcement:nope');
+      expect(missing.statusCode).toBe(404);
+      expect(json<{ error: { code: string } }>(missing).error.code).toBe('not_found');
+    } finally {
+      entities.hardDelete(read);
+      entities.hardDelete(unread);
+    }
   });
 
   it('GET /conflicts and /sources', async () => {
