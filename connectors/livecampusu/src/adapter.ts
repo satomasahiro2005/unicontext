@@ -1,3 +1,5 @@
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { Capability, HealthStatus } from '@unicontext/canonical-model';
 import type {
   AuthResult,
@@ -81,6 +83,7 @@ export class LiveCampusUAdapter implements VersionAwareAdapter, InteractiveAuthA
   readonly session: LcuSession;
   private readonly timezone: string;
   private noticeCache = new Map<string, NoticeCacheEntry>();
+  private noticeCheckpointLoaded = false;
   private versionState: VersionState | undefined;
   private lastHealth: HealthStatus | undefined;
 
@@ -141,7 +144,52 @@ export class LiveCampusUAdapter implements VersionAwareAdapter, InteractiveAuthA
   async logout(): Promise<void> {
     this.session.reset();
     this.noticeCache.clear();
+    const file = this.noticeCheckpointFile();
+    if (file) rmSync(file, { force: true });
     await this.strategy.logout();
+  }
+
+  /**
+   * Notice details are checkpointed to `<cacheDir>/notice-details.json` after every fetched detail,
+   * so a backfill that is cut off (daemon stop, crash, session loss) resumes where it stopped
+   * instead of waiting for the cursor, which is only saved at the end of a successful run.
+   */
+  private noticeCheckpointFile(): string | undefined {
+    return this.ctx.cacheDir ? path.join(this.ctx.cacheDir, 'notice-details.json') : undefined;
+  }
+
+  private loadNoticeCheckpoint(): void {
+    if (this.noticeCheckpointLoaded) return;
+    this.noticeCheckpointLoaded = true;
+    const file = this.noticeCheckpointFile();
+    if (!file) return;
+    try {
+      const data = JSON.parse(readFileSync(file, 'utf8')) as {
+        version?: number;
+        notices?: Record<string, NoticeCacheEntry>;
+      };
+      if (data.version !== 1 || !data.notices || typeof data.notices !== 'object') return;
+      for (const [k, v] of Object.entries(data.notices)) {
+        if (!v || typeof v.rowHash !== 'string' || !v.detail) continue;
+        if (!this.noticeCache.get(k)?.detail) this.noticeCache.set(k, v);
+      }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT')
+        this.ctx.logger.warn('notice detail checkpoint unreadable', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+    }
+  }
+
+  private saveNoticeCheckpoint(): void {
+    const file = this.noticeCheckpointFile();
+    if (!file) return;
+    const notices: Record<string, NoticeCacheEntry> = {};
+    for (const [k, v] of this.noticeCache) if (v.detail) notices[k] = v;
+    mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ version: 1, notices }), { mode: 0o600 });
+    renameSync(tmp, file);
   }
 
   /** Inside the deployment's nightly maintenance window (profile timezone)? */
@@ -161,6 +209,7 @@ export class LiveCampusUAdapter implements VersionAwareAdapter, InteractiveAuthA
       LcuCursorExtra | undefined;
     if (extra?.notices && this.noticeCache.size === 0)
       for (const [k, v] of Object.entries(extra.notices)) this.noticeCache.set(k, v);
+    this.loadNoticeCheckpoint();
     if (!this.versionState && extra?.version) this.versionState = extra.version;
     const cfg = this.ctx.config;
     try {
@@ -181,11 +230,21 @@ export class LiveCampusUAdapter implements VersionAwareAdapter, InteractiveAuthA
           logger: this.ctx.logger,
           product: PRODUCT,
           noticeCache: this.noticeCache,
+          onNoticeDetail: () => this.saveNoticeCheckpoint(),
           version: this.versionState,
         },
         input,
       );
       this.versionState = outcome.version;
+      const nd = outcome.stats.noticeDetails;
+      this.ctx.logger.info('LiveCampusU notice bodies', { ...nd });
+      try {
+        this.saveNoticeCheckpoint(); // also drops notices that left the list
+      } catch (e) {
+        this.ctx.logger.warn('notice detail checkpoint not written', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
       this.lastHealth = {
         state: 'healthy',
         checkedAt: this.ctx.clock.now().toISOString(),

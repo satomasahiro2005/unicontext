@@ -1,6 +1,8 @@
 import { Link, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import { Layout } from './components/Layout';
 import { PageHeader } from './components/ui';
+import { AnnouncementDetailPage } from './pages/AnnouncementDetailPage';
+import { AnnouncementsPage } from './pages/AnnouncementsPage';
 import { AssignmentsPage } from './pages/AssignmentsPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { ChangesPage } from './pages/ChangesPage';
@@ -47,6 +49,16 @@ const assignmentsRoute = createRoute({
   path: '/assignments',
   component: AssignmentsPage,
 });
+const announcementsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/announcements',
+  component: AnnouncementsPage,
+});
+const announcementDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/announcements/$id',
+  component: AnnouncementDetailPage,
+});
 const calendarRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/calendar',
@@ -86,6 +98,8 @@ const routeTree = rootRoute.addChildren([
   courseDetailRoute,
   assignmentsRoute,
   calendarRoute,
+  announcementsRoute,
+  announcementDetailRoute,
   changesRoute,
   searchRoute,
   sourcesRoute,

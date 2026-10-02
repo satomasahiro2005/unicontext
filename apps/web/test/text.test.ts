@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { periodLabel, safeHttpUrl, tightenJa, truncate } from '../src/lib/text.js';
+import {
+  formatFileSize,
+  linkifyText,
+  periodLabel,
+  safeHttpUrl,
+  tightenJa,
+  truncate,
+} from '../src/lib/text.js';
 
 describe('periodLabel', () => {
   it('writes N限 without a space', () => {
@@ -48,5 +55,41 @@ describe('truncate', () => {
   it('cuts by characters and adds an ellipsis', () => {
     expect(truncate('あいうえお', 3)).toBe('あいう…');
     expect(truncate('あい', 3)).toBe('あい');
+  });
+});
+
+describe('linkifyText', () => {
+  it('keeps line breaks and splits http(s) URLs out of the text', () => {
+    expect(linkifyText('詳細は https://example.com/a?b=1 を参照\n次の行')).toEqual([
+      { type: 'text', text: '詳細は ' },
+      { type: 'link', text: 'https://example.com/a?b=1', href: 'https://example.com/a?b=1' },
+      { type: 'text', text: ' を参照\n次の行' },
+    ]);
+  });
+  it('stops at Japanese characters and drops trailing punctuation', () => {
+    const segs = linkifyText('(https://example.com/x). https://example.com/y。');
+    expect(segs.filter((s) => s.type === 'link').map((s) => s.text)).toEqual([
+      'https://example.com/x',
+      'https://example.com/y',
+    ]);
+    expect(segs.map((s) => s.text).join('')).toBe(
+      '(https://example.com/x). https://example.com/y。',
+    );
+  });
+  it('never links other schemes and returns plain text unchanged', () => {
+    expect(linkifyText('javascript:alert(1) <b>x</b>')).toEqual([
+      { type: 'text', text: 'javascript:alert(1) <b>x</b>' },
+    ]);
+    expect(linkifyText('')).toEqual([]);
+  });
+});
+
+describe('formatFileSize', () => {
+  it('formats sizes without a space before the unit', () => {
+    expect(formatFileSize(512)).toBe('512B');
+    expect(formatFileSize(1536)).toBe('1.5KB');
+    expect(formatFileSize(20 * 1024)).toBe('20KB');
+    expect(formatFileSize(3 * 1024 * 1024)).toBe('3.0MB');
+    expect(formatFileSize(-1)).toBe('');
   });
 });

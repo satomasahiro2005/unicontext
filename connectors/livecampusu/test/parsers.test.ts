@@ -19,8 +19,11 @@ import {
   parseGradeMarkers,
   parseGrades,
   parseLcuReportTerm,
+  noticeAttachmentLoadPath,
+  parseNoticeAttachments,
   parseNoticeDetail,
   parseNoticeList,
+  parseNoticeReadState,
   parseSubjectKey,
   parseSubjectText,
   parseTermRange,
@@ -37,7 +40,7 @@ import {
   TESTED_FINGERPRINT,
   uniquePeriodOnDay,
 } from '../src/index.js';
-import { fixture, jsonFixture, kadaiListHtml } from './helpers.js';
+import { fixture, jsonFixture, kadaiListHtml, markNoticeRead } from './helpers.js';
 
 const CLASSIFY = { loginFormId: 'SC_01001B00_01_Login_Form', ssoStartSelector: '#btnSsoStart' };
 
@@ -135,16 +138,40 @@ describe('notice list SC_17001B00_01', () => {
     );
   });
 
-  it('reads the read/unread state from tr.is-unread', () => {
-    const html = fixture('lcu-renraku-list-SC_17001B00_01.html').replace(
-      '<tr class="is-unread" _index="46">',
-      '<tr _index="46">',
-    );
-    const r = parseNoticeList(html);
-    expect(r.map((x) => [x.rowIndex, x.unread])).toEqual([
+  it('reads the read state from the unread-row styling script, not tr.is-unread', () => {
+    const html = fixture('lcu-renraku-list-SC_17001B00_01.html');
+    expect(parseNoticeList(html).map((x) => [x.rowIndex, x.unread])).toEqual([
+      [0, true],
+      [46, true],
+    ]);
+    // LCU marks a row read by dropping its bold block; the class stays on every row.
+    const read46 = markNoticeRead(html, 46);
+    expect(read46).toContain('<tr class="is-unread" _index="46">');
+    expect(parseNoticeList(read46).map((x) => [x.rowIndex, x.unread])).toEqual([
       [0, true],
       [46, false],
     ]);
+    expect(parseNoticeReadState(read46)).toEqual({
+      unread: new Set([0]),
+      known: new Set([0, 46]),
+    });
+    // Removing the class alone says nothing.
+    const noClass = html.replace('<tr class="is-unread" _index="46">', '<tr _index="46">');
+    expect(parseNoticeList(noClass)[1]?.unread).toBe(true);
+  });
+
+  it('fails safe: without the script, or for rows it does not mention, rows count as unread', () => {
+    const html = markNoticeRead(fixture('lcu-renraku-list-SC_17001B00_01.html'), 46);
+    const noScript = html.slice(0, html.indexOf('<script>'));
+    expect(parseNoticeReadState(noScript)).toBeUndefined();
+    expect(parseNoticeList(noScript).every((r) => r.unread)).toBe(true);
+    const unmentioned = html.replace(/\[_index='46'\]/g, "[_index='999']");
+    expect(parseNoticeList(unmentioned)[1]?.unread).toBe(true);
+  });
+
+  it('flags rows with attachments (toDoAttachmentOrder x1 / commented ico_clip)', () => {
+    const rows = parseNoticeList(fixture('lcu-renraku-list-SC_17001B00_01.html'));
+    expect(rows.map((r) => r.hasAttachment ?? false)).toEqual([false, true]);
   });
 
   it('parses the hidden subjectCode key', () => {
@@ -168,6 +195,7 @@ describe('notice detail SC_17001B00_02', () => {
       importance: '重要連絡(通知有り)',
       contactDateTime: '2026/08/20 09:39',
       attachments: [],
+      links: [],
     });
     expect(d?.body).toBe('（本文）\n（本文）\n（本文）\n（本文）');
     expect(d?.sender).toBeUndefined();
@@ -175,6 +203,39 @@ describe('notice detail SC_17001B00_02', () => {
 
   it('returns undefined for unrelated pages', () => {
     expect(parseNoticeDetail('<main><p>x</p></main>')).toBeUndefined();
+  });
+
+  it('keeps paragraphs and links of a rich-text body; nested tables do not leak into fields', () => {
+    const html = fixture('lcu-renraku-detail-SC_17001B00_02.html').replace(
+      /<div>（本文）[\s\S]*?<\/div>/,
+      '<div><html><head></head><body><p class="MsoNormal">第一段落です。</p> <p>詳しくは<a href="https://example.ac.jp/a">こちら</a></p><table><tr><th>重要度</th><td>表の中</td></tr></table><p>URL: https://example.ac.jp/b</p></body></html></div>',
+    );
+    const d = parseNoticeDetail(html);
+    expect(d?.body).toBe(
+      ['第一段落です。', '詳しくはこちら', '重要度表の中', 'URL: https://example.ac.jp/b'].join(
+        '\n',
+      ),
+    );
+    expect(d?.importance).toBe('重要連絡(通知有り)');
+    expect(d?.links).toEqual(['https://example.ac.jp/a', 'https://example.ac.jp/b']);
+  });
+
+  it('finds the read-only file-list call and parses its JSON', () => {
+    const html = fixture('lcu-renraku-detail-SC_17001B00_02.html');
+    expect(noticeAttachmentLoadPath(html)).toBe('fileUpload/load/fi02');
+    expect(noticeAttachmentLoadPath('<main></main>')).toBeUndefined();
+    expect(
+      parseNoticeAttachments({
+        prefix: 'fi02',
+        temporaryFileList: [
+          { temporaryId: 'a', physicalFileName: 'x.pdf', fileSize: 10, fileStatusType: 'STAY' },
+          { temporaryId: 'b', physicalFileName: 'gone.pdf', fileSize: 1, fileStatusType: 'DELETE' },
+          { temporaryId: 'c', physicalFileName: ' ', fileSize: 1, fileStatusType: 'STAY' },
+        ],
+      }),
+    ).toEqual([{ name: 'x.pdf', size: 10 }]);
+    expect(parseNoticeAttachments({ temporaryFileList: null })).toEqual([]);
+    expect(parseNoticeAttachments('<html>')).toBeUndefined();
   });
 });
 

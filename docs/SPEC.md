@@ -139,13 +139,13 @@ connector SDK に共通 RateLimiter: token bucket, retry-after, exponential back
 healthy / degraded / auth_required / rate_limited / offline / failed。Web UI に一覧表示。
 
 ## 39. MCP interface
-UniContext 自身が MCP server。高レベル tool 中心: get_today, get_week, get_course, get_assignments, get_deadlines, get_recent_changes, prepare_for_class, review_class, search, get_source, get_conflicts。
+UniContext 自身が MCP server。高レベル tool 中心: get_today, get_week, get_course, get_assignments, get_deadlines, get_recent_changes, get_announcements, get_announcement, prepare_for_class, review_class, search, get_source, get_conflicts。
 
 ## 40. MCP resources
 unicontext://today, unicontext://week, unicontext://course/{id}, unicontext://lecture/{id}, unicontext://document/{id}。
 
 ## 41. REST API
-localhost 限定。GET /api/v1/today, /courses, /assignments, /changes, /search。write endpoint は CSRF / auth token 必須。
+localhost 限定。GET /api/v1/today, /courses, /assignments, /changes, /announcements, /announcements/:id, /search。write endpoint は CSRF / auth token 必須。
 
 ## 42. CLI
 status, sync, login microsoft365, login livecampusu, today, week, courses, assignments, deadlines, changes, search "正規化", doctor（doctor は重要）。

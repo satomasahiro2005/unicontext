@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { enc } from '../api';
 import { useTimezone } from '../components/AppContext';
 import { KindBadge } from '../components/Cards';
@@ -56,7 +56,15 @@ function Results({ hits }: { hits: SearchResponse['hits'] }) {
           <li key={`${h.kind}-${h.id}`} className="card">
             <header className="card-head">
               <KindBadge kind={h.kind} />
-              <h2 className="card-title">{h.title}</h2>
+              <h2 className="card-title">
+                {h.kind === 'announcement' ? (
+                  <Link to="/announcements/$id" params={{ id: h.id }}>
+                    {h.title}
+                  </Link>
+                ) : (
+                  h.title
+                )}
+              </h2>
               {h.at ? (
                 <time className="meta" dateTime={h.at}>
                   {formatShort(h.at, tz)}

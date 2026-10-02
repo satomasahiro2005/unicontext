@@ -528,6 +528,53 @@ export function createMcpServer(deps: McpDeps): McpServer {
       ),
   );
 
+  // ----- announcements -----
+
+  tool(
+    'get_announcements',
+    {
+      title: 'お知らせ一覧',
+      description:
+        'お知らせ（大学・学部・授業）を新しい順に返す。件名・差出人・分類・既読/未読（read）・添付・本文の冒頭を含む。unreadOnly=true で未読だけ。LiveCampusUの未読のお知らせは、開くと既読になってしまうため本文を取得していないことがある（bodyStatus が notOpened）。その場合は本文がないことをそのまま伝える。全文は get_announcement で読む。 / Announcements newest first with read state, category, attachments and a body excerpt. Unread LiveCampusU notices may have no body (bodyStatus "notOpened": opening them would mark them read). Use get_announcement for the full text.',
+    },
+    {
+      since: z
+        .string()
+        .optional()
+        .describe('ISO-8601 日時または YYYY-MM-DD 以降 / ISO datetime or YYYY-MM-DD'),
+      unreadOnly: z.boolean().optional().describe('未読だけ / Unread only'),
+      courseOfferingId: courseIdField.optional(),
+      limit: z.number().int().positive().max(100).optional().describe('最大100件（既定30）'),
+    },
+    (a) => ({
+      data: {
+        announcements: uc.context.listAnnouncements(
+          opt({
+            since: a.since === undefined ? undefined : normalizeSince(uc, a.since),
+            unreadOnly: a.unreadOnly,
+            courseOfferingId: courseId(a.courseOfferingId),
+            limit: a.limit ?? 30,
+          }),
+        ),
+      },
+    }),
+  );
+
+  tool(
+    'get_announcement',
+    {
+      title: 'お知らせの全文',
+      description:
+        'お知らせ1件の全文（本文・差出人・分類・添付ファイル名・本文中のリンク・対象講義・対象日・既読/未読）を返す。id は get_announcements や search の結果の id（announcement:...）。LiveCampusUの未読のお知らせは本文を取得していないことがあり（bodyStatus が notOpened）、その場合 body は空。本人がLiveCampusUで読んだあとの同期で取得される。 / Full text of one announcement by id (announcement:...), with sender, category, attachments, links, target courses and date, read state. Unread LiveCampusU notices may have an empty body (bodyStatus "notOpened") until the student reads them there.',
+    },
+    { id: z.string().min(1).describe('announcement:... の id') },
+    (a) => {
+      const detail = isIdOf('announcement', a.id) ? uc.context.getAnnouncement(a.id) : undefined;
+      if (!detail) throw new NotFoundError(`announcement ${a.id}`);
+      return { data: { announcement: detail } };
+    },
+  );
+
   // ----- assignments / tasks -----
 
   const statusInput = z
@@ -606,7 +653,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '検索',
       description:
-        '授業資料・お知らせ・メッセージ・講義の文字起こし・課題などを横断検索する（「ERモデルの説明どこ？」「先生は試験について何て言った？」）。各ヒットに出典がつく。 / Search materials, announcements, messages, transcripts and deadlines. Hits carry citations.',
+        '授業資料・お知らせ・メッセージ・講義の文字起こし・課題などを横断検索する（「ERモデルの説明どこ？」「先生は試験について何て言った？」）。各ヒットに出典がつく。お知らせ（kind が announcement）のヒットは id で get_announcement に渡すと全文が読める。 / Search materials, announcements, messages, transcripts and deadlines. Hits carry citations. For an announcement hit, pass its id to get_announcement for the full text.',
     },
     {
       query: z.string().min(1).max(500).describe('検索語または質問文 / Query'),

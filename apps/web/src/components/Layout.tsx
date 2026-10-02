@@ -48,6 +48,9 @@ export function Layout() {
               <Link to="/calendar">カレンダー</Link>
             </li>
             <li>
+              <Link to="/announcements">お知らせ</Link>
+            </li>
+            <li>
               <Link to="/changes">変更</Link>
             </li>
             <li>

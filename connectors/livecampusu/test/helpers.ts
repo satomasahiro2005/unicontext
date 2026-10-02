@@ -84,6 +84,18 @@ export function kadaiListHtml(): string {
   return `<main><table id="dataTable01" class="c-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></main>`;
 }
 
+/**
+ * Mark a row of the 連絡一覧 fixture as READ the way LCU does: drop its bold/background block
+ * from the inline 「未読行のスタイル適用」 script (the `.text().trim()` line stays for every row).
+ */
+export function markNoticeRead(html: string, index: number): string {
+  const start = `$("[_index='${index}']").css("background-color"`;
+  const at = html.indexOf(start);
+  if (at < 0) return html;
+  const end = html.indexOf('});\n', at);
+  return html.slice(0, at) + html.slice(end + '});\n'.length);
+}
+
 export interface LoggedRequest {
   method: string;
   path: string;
@@ -145,6 +157,11 @@ export class FakeLcuServer {
   submissionInformation: unknown[];
   warningNotice: unknown[];
   detailBody = '（本文）';
+  /** Files the detail's fileUpload/load call lists. */
+  attachments: { name: string; size: number; deleted?: boolean }[] = [
+    { name: '資料.pdf', size: 12345 },
+    { name: '削除済み.txt', size: 1, deleted: true },
+  ];
   idleMs = 60 * 60_000;
 
   constructor(options: FakeLcuOptions) {
@@ -230,8 +247,7 @@ ${body}</body></html>`;
 
   private noticeListHtml(): string {
     let html = fixture('lcu-renraku-list-SC_17001B00_01.html');
-    for (const i of this.readRows)
-      html = html.replace(`<tr class="is-unread" _index="${i}">`, `<tr _index="${i}">`);
+    for (const i of this.readRows) html = markNoticeRead(html, i);
     return html;
   }
 
@@ -305,7 +321,13 @@ ${body}</body></html>`;
     this.lastActivity.set(sid as string, now);
 
     if (method === 'POST') {
-      if (jsonBody) {
+      if (!body && headers.get('x-csrf-token') !== null) {
+        // $.ajax({type: 'POST'}) without data: only the X-CSRF-TOKEN header.
+        if (headers.get('x-csrf-token') !== this.csrf) {
+          this.invalidate(sid);
+          return new Response('', { status: 403 });
+        }
+      } else if (jsonBody) {
         if (headers.get('x-csrf-token') !== this.csrf || jsonBody._csrf !== this.csrf) {
           this.invalidate(sid);
           return new Response('', { status: 403 });
@@ -403,6 +425,25 @@ ${body}</body></html>`;
         );
       case 'POST SC_17001B00_02/back':
         return this.redirect('SC_17001B00_01');
+      case 'POST fileUpload/load/fi02':
+        return this.json({
+          prefix: 'fi02',
+          functionId: '17001B00',
+          itemId: '02',
+          possibleUpload: false,
+          batchDownload: true,
+          zipFileName: 'download',
+          dropzoneSettings: { maxFileSize: 1, maxFiles: 1, acceptedFiles: null },
+          temporaryFileList: this.attachments.map((a, i) => ({
+            temporaryId: `TMP${i}`,
+            physicalFileName: a.name,
+            fileExtention: null,
+            fileSize: a.size,
+            fileStatusType: a.deleted ? 'DELETE' : 'STAY',
+            binaryFile: null,
+            uuid: null,
+          })),
+        });
       case 'GET SC_15005B00_01':
         return this.html('<main><h2>成績ダッシュボード</h2></main>', '成績ダッシュボード');
       case 'POST SC_15005B00_01/gredeInformation':

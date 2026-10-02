@@ -13,7 +13,12 @@ import {
 import type { ContactKind, LcuDeploymentProfile } from './deployment.js';
 import { parseAssignmentList } from './parsers/assignments.js';
 import { parseCalendarEvents } from './parsers/calendar.js';
-import { type NoticeListRow, parseNoticeDetail, parseNoticeList } from './parsers/notices.js';
+import {
+  type NoticeListRow,
+  parseNoticeAttachments,
+  parseNoticeDetail,
+  parseNoticeList,
+} from './parsers/notices.js';
 import {
   type AttendanceRow,
   type ExamRow,
@@ -94,13 +99,31 @@ export interface LcuSyncContext {
   product: string;
   /** Adapter-owned caches (seeded from the cursor). */
   noticeCache: Map<string, NoticeCacheEntry>;
+  /** Called after each fetched notice detail (checkpoint: a cut-off backfill resumes from here). */
+  onNoticeDetail?: ((key: string, entry: NoticeCacheEntry) => void | Promise<void>) | undefined;
   version: VersionState | undefined;
 }
 
 export interface LcuSyncOutcome {
   result: SyncResult;
   version: VersionState | undefined;
-  stats: { noticeDetailsFetched: number; steps: Record<string, 'ok' | 'failed' | 'skipped'> };
+  stats: {
+    noticeDetailsFetched: number;
+    noticeDetails: NoticeDetailStats;
+    steps: Record<string, 'ok' | 'failed' | 'skipped'>;
+  };
+}
+
+export interface NoticeDetailStats {
+  /** Details read this run (READ notices only). */
+  fetched: number;
+  failed: number;
+  /** Notices without a body because they are unread in LCU (never opened). */
+  unreadNotOpened: number;
+  /** READ notices still without a body (over this run's budget). */
+  pending: number;
+  /** fileUpload/load calls that returned a file list. */
+  attachmentLists: number;
 }
 
 const MAX_DETAIL_BODY = 20_000;
@@ -590,7 +613,11 @@ export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise
       ...(warnings.length ? { warnings } : {}),
     },
     version,
-    stats: { noticeDetailsFetched: noticeOutcome.detailsFetched, steps },
+    stats: {
+      noticeDetailsFetched: noticeOutcome.details.fetched,
+      noticeDetails: noticeOutcome.details,
+      steps,
+    },
   };
 }
 
@@ -818,53 +845,99 @@ async function syncNotices(
   index: OfferingIndex,
   step: <T>(name: string, fn: () => Promise<T>) => Promise<T | undefined>,
   warnings: string[],
-): Promise<{ items: RawItem[]; listOk: boolean; detailsFetched: number }> {
+): Promise<{ items: RawItem[]; listOk: boolean; details: NoticeDetailStats }> {
   const { session, deployment: d, options: o } = ctx;
-  let detailsFetched = 0;
+  const details: NoticeDetailStats = {
+    fetched: 0,
+    failed: 0,
+    unreadNotOpened: 0,
+    pending: 0,
+    attachmentLists: 0,
+  };
   const rows = await step('noticeList', async () => {
     let list = await session.open(d.screens.noticeList);
     const parsed = parseNoticeList(list.html);
-    if (!o.noticeDetails || o.maxNoticeDetailsPerRun <= 0) return parsed;
-    // Details only for rows that are READ (opening an unread notice marks it read) and whose
-    // row content changed since the detail was last fetched (incremental).
-    const wanted = parsed
-      .filter((r) => !r.unread)
-      .map((r) => ({
-        r,
-        key: noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title),
-        hash: rowHash(r),
-      }))
-      .filter(({ key, hash }) => {
-        const c = ctx.noticeCache.get(key);
-        return !c?.detail || c.rowHash !== hash;
-      })
-      .sort((a, b) => (b.r.contactDateTime ?? '').localeCompare(a.r.contactDateTime ?? ''))
-      .slice(0, o.maxNoticeDetailsPerRun);
-    for (const { key, hash } of wanted) {
+    // Details only for rows that are READ in LCU: opening an unread notice marks it read and LCU
+    // has no way to set it back to unread (readMark only marks read). Incremental: only rows whose
+    // detail is missing or whose list row changed; newest first, at most maxNoticeDetailsPerRun.
+    const keyed = parsed.map((r) => ({
+      r,
+      key: noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title),
+      hash: rowHash(r),
+    }));
+    const needs = keyed.filter(({ key, hash }) => {
+      const c = ctx.noticeCache.get(key);
+      return !c?.detail || c.rowHash !== hash;
+    });
+    details.unreadNotOpened = needs.filter(({ r }) => r.unread).length;
+    const candidates = needs
+      .filter(({ r }) => !r.unread)
+      .sort((a, b) => (b.r.contactDateTime ?? '').localeCompare(a.r.contactDateTime ?? ''));
+    const enabled = o.noticeDetails && o.maxNoticeDetailsPerRun > 0;
+    const wanted = enabled ? candidates.slice(0, o.maxNoticeDetailsPerRun) : [];
+    details.pending = candidates.length - wanted.length;
+    for (const { key, hash, r: listed } of wanted) {
       // Row indexes belong to the list page we are on; find the row again on the current list.
       const current = parseNoticeList(list.html).find(
         (r) => noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title) === key,
       );
-      if (!current || current.unread || list.noticeListVersion === undefined) continue;
+      if (!current || current.unread || list.noticeListVersion === undefined) {
+        details.pending++;
+        continue;
+      }
+      let opened = false;
       try {
         const detailPage = await session.openNoticeDetail({
           rowIndex: current.rowIndex,
           unread: current.unread,
           listVersion: list.noticeListVersion,
         });
+        opened = true;
         const detail = parseNoticeDetail(detailPage.html);
-        if (detail) {
-          ctx.noticeCache.set(key, {
-            rowHash: hash,
-            detail: { ...detail, body: detail.body.slice(0, MAX_DETAIL_BODY) },
-          });
-          detailsFetched++;
+        if (!detail) throw new Error('the detail screen had no notice heading');
+        let attachments = detail.attachments;
+        let attachmentsComplete = true;
+        if (listed.hasAttachment) {
+          try {
+            const parsedFiles = parseNoticeAttachments(await session.loadNoticeAttachments());
+            if (parsedFiles) {
+              attachments = parsedFiles;
+              details.attachmentLists++;
+            } else attachmentsComplete = false;
+          } catch (e) {
+            if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+            attachmentsComplete = false;
+            warnings.push(`notice attachments (${detail.title}): ${errorMessage(e)}`);
+          }
+        }
+        const entry: NoticeCacheEntry = {
+          rowHash: hash,
+          detail: {
+            ...detail,
+            body: detail.body.slice(0, MAX_DETAIL_BODY),
+            attachments,
+            ...(attachmentsComplete ? {} : { attachmentsComplete: false }),
+            fetchedAt: ctx.clock.now().toISOString(),
+            openedWhileRead: true,
+          },
+        };
+        ctx.noticeCache.set(key, entry);
+        details.fetched++;
+        try {
+          await ctx.onNoticeDetail?.(key, entry);
+        } catch (e) {
+          warnings.push(`notice detail checkpoint: ${errorMessage(e)}`);
         }
       } catch (e) {
         if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+        details.failed++;
         warnings.push(`notice detail: ${errorMessage(e)}`);
       }
-      list = await session.post(d.actions.noticeDetailBack);
+      list = opened
+        ? await session.post(d.actions.noticeDetailBack)
+        : list.screenId === d.screens.noticeList
+          ? list
+          : await session.open(d.screens.noticeList);
       if (list.screenId !== d.screens.noticeList) list = await session.open(d.screens.noticeList);
     }
     return parsed;
@@ -904,6 +977,13 @@ async function syncNotices(
     if (row && cached && cached.rowHash !== rowHash(row) && !cached.detail)
       ctx.noticeCache.delete(key);
     const { rowIndex: _ri, ...listRow } = row ?? ({} as NoticeListRow);
+    const bodyStatus: NoticePayload['bodyStatus'] = cached?.detail
+      ? 'fetched'
+      : row?.unread
+        ? 'notOpened'
+        : row
+          ? 'pending'
+          : undefined;
     const dt = row?.contactDateTime ?? `${imp?.contactDate ?? ''} ${imp?.contactTime ?? ''}`.trim();
     const payload: NoticePayload = {
       key,
@@ -912,6 +992,7 @@ async function syncNotices(
       ...(imp ? { important: imp } : {}),
       ...(row ? { listRow } : {}),
       ...(cached?.detail ? { detail: cached.detail } : {}),
+      ...(bodyStatus ? { bodyStatus } : {}),
       context: {
         ...(offeringKey ? { offeringKey } : {}),
         ...(offeringTitle ? { offeringTitle } : {}),
@@ -930,7 +1011,7 @@ async function syncNotices(
   if (rows)
     for (const k of [...ctx.noticeCache.keys()]) if (!byKey.has(k)) ctx.noticeCache.delete(k);
 
-  return { items, listOk: rows !== undefined, detailsFetched };
+  return { items, listOk: rows !== undefined, details };
 }
 
 export { VERSION_PRODUCT };

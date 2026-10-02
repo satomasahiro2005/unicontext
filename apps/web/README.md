@@ -9,16 +9,17 @@ Localhost Web UI for UniContext: React 19, Vite 8, TanStack Router (code-based r
 
 ## Routes
 
-| Route                      | Endpoints                                                                                            |
-| -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `/`                        | `GET /api/v1/today`                                                                                  |
-| `/courses`, `/courses/$id` | `GET /api/v1/courses`, `GET /api/v1/courses/:id`, `POST /api/v1/identity/confirm\|reject`            |
-| `/assignments`             | `GET /api/v1/assignments`                                                                            |
-| `/calendar`                | `GET /api/v1/week`                                                                                   |
-| `/changes`                 | `GET /api/v1/changes`                                                                                |
-| `/search?q=`               | `GET /api/v1/search?q=`                                                                              |
-| `/sources`                 | `GET /api/v1/sources`, `POST /api/v1/sources/:id/sync`                                               |
-| `/conflicts`               | `GET /api/v1/conflicts`, `POST /api/v1/facts/:id/correct`                                            |
-| `/settings`                | `GET /api/v1/settings`, `/notifications`, `/proposals`, `POST /api/v1/proposals/:id/confirm\|reject` |
+| Route                                  | Endpoints                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `/`                                    | `GET /api/v1/today`                                                                                  |
+| `/courses`, `/courses/$id`             | `GET /api/v1/courses`, `GET /api/v1/courses/:id`, `POST /api/v1/identity/confirm\|reject`            |
+| `/assignments`                         | `GET /api/v1/assignments`                                                                            |
+| `/calendar`                            | `GET /api/v1/week`                                                                                   |
+| `/announcements`, `/announcements/$id` | `GET /api/v1/announcements[?unreadOnly=1]`, `GET /api/v1/announcements/:id`                          |
+| `/changes`                             | `GET /api/v1/changes`                                                                                |
+| `/search?q=`                           | `GET /api/v1/search?q=`                                                                              |
+| `/sources`                             | `GET /api/v1/sources`, `POST /api/v1/sources/:id/sync`                                               |
+| `/conflicts`                           | `GET /api/v1/conflicts`, `POST /api/v1/facts/:id/correct`                                            |
+| `/settings`                            | `GET /api/v1/settings`, `/notifications`, `/proposals`, `POST /api/v1/proposals/:id/confirm\|reject` |
 
 All screens also use `GET /api/v1/admin` (nav badges) and `GET /api/v1/source-refs/:id` (出典 panel). Writes fetch `GET /api/v1/session` and send `X-CSRF-Token`; a 403 refetches the token once.

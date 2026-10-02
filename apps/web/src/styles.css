@@ -477,6 +477,10 @@ main {
   margin-top: 6px;
 }
 
+.announcement-body {
+  overflow-wrap: anywhere;
+}
+
 .snippet {
   white-space: pre-wrap;
 }

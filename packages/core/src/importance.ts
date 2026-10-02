@@ -8,6 +8,9 @@
  *   (履修登録, 学生証, 授業料の納付 …);
  * - low: general campaigns — 就職・キャリア, メルマガ, 調査・アンケート, 説明会・セミナー・イベント, 募集 …;
  * - normal: everything else (including optional applications such as 奨学金・授業料免除).
+ *
+ * When the body is known (LiveCampusU notices read by the student), a notice the title leaves at
+ * normal becomes high if its text is marked 【重要】 or asks for a personal procedure.
  */
 
 export type NoticeImportance = 'critical' | 'high' | 'normal' | 'low';
@@ -71,5 +74,13 @@ export function classifyNoticeImportance(input: NoticeImportanceInput): NoticeIm
   if (PERSONAL_PROCEDURE.test(title) && !OPTIONAL_APPLICATION.test(title))
     return { importance: 'high', rule: 'personal-procedure' };
   if (CAMPAIGN.test(title)) return { importance: 'low', rule: 'campaign' };
+  // The body only ever raises a notice whose title says nothing either way (campaign titles stay
+  // low even when their text mentions a 提出期限, and optional applications stay normal).
+  const body = (input.body ?? '').normalize('NFKC');
+  if (body && !OPTIONAL_APPLICATION.test(title)) {
+    if (IMPORTANT_MARK.test(body)) return { importance: 'high', rule: 'body:marked-important' };
+    if (PERSONAL_PROCEDURE.test(body) && !OPTIONAL_APPLICATION.test(body))
+      return { importance: 'high', rule: 'body:personal-procedure' };
+  }
   return { importance: 'normal', rule: 'default' };
 }

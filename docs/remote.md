@@ -24,13 +24,14 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
 
 - **Tools**: the read tools (`get_today`, `get_week`, `get_course`, `get_deadlines`,
   `get_assignments`, `get_tasks`, `search`, `get_source`, `get_conflicts`, `prepare_for_class`,
-  `review_class`, `get_recent_changes`, `search_syllabus`, `get_syllabus`, `get_credit_summary`, …),
-  each with `readOnlyHint: true` and an output schema. With the `unicontext.write` scope only, also
-  the record tools `record_lecture`, `add_deadline`, `add_note`, `add_task`, `list_my_additions`
-  and `retract_addition` (`readOnlyHint: false`, `destructiveHint` only on `retract_addition`).
-  The propose-only tools (`correct_fact`, `propose_pace_slot`) are **never registered** on this
-  surface, so a call to them fails as an unknown tool. `get_source` returns the citation and the
-  facts it supports, but no raw source payloads.
+  `review_class`, `get_recent_changes`, `get_announcements`, `get_announcement`, `search_syllabus`,
+  `get_syllabus`, `get_credit_summary`, …), each with `readOnlyHint: true` and an output schema.
+  With the `unicontext.write` scope only, also the record tools `record_lecture`, `add_deadline`,
+  `add_note`, `add_task`, `list_my_additions` and `retract_addition` (`readOnlyHint: false`,
+  `destructiveHint` only on `retract_addition`). The propose-only tools (`correct_fact`,
+  `propose_pace_slot`) are **never registered** on this surface, so a call to them fails as an
+  unknown tool. `get_source` returns the citation and the facts it supports, but no raw source
+  payloads.
 - **Not exposed**: the REST admin API, the Web UI, proposals/confirmation, task status changes, sync,
   login, settings. They live on the local listener (`daemon.port`), which the tunnel config never
   maps.

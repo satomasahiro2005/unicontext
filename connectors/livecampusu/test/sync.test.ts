@@ -4,6 +4,9 @@ import {
   type RawItem,
   type SyncResult,
 } from '@unicontext/connector-sdk';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { AuthRequiredError, OfflineError } from '@unicontext/core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -174,6 +177,101 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
     const b = setup({ readRows: [0, 46] }, { noticeDetails: false });
     await b.adapter.sync({ mode: 'initial' });
     expect(b.server.openedRows).toEqual([]);
+  });
+
+  it('reads body, sender, targets and attachment names of READ notices; never opens unread ones', async () => {
+    const { server, adapter } = setup({ readRows: [46] });
+    server.detailBody = '第1段落<br>締切は10月20日です。https://example.ac.jp/form';
+    const result = await adapter.sync({ mode: 'initial' });
+    const notices = byType(result)['lcu.notice']?.map((i) => i.payload as NoticePayload) ?? [];
+    const room = notices.find((n) => n.listRow?.title.startsWith('7/24'));
+    expect(room?.bodyStatus).toBe('fetched');
+    expect(room?.listRow?.unread).toBe(false);
+    expect(room?.listRow?.hasAttachment).toBe(true);
+    expect(room?.detail).toMatchObject({
+      category: '教員連絡',
+      courses: ['コンピュータ入門(1クラス)', 'コンピュータ入門(再履修（情）１)'],
+      // DELETE entries of the file widget are dropped; temporaryId/prefix are not kept.
+      attachments: [{ name: '資料.pdf', size: 12345 }],
+      links: ['https://example.ac.jp/form'],
+      openedWhileRead: true,
+    });
+    expect(room?.detail?.body).toContain('締切は10月20日です。');
+    expect(JSON.stringify(room)).not.toMatch(/TMP0|temporaryId/);
+    // The unread row is never opened and says why it has no body.
+    const survey = notices.find((n) => n.listRow?.title.startsWith('2026年度'));
+    expect(survey?.bodyStatus).toBe('notOpened');
+    expect(survey?.detail).toBeUndefined();
+    expect(server.openedRows).toEqual([46]);
+    // The file list is read with the empty-body POST + X-CSRF-TOKEN, while the detail is open.
+    const paths = server.paths();
+    const load = paths.indexOf('POST fileUpload/load/fi02');
+    expect(load).toBeGreaterThan(paths.indexOf('GET SC_17001B00_02'));
+    expect(load).toBeLessThan(paths.indexOf('POST SC_17001B00_02/back'));
+    const req = server.requests((r) => r.path === 'fileUpload/load/fi02')[0];
+    expect(req?.body ?? '').toBe('');
+    expect(req?.headerCsrf).toMatch(/^csrf-/);
+    // Nothing else under fileUpload*, and never readMark/toDoIcon.
+    expect(paths.filter((p) => /fileUpload|readMark|toDoIcon/i.test(p))).toEqual([
+      'POST fileUpload/load/fi02',
+    ]);
+  });
+
+  it('skips the attachment call for rows without the clip', async () => {
+    const { server, adapter } = setup({ readRows: [0] });
+    await adapter.sync({ mode: 'initial' });
+    expect(server.openedRows).toEqual([0]);
+    expect(server.paths().filter((p) => /fileUpload/.test(p))).toEqual([]);
+  });
+
+  it('checkpoints every fetched detail so a cut-off backfill resumes', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'uc-lcu-'));
+    try {
+      const clock = newClock();
+      const server = new FakeLcuServer({ clock, readRows: [0, 46] });
+      const strategy = new FakeStrategy(server);
+      const ctx = { ...testContext(clock, server.fetch), cacheDir: dir };
+      // First run dies right after the first detail (e.g. the daemon is stopped).
+      let calls = 0;
+      const original = server.fetch;
+      server.fetch = async (input, init) => {
+        if (/SC_17001B00_02\/back/.test(String(input)) && ++calls === 1) {
+          throw new OfflineError('cut off');
+        }
+        return original(input, init);
+      };
+      const a1 = new LiveCampusUAdapter(
+        { ...ctx, fetch: (i, n) => server.fetch(i, n) },
+        { strategy },
+      );
+      await expect(a1.sync({ mode: 'initial' })).rejects.toThrow();
+      expect(server.openedRows).toEqual([0]);
+      const saved = JSON.parse(readFileSync(path.join(dir, 'notice-details.json'), 'utf8')) as {
+        notices: Record<string, unknown>;
+      };
+      expect(Object.keys(saved.notices)).toHaveLength(1);
+      // A fresh adapter without any cursor picks up the checkpoint and only fetches the rest.
+      const a2 = new LiveCampusUAdapter(
+        { ...ctx, fetch: (i, n) => server.fetch(i, n) },
+        { strategy },
+      );
+      const r = await a2.sync({ mode: 'initial' });
+      expect(server.openedRows).toEqual([0, 46]);
+      const withBody = (byType(r)['lcu.notice'] ?? [])
+        .map((i) => i.payload as NoticePayload)
+        .filter((n) => n.bodyStatus === 'fetched');
+      expect(withBody).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports READ notices over the run budget as pending', async () => {
+    const { adapter } = setup({ readRows: [0, 46] }, { maxNoticeDetailsPerRun: 1 });
+    const r = await adapter.sync({ mode: 'initial' });
+    const notices = (byType(r)['lcu.notice'] ?? []).map((i) => i.payload as NoticePayload);
+    expect(notices.filter((n) => n.bodyStatus === 'fetched')).toHaveLength(1);
+    expect(notices.filter((n) => n.bodyStatus === 'pending')).toHaveLength(1);
   });
 
   it('re-authenticates after the idle timeout between runs', async () => {
