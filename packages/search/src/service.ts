@@ -46,6 +46,9 @@ export interface SearchHit {
   citations: Citation[];
   /** "lexical" | "semantic" | "structured" */
   via: 'lexical' | 'semantic' | 'structured';
+  /** Document chunks: the file they belong to (download_course_file takes this id) and page. */
+  documentId?: string;
+  page?: number;
 }
 
 export interface SearchOptions {
@@ -159,10 +162,20 @@ export class SearchService {
     const cites = this.citationsFor(lex.map((h) => h.entityId));
     return lex.map((h) => {
       const e = this.entities.get(h.entityId);
+      // A chunk of a file: name the file (and page) instead of the chunk id.
+      const doc = e?.kind === 'documentChunk' ? this.entities.get(e.documentId) : undefined;
+      const chunk = e?.kind === 'documentChunk' ? e : undefined;
       return {
         id: h.entityId,
         kind: h.kind,
-        title: e ? entityLabel(e) : h.title,
+        title:
+          doc && chunk
+            ? `${entityLabel(doc)}${chunk.page ? ` p.${chunk.page}` : ''}`
+            : e
+              ? entityLabel(e)
+              : h.title,
+        ...(chunk ? { documentId: chunk.documentId } : {}),
+        ...(chunk?.page ? { page: chunk.page } : {}),
         snippet: h.snippet,
         score: h.score,
         at: e ? timeOf(e) : undefined,

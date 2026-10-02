@@ -150,20 +150,77 @@ export const DRIVE_DELTA = `async (arg) => {
 }`;
 
 /**
- * File content for text extraction, fetched inside the page (any pre-authenticated redirect
- * stays in the browser). Returns base64 or a reason.
+ * Streaming download, step 1: start a same-origin GET of the file's content inside the page
+ * (documented drive item content endpoint; the classic `GetFileById(…)/$value` when that fails).
+ * Any pre-authenticated redirect stays inside the browser. The response body's reader is kept in
+ * the page under a random key; Node pulls it in chunks (DOWNLOAD_READ), so the file is never held
+ * whole in either process.
  */
-export const DOWNLOAD_FILE = `async (arg) => {
-  const { siteUrl, itemId, maxBytes } = arg;
-  const url = siteUrl.replace(/\\/+$/, '') + '/_api/v2.0/drive/items/' + encodeURIComponent(itemId) + '/content';
-  if (new URL(url).origin !== location.origin) return { error: 'cross-origin' };
-  const res = await fetch(url, { credentials: 'same-origin' });
-  if (!res.ok) return { error: 'http ' + res.status };
-  const len = Number(res.headers.get('content-length') || '0');
-  if (len > maxBytes) return { error: 'too large' };
-  const buf = new Uint8Array(await res.arrayBuffer());
-  if (buf.byteLength > maxBytes) return { error: 'too large' };
+export const DOWNLOAD_OPEN = `async (arg) => {
+  const { siteUrl, itemId, uniqueId, maxBytes, key } = arg;
+  const base = siteUrl.replace(/\\/+$/, '');
+  const urls = [base + '/_api/v2.0/drive/items/' + encodeURIComponent(itemId) + '/content'];
+  if (uniqueId && /^[0-9a-f-]{36}$/i.test(uniqueId)) urls.push(base + "/_api/web/GetFileById('" + uniqueId + "')/$value");
+  let res;
+  let status = 0;
+  let retryAfter = null;
+  for (const url of urls) {
+    if (new URL(url).origin !== location.origin) return { error: 'cross-origin', status: 0 };
+    const r = await fetch(url, { method: 'GET', credentials: 'same-origin' });
+    if (r.ok && r.body) { res = r; break; }
+    status = r.status;
+    retryAfter = r.headers.get('retry-after');
+    try { await r.body?.cancel(); } catch (e) { /* ignore */ }
+    if (r.status === 429 || r.status === 503) break;
+  }
+  if (!res) return { error: 'http', status, retryAfter };
+  const length = Number(res.headers.get('content-length') || '0');
+  if (length > maxBytes) {
+    try { await res.body.cancel(); } catch (e) { /* ignore */ }
+    return { error: 'too large', status: res.status, length };
+  }
+  const store = (window.__ucDownloads = window.__ucDownloads || {});
+  store[key] = { reader: res.body.getReader(), total: 0, max: maxBytes };
+  return { ok: true, status: res.status, length, contentType: res.headers.get('content-type') || '' };
+}`;
+
+/** Streaming download, step 2: the next chunk (about `maxChunk` bytes) as base64, or done. */
+export const DOWNLOAD_READ = `async (arg) => {
+  const { key, maxChunk } = arg;
+  const store = window.__ucDownloads || {};
+  const d = store[key];
+  if (!d) return { error: 'no download' };
+  const parts = [];
+  let size = 0;
+  let done = false;
+  while (size < maxChunk) {
+    const r = await d.reader.read();
+    if (r.done) { done = true; break; }
+    parts.push(r.value);
+    size += r.value.byteLength;
+  }
+  d.total += size;
+  if (d.total > d.max) {
+    try { await d.reader.cancel(); } catch (e) { /* ignore */ }
+    delete store[key];
+    return { error: 'too large' };
+  }
+  if (done) delete store[key];
+  const buf = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) { buf.set(p, at); at += p.byteLength; }
   let bin = '';
   for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-  return { base64: btoa(bin) };
+  return { base64: btoa(bin), done };
+}`;
+
+/** Streaming download, step 3: drop an unfinished download (cancel its body). */
+export const DOWNLOAD_CLOSE = `async (arg) => {
+  const store = window.__ucDownloads || {};
+  const d = store[arg.key];
+  if (d) {
+    delete store[arg.key];
+    try { await d.reader.cancel(); } catch (e) { /* ignore */ }
+  }
+  return true;
 }`;

@@ -22,6 +22,7 @@ import type {
   BrowserCookie,
   BrowserDriver,
   LaunchOptions,
+  LoadState,
   PageLike,
 } from './types.js';
 
@@ -373,20 +374,29 @@ export class BrowserSession {
    */
   withPage<T>(
     fn: (page: PageLike, context: BrowserContextLike) => Promise<T>,
-    options: { headless?: boolean; url?: string } = {},
+    options: {
+      headless?: boolean;
+      url?: string;
+      /**
+       * When the first navigation counts as done (default `load`). `commit` for pages behind a
+       * slow SSO redirect chain: the login poll then waits until `isAuthenticated` holds.
+       */
+      waitUntil?: LoadState | 'commit';
+    } = {},
   ): Promise<{ result: T } | { auth: AuthResult }> {
     return this.serial(() => this.withPageNow(fn, options));
   }
 
   private async withPageNow<T>(
     fn: (page: PageLike, context: BrowserContextLike) => Promise<T>,
-    options: { headless?: boolean; url?: string },
+    options: { headless?: boolean; url?: string; waitUntil?: LoadState | 'commit' },
   ): Promise<{ result: T } | { auth: AuthResult }> {
     const headless = options.headless ?? true;
+    const waitUntil = options.waitUntil ?? 'load';
     try {
       const context = await this.openContext(headless);
       const page = context.pages()[0] ?? (await context.newPage());
-      await page.goto(options.url ?? this.options.startUrl, { waitUntil: 'load' });
+      await page.goto(options.url ?? this.options.startUrl, { waitUntil });
       if (!(await this.safeIsAuthenticated(page))) {
         if (this.options.begin) {
           try {
@@ -400,7 +410,7 @@ export class BrowserSession {
           timeoutMs: this.options.refreshTimeoutMs ?? 60_000,
         });
         if (auth.status !== 'authenticated') return { auth };
-        if (options.url) await page.goto(options.url, { waitUntil: 'load' });
+        if (options.url) await page.goto(options.url, { waitUntil });
       }
       return { result: await fn(page, context) };
     } finally {

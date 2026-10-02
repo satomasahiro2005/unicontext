@@ -59,6 +59,9 @@ export function createTeamsWebConnector(
       );
       const clientUrl = cfg.clientUrl.replace(/\/+$/, '');
       const isReady = async (page: PageLike): Promise<boolean> => {
+        // Downloads start on the team's SharePoint site instead of booting Teams: arriving there
+        // (past the SSO hand-back form) means the session is good.
+        if (onSharePointSite(page.url())) return true;
         const evaluate = (page as unknown as { evaluate(expr: string): Promise<unknown> }).evaluate;
         if (typeof evaluate !== 'function') return false;
         const r = (await evaluate.call(page, call(CLIENT_READY)).catch(() => undefined)) as
@@ -90,7 +93,7 @@ export function createTeamsWebConnector(
         logger: ctx.logger,
         timezone: ctx.profile?.academicCalendar.timezone ?? DEFAULT_TIMEZONE,
         profileExists: () => existsSync(profileDir),
-        withClient: (fn) =>
+        withClient: (fn, o) =>
           session.withPage(
             async (page, context) => {
               const client = new PlaywrightTeamsClient(page, context, {
@@ -105,7 +108,12 @@ export function createTeamsWebConnector(
                 await client.close();
               }
             },
-            { headless: true },
+            {
+              headless: true,
+              // A cold SharePoint site goes through a slow SSO redirect chain and keeps loading long
+              // after it is usable: do not wait for it, the readiness poll does.
+              ...(o?.url ? { url: o.url, waitUntil: 'commit' as const } : {}),
+            },
           ),
         login: (o) => session.login(o),
         // Logout forgets nothing shared: the profile may belong to another source.
@@ -115,6 +123,20 @@ export function createTeamsWebConnector(
     },
     createNormalizer: () => createTeamsWebNormalizer(),
   });
+}
+
+/** A SharePoint page that finished signing in (not the `/_forms/` SSO hand-back). */
+export function onSharePointSite(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      u.protocol === 'https:' &&
+      /\.sharepoint\.com$/i.test(u.hostname) &&
+      !/^\/_(forms|layouts\/15\/(authenticate|accessdenied))/i.test(u.pathname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Default module (Playwright with an installed Chrome/Edge). */

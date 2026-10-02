@@ -18,6 +18,7 @@ v2 client (`testedVersion: v2`), default authority `collaboration`, schedule `30
 | Assignments bot cards         | Fallback only: cards in channels whose assignment the service did not list (dropped once it lists the student's work completely).                                            | `teamsweb.assignmentCard` |
 | Files                         | SharePoint drive delta (`/_api/v2.0/drive/root/delta`) by same-origin `fetch` from a page on the team's SharePoint site, with the page's own session.                        | `teamsweb.driveItem`      |
 | File text (opt-in)            | PDF/DOCX/PPTX downloaded inside the page (`/_api/v2.0/drive/items/{id}/content`), extracted with the local-files extractors, size-capped.                                    | `teamsweb.fileText`       |
+| File downloads / mirror       | Same endpoint (classic `GetFileById(…)/$value` as fallback), streamed from the page to a local file on request or for the opt-in mirror; text as above.                      | `teamsweb.fileText`       |
 
 ## Safety rules (enforced in code)
 
@@ -39,6 +40,54 @@ v2 client (`testedVersion: v2`), default authority `collaboration`, schedule `30
 - **No visible windows during sync.** Syncs run headless. When Microsoft asks for a sign-in, the
   run ends with `auth_required`; sign in with `unicontext login teams-web` (or `livecampusu`,
   whose profile is shared).
+
+## Downloads and the mirror
+
+Files are downloaded only when asked (`unicontext files download`, `POST /api/v1/files/download`,
+the ダウンロード button in a course's file list, MCP `download_course_file`) or by the opt-in mirror.
+
+- **How**: a headless session of the shared browser profile starts on the team's SharePoint site
+  (no Teams boot; a site that does not open in time is retried once), the page GETs the file from the same origin with its own session, and Node pulls
+  the response body in 1 MB chunks (`DOWNLOAD_OPEN` / `DOWNLOAD_READ`) straight into
+  `<target>.part`, renamed when complete. Neither process holds the whole file; no cookie, token or
+  pre-authenticated URL leaves the page or is stored. GET only: nothing at SharePoint changes (no
+  check-out, no sharing change, no view marks beyond SharePoint's own access log).
+- **Serialized and paced**: the browser profile's queue runs downloads after (never during) a
+  sync of any source sharing the profile; files are fetched one at a time with
+  `files.downloadDelayMs` (1.5 s + jitter) in between; a 429/503 stops the batch.
+- **Size**: `files.maxDownloadMB` (200) for on-demand downloads, `mirror.maxFileMB` for the mirror.
+  A larger file is refused from its listed size without contacting SharePoint.
+- **Text**: after the browser is closed, PDF/DOCX/PPTX/TXT/MD up to `files.maxExtractBytes` (50 MB)
+  are extracted with the local-files extractors and stored as `teamsweb.fileText`, which becomes
+  document chunks of the file's Document (course = the team's offering), so search finds them.
+  A delta deletion of the file also deletes its text.
+- **Where**: on-demand copies in `<data dir>/files/teams-web/cache/<hash>/<name>` (indexed in
+  `cache.json`, oldest evicted beyond 2 GB); a file already on disk in its current version (cache or
+  mirror) is not downloaded again.
+
+### Mirror (`sources.teams-web.mirror`, off by default)
+
+```yaml
+sources:
+  teams-web:
+    mirror:
+      enabled: true
+      root: ~/University/Teams # default
+      courses: linked # linked (default): class teams linked to an academic-system course; all: every class team
+      maxFileMB: 200
+      maxFilesPerPass: 40 # the rest follow after the next syncs
+      trashRetentionDays: 30
+```
+
+Layout: `<root>/<course or team>/<channel folder>/<path>` — the course title of the linked
+academic-system offering (the team name for unlinked class teams with `courses: all`), then the
+library path (its first folder is the channel's folder). After every successful teams-web sync the
+daemon runs a pass in the background (`unicontext files mirror` runs one by hand): files that are new
+or changed in the synced listing (the delta) are downloaded, newest first; a changed file's previous
+copy and files that disappeared (deleted, or their course is no longer mirrored) move to
+`<root>/.trash/<date>/…`, emptied after `trashRetentionDays`; moved or renamed files are moved
+locally. The index (`<data dir>/files/teams-web/mirror.json`) remembers versions (SharePoint
+`cTag`), so unchanged files are never fetched again. Only class teams are mirrored.
 
 ## Incremental sync and state
 
@@ -72,14 +121,17 @@ confirmation (`unicontext confirm --list`, the Web UI's 紐付けの確認).
 
 ## Config (`sources.teams-web`)
 
-| Key                                               | Default                                |
-| ------------------------------------------------- | -------------------------------------- |
-| `maxChannelsPerRun` / `revisitPerRun`             | 12 / 2                                 |
-| `channelDelayMs`, `settleMs`, `scrollPages`       | 2500, 4000, 2                          |
-| `assignments`, `includeNonClassTeams`             | true, true                             |
-| `files.enabled`, `files.extractText`              | true, false                            |
-| `files.maxExtractBytes`, `files.maxExtractPerRun` | 15 MB, 10                              |
-| `browser.shareProfileWith` / `browser.profileDir` | profile `browserProfile` (livecampusu) |
+| Key                                               | Default                                                         |
+| ------------------------------------------------- | --------------------------------------------------------------- |
+| `maxChannelsPerRun` / `revisitPerRun`             | 12 / 2                                                          |
+| `channelDelayMs`, `settleMs`, `scrollPages`       | 2500, 4000, 2                                                   |
+| `assignments`, `includeNonClassTeams`             | true, true                                                      |
+| `files.enabled`, `files.extractText`              | true, false                                                     |
+| `files.maxExtractBytes`, `files.maxExtractPerRun` | 50 MB, 10                                                       |
+| `files.extractExtensions`                         | pdf, docx, pptx, txt, md                                        |
+| `files.maxDownloadMB`, `files.downloadDelayMs`    | 200, 1500                                                       |
+| `mirror.*`                                        | see [the mirror](#mirror-sourcesteams-webmirror-off-by-default) |
+| `browser.shareProfileWith` / `browser.profileDir` | profile `browserProfile` (livecampusu)                          |
 
 ## Limits
 

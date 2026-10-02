@@ -1,5 +1,5 @@
-import { isWatchable, type WatchHandle } from '@unicontext/connector-sdk';
-import type { UniContext } from '@unicontext/context-engine';
+import { isWatchable, supportsFileDownloads, type WatchHandle } from '@unicontext/connector-sdk';
+import { mirrorFiles, type UniContext } from '@unicontext/context-engine';
 import { errorMessage, type Logger, zonedParts } from '@unicontext/core';
 
 /** Product name of the LiveCampusU connector (its metadata.product). */
@@ -120,4 +120,46 @@ export async function startWatchers(uc: UniContext, logger: Logger): Promise<Wat
     }
   }
   return handles;
+}
+
+/**
+ * After every successful sync of a source whose file mirror is enabled, run one mirror pass in the
+ * background (new/changed files downloaded, removed ones moved to the trash). Never inside the
+ * sync itself: the pass needs the source's lock to ingest the extracted texts.
+ */
+export function startFileMirror(
+  uc: UniContext,
+  filesDir: string,
+  logger: Logger,
+): { stop(): Promise<void> } {
+  const abort = new AbortController();
+  const running = new Set<Promise<unknown>>();
+  const off = uc.bus.on('sync:completed', (report) => {
+    if (!report.ok || abort.signal.aborted) return;
+    let adapter;
+    try {
+      adapter = uc.sync.getSource(report.sourceId).adapter;
+    } catch {
+      return;
+    }
+    if (!supportsFileDownloads(adapter) || !adapter.fileSettings().mirror?.enabled) return;
+    const run = new Promise((resolve) => setImmediate(resolve))
+      .then(() => mirrorFiles(uc, { filesDir, sourceId: report.sourceId, signal: abort.signal }))
+      .then((r) => {
+        for (const s of r.sources)
+          if (s.downloaded || s.trashed || s.renamed || s.failed)
+            logger.info('file mirror pass', { ...s, root: undefined });
+        for (const w of r.warnings) logger.warn('file mirror', { warning: w });
+      })
+      .catch((e: unknown) => logger.warn('file mirror pass failed', { error: errorMessage(e) }))
+      .finally(() => running.delete(run));
+    running.add(run);
+  });
+  return {
+    async stop() {
+      off();
+      abort.abort();
+      await Promise.allSettled([...running]);
+    },
+  };
 }

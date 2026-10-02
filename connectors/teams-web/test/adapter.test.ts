@@ -76,6 +76,8 @@ describe('teams-web adapter', () => {
     // the deleted file is reported, the new one stored
     expect(second.deletions).toEqual([
       { sourceType: 'teamsweb.driveItem', externalId: `${CLASS_GROUP}/01FILEROOT` },
+      // its text, if any was extracted (sync, on-demand download or mirror), goes with it
+      { sourceType: 'teamsweb.fileText', externalId: `${CLASS_GROUP}/01FILEROOT` },
     ]);
     expect(
       second.items.filter((i) => i.sourceType === 'teamsweb.driveItem').map((i) => i.externalId),

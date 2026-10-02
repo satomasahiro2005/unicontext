@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -1091,6 +1091,73 @@ describe('daemon end to end (real sockets, MCP SDK client)', () => {
       expect(res.isError).not.toBe(true);
     } finally {
       await client.close();
+    }
+  });
+});
+
+describe('file links (/files/<token>)', () => {
+  let s: RemoteServer;
+  let file: string;
+  beforeAll(async () => {
+    s = await makeServer('files.json');
+    file = path.join(dir, 'week1.pdf');
+    writeFileSync(file, 'PDF-BYTES');
+  });
+  afterAll(() => s.app.close());
+
+  it('serves the file to the link holder for about ten minutes, never to another client', async () => {
+    const owner = await tokens(s);
+    const other = await tokens(s);
+    audit.length = 0;
+    const { token, expiresAt } = s.fileLinks.mint({
+      clientId: owner.clientId,
+      documentId: 'document:test',
+      path: file,
+      name: '第1回 資料.pdf',
+      mimeType: 'application/pdf',
+      bytes: 9,
+    });
+    expect(new Date(expiresAt).getTime() - now.getTime()).toBe(10 * 60_000);
+
+    const plain = await inject(s, 'GET', `/files/${token}`);
+    expect(plain.statusCode).toBe(200);
+    expect(plain.body).toBe('PDF-BYTES');
+    expect(plain.headers['content-disposition']).toContain(
+      `filename*=UTF-8''${encodeURIComponent('第1回 資料.pdf')}`,
+    );
+    expect(plain.headers['cache-control']).toBe('no-store');
+
+    const own = await inject(s, 'GET', `/files/${token}`, {
+      headers: { authorization: `Bearer ${owner.access_token}` },
+    });
+    expect(own.statusCode).toBe(200);
+    const foreign = await inject(s, 'GET', `/files/${token}`, {
+      headers: { authorization: `Bearer ${other.access_token}` },
+    });
+    expect(foreign.statusCode).toBe(403);
+    const forged = await inject(s, 'GET', `/files/${token}`, {
+      headers: { authorization: 'Bearer nope' },
+    });
+    expect(forged.statusCode).toBe(401);
+    expect((await inject(s, 'GET', `/files/${'A'.repeat(43)}`)).statusCode).toBe(404);
+
+    // audited by a tag, never the token itself
+    const fetches = audit.filter((e) => e.event === 'file_fetch');
+    expect(fetches.map((e) => [e.ok, e.status])).toEqual([
+      [true, undefined],
+      [true, undefined],
+      [false, 403],
+      [false, 401],
+      [false, 404],
+    ]);
+    expect(JSON.stringify(audit)).not.toContain(token);
+
+    const saved = now;
+    now = new Date(now.getTime() + 10 * 60_000 + 1);
+    try {
+      expect((await inject(s, 'GET', `/files/${token}`)).statusCode).toBe(404);
+    } finally {
+      now = saved;
     }
   });
 });

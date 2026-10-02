@@ -7,6 +7,7 @@ import { registerCorrect } from './commands/correct.js';
 import { registerDaemon } from './commands/daemon.js';
 import { registerDataCommands } from './commands/data.js';
 import { registerDoctor } from './commands/doctor.js';
+import { registerFiles } from './commands/files.js';
 import { registerGrades } from './commands/grades.js';
 import { registerLogin } from './commands/login.js';
 import { registerMcp } from './commands/mcp.js';
@@ -66,6 +67,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerConfirm(program, harness);
   registerAdditions(program, harness);
   registerAnnouncements(program, harness);
+  registerFiles(program, harness);
   registerPace(program, harness);
   registerDoctor(program, harness);
   registerDataCommands(program, harness);

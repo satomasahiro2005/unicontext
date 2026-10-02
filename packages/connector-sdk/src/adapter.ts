@@ -183,3 +183,99 @@ export function supportsOpenAnnouncements(
 ): adapter is OpenAnnouncementsAdapter {
   return typeof (adapter as Partial<OpenAnnouncementsAdapter>).openAnnouncements === 'function';
 }
+
+/**
+ * A file a source can download on request (a document in a class team's library). Described by
+ * the adapter from its raw item, so the caller can name, place and version it without knowing the
+ * source's payload shapes.
+ */
+export interface DownloadableFile {
+  externalId: string;
+  /** File name as shown at the source. */
+  name: string;
+  /** Team / site the file belongs to (display name) and its stable id. */
+  container: string;
+  containerId: string;
+  /** The container is a class (course) team. */
+  isClass: boolean;
+  /** Folder inside the container's library: '' = root, '/'-separated, no leading slash. */
+  folder: string;
+  /** Changes whenever the content changes (SharePoint cTag / eTag). */
+  version: string;
+  sizeBytes: number | undefined;
+  modifiedAt: string | undefined;
+  mimeType: string | undefined;
+}
+
+export interface FileDownloadRequest {
+  externalId: string;
+  /** The file's current raw payload (as stored by the last sync). */
+  payload: unknown;
+  /** Where to write the file (directories are created; written to `<path>.part`, then renamed). */
+  targetPath: string;
+  /** Refuse files larger than this (bytes). */
+  maxBytes: number;
+  /** Extract text (supported formats only) and return it as a raw item to ingest. */
+  extract: boolean;
+  /** The file is already at targetPath in this version: only extract its text, do not download. */
+  extractOnly?: boolean;
+}
+
+export interface FileDownloadOutcome {
+  externalId: string;
+  status: 'downloaded' | 'extracted' | 'tooLarge' | 'notFound' | 'failed';
+  bytes?: number;
+  contentType?: string;
+  /** Version that was written (from the payload). */
+  version?: string;
+  /** Characters / pages of the extracted text (undefined when nothing was extracted). */
+  text?: { chars: number; pages: number };
+  error?: string;
+}
+
+export interface FileDownloadSettings {
+  /** Largest file an on-demand download accepts (bytes). */
+  maxDownloadBytes: number;
+  /** Local mirror of the source's files (off unless configured). */
+  mirror?: FileMirrorSettings;
+}
+
+export interface FileMirrorSettings {
+  enabled: boolean;
+  /** Absolute directory (a leading ~ is already expanded). */
+  root: string;
+  /** `linked`: only class teams linked to an offering of the academic system. */
+  courses: 'all' | 'linked';
+  maxFileBytes: number;
+  /** Downloads per pass (the rest follow on later passes). */
+  maxFilesPerPass: number;
+  /** Days files moved to `<root>/.trash` are kept. */
+  trashRetentionDays: number;
+}
+
+/**
+ * Optional extension: download files the source lists (read-only at the source). Only on-demand
+ * requests (CLI / REST / Web UI / MCP) and the opt-in mirror call it; adapters serialize it with
+ * sync() when they share a session.
+ */
+export interface FileDownloadAdapter extends SourceAdapter {
+  /** Raw source types whose items are files (`describeFile` understands them). */
+  readonly fileSourceTypes: readonly string[];
+  /** Raw source types holding text extracted from those files (same external ids). */
+  readonly fileTextSourceTypes: readonly string[];
+  fileSettings(): FileDownloadSettings;
+  describeFile(item: {
+    sourceType: string;
+    externalId: string;
+    payload: unknown;
+  }): DownloadableFile | undefined;
+  downloadFiles(
+    requests: readonly FileDownloadRequest[],
+    options?: { signal?: AbortSignal },
+  ): Promise<{ results: FileDownloadOutcome[]; items: RawItem[]; warnings: string[] }>;
+}
+
+export function supportsFileDownloads(adapter: SourceAdapter): adapter is FileDownloadAdapter {
+  const a = adapter as Partial<FileDownloadAdapter>;
+  return typeof a.downloadFiles === 'function' && typeof a.describeFile === 'function';
+}

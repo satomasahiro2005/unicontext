@@ -11,6 +11,9 @@ import {
 import {
   type AdditionResult,
   CONTEXT_VIEWS,
+  downloadCourseFiles,
+  type DownloadFilesReport,
+  fileTextExcerpt,
   openAnnouncements as openAnnouncementsInProcess,
   type OpenAnnouncementsReport,
   formatPaceSlot,
@@ -105,6 +108,19 @@ export interface McpDeps {
    * LiveCampusU session); `unicontext mcp` routes it to the running daemon. Default: in-process.
    */
   openAnnouncements?: (ids: string[]) => Promise<OpenAnnouncementsReport>;
+  /** `<data dir>/files` (download_course_file in-process). */
+  filesDir?: string;
+  /**
+   * Download class files (download_course_file). The daemon runs it in-process (it holds the
+   * browser profile); `unicontext mcp` routes it to the running daemon. Default: in-process with
+   * `filesDir`.
+   */
+  downloadFiles?: (refs: string[], options: { extract: boolean }) => Promise<DownloadFilesReport>;
+  /**
+   * Remote surface: mint a short-lived link on the remote listener that serves the local copy of
+   * a downloaded file to the calling OAuth client only. Undefined = links are not offered.
+   */
+  fileLink?: (documentId: string) => { url: string; expiresAt: string } | undefined;
   /** Called after every tool call (audit log of the remote surface). Never receives arguments. */
   onToolCall?: (event: ToolCallEvent) => void;
 }
@@ -722,6 +738,85 @@ export function createMcpServer(deps: McpDeps): McpServer {
     { title: CREDIT_SUMMARY_TITLE, description: CREDIT_SUMMARY_DESCRIPTION },
     creditSummaryShape,
     (a) => getCreditSummary(uc, a),
+  );
+
+  // ----- class files (Teams/SharePoint): download on request -----
+
+  tool(
+    'download_course_file',
+    {
+      title: '授業ファイルのダウンロード',
+      description:
+        '授業のTeams/SharePointのファイル（get_courseやsearchの結果のdocument:…のid、または「科目名/フォルダ/ファイル名」）を本人のPCにダウンロードし、保存先のパス・サイズ・更新日時と、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき）を返す。大学側には何も変更しない（読み取りのみ）。本文は検索（search）でも引けるようになる。 / Download a class file (document id or "<course>/<path>") to the student’s computer; returns the local path, metadata and the extracted text with page/slide markers. Read-only at the source; the text becomes searchable.',
+      remoteDescription:
+        '授業のTeams/SharePointのファイル（get_courseやsearchの結果のdocument:…のid、または「科目名/フォルダ/ファイル名」）を取得し、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき、maxCharsで打ち切り）を返す。link=trueのときは、この接続（同じOAuthクライアント）だけが約10分間ダウンロードできるリンクも返す。大学側には何も変更しない。 / Fetch a class file and return its extracted text (page/slide markers, truncated at maxChars); link=true also returns a ~10-minute download link valid for this OAuth client only. Read-only at the source.',
+    },
+    {
+      file: z
+        .string()
+        .min(1)
+        .max(1000)
+        .describe('document:…/material:…のid、または「科目名/フォルダ/ファイル名」'),
+      includeText: z
+        .boolean()
+        .optional()
+        .describe('抽出した本文を返す（既定true） / Return the extracted text (default true)'),
+      maxChars: z
+        .number()
+        .int()
+        .min(200)
+        .max(100_000)
+        .optional()
+        .describe('本文の最大文字数（既定20000） / Max characters of text (default 20000)'),
+      ...(remote
+        ? {
+            link: z
+              .boolean()
+              .optional()
+              .describe(
+                '約10分有効のダウンロードリンクも返す（この接続のみ） / Also return a ~10-minute download link (this client only)',
+              ),
+          }
+        : {}),
+    },
+    async (a) => {
+      const includeText = a.includeText !== false;
+      const run =
+        deps.downloadFiles ??
+        ((refs: string[], o: { extract: boolean }) => {
+          if (!deps.filesDir) throw new ValidationError('file downloads are not available here');
+          return downloadCourseFiles(uc, refs, { filesDir: deps.filesDir, extract: o.extract });
+        });
+      const report = await run([a.file.trim()], { extract: true });
+      const r = report.results[0];
+      if (!r || r.status === 'notFound') throw new NotFoundError(r?.error ?? `file ${a.file}`);
+      const ok = r.status === 'downloaded' || r.status === 'cached';
+      // The remote client cannot use a path on this computer.
+      const { path: localPath, ref: _ref, ...meta } = r;
+      const file = remote ? meta : { ...meta, ...(localPath ? { path: localPath } : {}) };
+      const text = ok && includeText ? fileTextExcerpt(uc, r.id, a.maxChars ?? 20_000) : undefined;
+      const wantsLink = remote && (a as { link?: boolean }).link === true;
+      const link = ok && wantsLink ? deps.fileLink?.(r.id) : undefined;
+      return {
+        data: {
+          file,
+          ...(text
+            ? {
+                text: {
+                  excerpt: text.text,
+                  truncated: text.truncated,
+                  chunks: text.chunks,
+                  totalChars: text.totalChars,
+                },
+              }
+            : {}),
+          ...(link ? { link } : {}),
+          ...(wantsLink && !link ? { linkUnavailable: true } : {}),
+          ...(report.warnings.length ? { warnings: report.warnings } : {}),
+          citations: uc.context.citationsFor([r.id]),
+        },
+      };
+    },
   );
 
   // ----- search / sources / conflicts -----

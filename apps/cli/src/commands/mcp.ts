@@ -1,4 +1,9 @@
-import { openAnnouncements, type OpenAnnouncementsReport } from '@unicontext/context-engine';
+import {
+  downloadCourseFiles,
+  type DownloadFilesReport,
+  openAnnouncements,
+  type OpenAnnouncementsReport,
+} from '@unicontext/context-engine';
 import type { Command } from 'commander';
 import { action, type Harness } from '../harness.js';
 import { VERSION } from '../version.js';
@@ -31,6 +36,18 @@ export function registerMcp(program: Command, h: Harness): void {
                     { timeoutMs: 15 * 60_000 },
                   )
                 : openAnnouncements(rt.uc, ids);
+            },
+            // The daemon holds the browser profile and serializes downloads with its sync.
+            filesDir: rt.filesDir,
+            downloadFiles: async (refs, o) => {
+              const daemon = await ctx.daemon();
+              return daemon
+                ? daemon.post<DownloadFilesReport>(
+                    '/api/v1/files/download',
+                    { ids: refs, extract: o.extract },
+                    { timeoutMs: 30 * 60_000 },
+                  )
+                : downloadCourseFiles(rt.uc, refs, { filesDir: rt.filesDir, extract: o.extract });
             },
           });
         },

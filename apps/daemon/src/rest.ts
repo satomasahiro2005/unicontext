@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
@@ -11,8 +11,13 @@ import {
 } from '@unicontext/canonical-model';
 import {
   buildGradeReport,
+  downloadCourseFiles,
   getView,
+  localFile,
+  MAX_DOWNLOADS_PER_REQUEST,
   MAX_OPEN_PER_REQUEST,
+  mirrorFiles,
+  mirrorStatus,
   openAnnouncements,
   setPaceSlots,
 } from '@unicontext/context-engine';
@@ -47,6 +52,9 @@ import type {
   ConflictsResponse,
   CoursesResponse,
   CourseFilesResponse,
+  DownloadFilesResponse,
+  MirrorResponse,
+  MirrorStatusResponse,
   GradesResponse,
   HealthResponse,
   NotificationsResponse,
@@ -760,6 +768,49 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
     }),
   );
 
+  // ---- class files (Teams/SharePoint): on-demand download, local copy, mirror -------------
+  // Downloads are read-only at the source; the connector serializes them with its sync.
+  app.post<{ Body: unknown }>(
+    '/api/v1/files/download',
+    write,
+    async (request): Promise<DownloadFilesResponse> => {
+      const body = parse(
+        z.object({
+          ids: z.array(z.string().min(1).max(1000)).min(1).max(MAX_DOWNLOADS_PER_REQUEST),
+          extract: z.boolean().optional(),
+        }),
+        request.body,
+      );
+      return downloadCourseFiles(uc, body.ids, {
+        filesDir: runtime.filesDir,
+        ...(body.extract !== undefined ? { extract: body.extract } : {}),
+      });
+    },
+  );
+  app.get<{ Params: { id: string } }>('/api/v1/files/:id/content', async (request, reply) => {
+    const f = localFile(uc, request.params.id, { filesDir: runtime.filesDir });
+    if (!f) throw new NotFoundError(`no local copy of ${request.params.id} (download it first)`);
+    return reply
+      .header('Content-Type', f.mimeType ?? 'application/octet-stream')
+      .header('Content-Length', String(f.bytes))
+      .header('Content-Disposition', contentDisposition(f.name))
+      .send(createReadStream(f.path));
+  });
+  app.get('/api/v1/files/mirror', async (): Promise<MirrorStatusResponse> => ({
+    sources: mirrorStatus(uc, { filesDir: runtime.filesDir }),
+  }));
+  app.post<{ Body: unknown }>(
+    '/api/v1/files/mirror',
+    write,
+    async (request): Promise<MirrorResponse> => {
+      const body = parse(z.object({ sourceId: z.string().min(1).optional() }), request.body ?? {});
+      return mirrorFiles(uc, {
+        filesDir: runtime.filesDir,
+        ...(body.sourceId ? { sourceId: body.sourceId } : {}),
+      });
+    },
+  );
+
   app.post('/api/v1/daemon/stop', write, async () => {
     setImmediate(() => options.onStop?.());
     return { ok: true };
@@ -774,7 +825,13 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
         reply.hijack();
         try {
           await handleMcpHttp(
-            { uc, proposals: runtime.proposals, logger: runtime.logger, version: options.version },
+            {
+              uc,
+              proposals: runtime.proposals,
+              logger: runtime.logger,
+              version: options.version,
+              filesDir: runtime.filesDir,
+            },
             request.raw,
             reply.raw,
             request.body,
@@ -819,4 +876,14 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
   }
 
   return app;
+}
+
+/** `attachment` with an ASCII fallback name and the real (UTF-8) name (RFC 6266 / 5987). */
+export function contentDisposition(name: string): string {
+  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  const encoded = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }

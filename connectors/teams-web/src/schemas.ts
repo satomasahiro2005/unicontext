@@ -177,6 +177,7 @@ export const DriveItemSchema = z.looseObject({
   size: z.number().nullish(),
   webUrl: optStr,
   eTag: optStr,
+  cTag: optStr,
   createdDateTime: optStr,
   lastModifiedDateTime: optStr,
   createdBy: IdentitySetSchema,

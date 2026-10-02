@@ -1,10 +1,14 @@
+import { createReadStream } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
+import { localFile } from '@unicontext/context-engine';
 import { errorMessage, parseDuration, type Logger } from '@unicontext/core';
 import { handleMcpHttp } from '@unicontext/mcp';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Runtime } from '../runtime.js';
 import { bearerToken, parseHostHeader } from '../security.js';
+import { contentDisposition } from '../rest.js';
 import { createAuditLog, remoteAuditFile, type AuditRecord } from './audit.js';
+import { FileLinks, tokenTag } from './file-links.js';
 import { hasScope, OAuthServer, WRITE_SCOPE, type AuditEvent } from './oauth.js';
 import { consentPage, messagePage } from './pages.js';
 import { WindowRateLimiter } from './ratelimit.js';
@@ -80,6 +84,8 @@ export interface RemoteServer {
   app: FastifyInstance;
   oauth: OAuthServer;
   store: RemoteStateStore;
+  /** Short-lived file links (`/files/<token>`) minted by download_course_file. */
+  fileLinks: FileLinks;
 }
 
 /**
@@ -121,6 +127,8 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
   const registerLimiter = new WindowRateLimiter(20, 3600_000);
   const tokenLimiter = new WindowRateLimiter(60, 60_000);
   const mcpLimiter = new WindowRateLimiter(240, 60_000);
+  const fileLimiter = new WindowRateLimiter(60, 60_000);
+  const fileLinks = new FileLinks(options.now);
 
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024, trustProxy: false });
   app.addContentTypeParser(
@@ -380,6 +388,26 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
             surface: 'remote',
             allowWrite: hasScope(check.scope, WRITE_SCOPE),
             client: { id: check.clientId, name: check.clientName },
+            filesDir: runtime.filesDir,
+            fileLink: (documentId) => {
+              const f = localFile(runtime.uc, documentId, { filesDir: runtime.filesDir });
+              if (!f) return undefined;
+              const { token, expiresAt } = fileLinks.mint({
+                clientId: check.clientId,
+                documentId,
+                ...f,
+              });
+              audit({
+                event: 'file_link',
+                clientId: check.clientId,
+                clientName: check.clientName,
+                documentId,
+                link: tokenTag(token),
+                expiresAt,
+                ip: info.ip,
+              });
+              return { url: `${publicUrl.origin}/files/${token}`, expiresAt };
+            },
             onToolCall: (e) =>
               audit({
                 event: 'tool',
@@ -414,6 +442,41 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     },
   });
 
+  // ---- short-lived file links (download_course_file with link=true) ----------------------
+  app.get<{ Params: { token: string } }>('/files/:token', async (request, reply) => {
+    const info = infoOf(request);
+    const ip = info.ip ?? '?';
+    if (!fileLimiter.hit(ip)) return tooMany(reply, fileLimiter, ip);
+    const token = request.params.token;
+    const entry = /^[A-Za-z0-9_-]{43}$/.test(token) ? fileLinks.get(token) : undefined;
+    const fail = (status: number, error: string, clientId?: string) => {
+      audit({ event: 'file_fetch', ok: false, status, link: tokenTag(token), clientId, ip });
+      return reply.code(status).send({ error, error_description: 'file link not usable' });
+    };
+    if (!entry) return fail(404, 'not_found');
+    // A bearer token, when sent, must be the same client's.
+    if (request.headers.authorization !== undefined) {
+      const check = oauth.checkAccessToken(bearerToken(request.headers.authorization));
+      if (!check.ok) return fail(401, 'invalid_token');
+      if (check.clientId !== entry.clientId) return fail(403, 'forbidden', check.clientId);
+    }
+    audit({
+      event: 'file_fetch',
+      ok: true,
+      clientId: entry.clientId,
+      documentId: entry.documentId,
+      link: tokenTag(token),
+      bytes: entry.bytes,
+      ip,
+    });
+    return reply
+      .header('Content-Type', entry.mimeType ?? 'application/octet-stream')
+      .header('Content-Length', String(entry.bytes))
+      .header('Content-Disposition', contentDisposition(entry.name))
+      .header('Content-Security-Policy', "default-src 'none'; sandbox")
+      .send(createReadStream(entry.path));
+  });
+
   app.get('/', async (_request, reply) =>
     reply.type('text/plain; charset=utf-8').send('UniContext remote MCP endpoint: /mcp\n'),
   );
@@ -421,5 +484,5 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     reply.code(404).send({ error: 'not_found', error_description: 'Not found' }),
   );
 
-  return { app, oauth, store };
+  return { app, oauth, store, fileLinks };
 }

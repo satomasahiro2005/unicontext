@@ -1,8 +1,16 @@
+import { useState } from 'react';
+import { apiPost, enc, errorMessage } from '../api';
 import { formatDateTimeYear, formatShort } from '../lib/dates';
 import { submissionStatusLabel, submissionStatusTone, materialKindLabel } from '../lib/labels';
 import { formatFileSize, groupByChannel, groupByFolder, safeHttpUrl } from '../lib/text';
-import type { CourseAssignmentItem, CourseFileItem, DiscussionItem } from '../types';
+import type {
+  CourseAssignmentItem,
+  CourseFileItem,
+  DiscussionItem,
+  DownloadFilesResponse,
+} from '../types';
 import { useTimezone } from './AppContext';
+import { useToast } from './Toast';
 import { Citations } from './Citations';
 import { Badge, Section } from './ui';
 
@@ -68,6 +76,37 @@ export function DiscussionSection({ items }: { items: readonly DiscussionItem[] 
   );
 }
 
+/**
+ * Download through UniContext (read-only at SharePoint): the daemon fetches the file into its local
+ * copy and extracts its text for search, then the browser saves that copy.
+ */
+function DownloadButton({ item }: { item: CourseFileItem }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const download = async () => {
+    setBusy(true);
+    try {
+      const r = await apiPost<DownloadFilesResponse>('/api/v1/files/download', { ids: [item.id] });
+      const f = r.results[0];
+      if (f && (f.status === 'downloaded' || f.status === 'cached')) {
+        window.location.assign(`/api/v1/files/${enc(item.id)}/content`);
+        if (f.path) toast.success(`保存しました: ${f.path}`);
+      } else if (f?.status === 'tooLarge')
+        toast.error('ファイルが大きすぎます（上限は設定のfiles.maxDownloadMB）');
+      else toast.error(f?.error ?? 'ダウンロードできませんでした');
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" disabled={busy} onClick={() => void download()}>
+      {busy ? 'ダウンロード中…' : 'ダウンロード'}
+    </button>
+  );
+}
+
 function FileRow({ item }: { item: CourseFileItem }) {
   const tz = useTimezone();
   const href = safeHttpUrl(item.url);
@@ -91,6 +130,7 @@ function FileRow({ item }: { item: CourseFileItem }) {
           <time dateTime={item.modifiedAt}>{formatShort(item.modifiedAt, tz)}</time>
         ) : null}
         {item.modifiedBy ? <span>{item.modifiedBy}</span> : null}
+        <DownloadButton item={item} />
       </span>
       <Citations citations={item.citations} />
     </li>

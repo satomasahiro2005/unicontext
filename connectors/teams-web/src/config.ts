@@ -26,18 +26,39 @@ export const TeamsWebConfigSchema = z.looseObject({
       enabled: z.boolean().default(true),
       /** Opt-in: download PDF/DOCX/PPTX in the page and extract text (size-capped). */
       extractText: z.boolean().default(false),
+      /** Largest file whose text is extracted (sync extraction, on-demand downloads, mirror). */
       maxExtractBytes: z
         .number()
         .int()
         .positive()
-        .default(15 * 1024 * 1024),
-      extractExtensions: z.array(z.string()).default(['pdf', 'docx', 'pptx']),
+        .default(50 * 1024 * 1024),
+      extractExtensions: z.array(z.string()).default(['pdf', 'docx', 'pptx', 'txt', 'md']),
+      /** Largest file an on-demand download accepts (MB). */
+      maxDownloadMB: z.number().positive().max(4096).default(200),
+      /** Pause between two downloads (ms), plus up to 50% random jitter. */
+      downloadDelayMs: z.number().int().nonnegative().default(1500),
       /** Files extracted per run (the rest wait for later runs). */
       maxExtractPerRun: z.number().int().nonnegative().default(10),
       /** Local hours (profile timezone) in which the daily full file listing runs. */
       fullListingHours: z
         .tuple([z.number().int().min(0).max(23), z.number().int().min(1).max(24)])
         .default([2, 6]),
+    })
+    .prefault({}),
+  /**
+   * Local copy of the class teams' files, `<root>/<course or team>/<channel folder>/<path>`,
+   * updated after each sync from the file listing (new/changed → downloaded, gone → `.trash`).
+   */
+  mirror: z
+    .object({
+      enabled: z.boolean().default(false),
+      root: z.string().min(1).default('~/University/Teams'),
+      /** `linked`: only class teams linked to an offering of the academic system. */
+      courses: z.enum(['all', 'linked']).default('linked'),
+      maxFileMB: z.number().positive().max(4096).default(200),
+      /** Downloads per pass; the rest follow after the next syncs. */
+      maxFilesPerPass: z.number().int().positive().max(1000).default(40),
+      trashRetentionDays: z.number().int().nonnegative().default(30),
     })
     .prefault({}),
   browser: z

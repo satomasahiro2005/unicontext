@@ -2,12 +2,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AuthResult, RawItem, RawItemView } from '@unicontext/connector-sdk';
-import { type Clock, silentLogger } from '@unicontext/core';
+import { type Clock, RateLimitedError, silentLogger } from '@unicontext/core';
 import {
   type ChannelTarget,
   type ClientConversations,
   type DriveDeltaResult,
   type ReplyChainRow,
+  type StreamFileRequest,
+  type StreamFileResult,
   TeamsWebAdapter,
   type TeamsWebClient,
   type TeamsWebConfig,
@@ -113,9 +115,28 @@ export class FakeTeamsClient implements TeamsWebClient {
     });
   }
 
-  downloadFile(_siteUrl: string, itemId: string): Promise<Uint8Array | undefined> {
-    this.downloads.push(itemId);
-    return Promise.resolve(this.files[itemId]);
+  /** Status answered for an item (default: 200 with `files[itemId]`, 404 when absent). */
+  fileStatus: Record<string, number> = {};
+  /** Chunk size of the fake stream (several chunks per file in tests). */
+  chunkSize = 4;
+  streamRequests: StreamFileRequest[] = [];
+
+  async streamFile(
+    request: StreamFileRequest,
+    onChunk: (chunk: Uint8Array) => Promise<void>,
+  ): Promise<StreamFileResult> {
+    this.downloads.push(request.itemId);
+    this.streamRequests.push(request);
+    const status = this.fileStatus[request.itemId];
+    if (status === 429) throw new RateLimitedError('throttled', { retryAfterMs: 1000 });
+    const data = this.files[request.itemId];
+    if (status !== undefined && status !== 200)
+      return { ok: false, reason: status === 404 ? 'notFound' : 'failed', status };
+    if (!data) return { ok: false, reason: 'notFound', status: 404 };
+    if (data.byteLength > request.maxBytes) return { ok: false, reason: 'tooLarge' };
+    for (let i = 0; i < data.byteLength; i += this.chunkSize)
+      await onChunk(data.subarray(i, i + this.chunkSize));
+    return { ok: true, bytes: data.byteLength, contentType: 'application/octet-stream' };
   }
 }
 
@@ -124,6 +145,8 @@ export interface Harness {
   client: FakeTeamsClient;
   clock: ReturnType<typeof testClock>;
   config: TeamsWebConfig;
+  /** Browser sessions opened (the start URL each asked for). */
+  sessions: (string | undefined)[];
 }
 
 export function harness(
@@ -132,12 +155,16 @@ export function harness(
     client?: FakeTeamsClient;
     auth?: AuthResult;
     profileExists?: boolean;
-    extract?: (data: Uint8Array, ext: string) => Promise<{ text: string }>;
+    extract?: (
+      data: Uint8Array,
+      ext: string,
+    ) => Promise<{ text: string; pages?: { page: number; text: string }[] }>;
   } = {},
 ): Harness {
   const client = options.client ?? new FakeTeamsClient();
   const clock = testClock();
   const config = TeamsWebConfigSchema.parse({ channelDelayMs: 10, ...(options.config ?? {}) });
+  const sessions: (string | undefined)[] = [];
   const adapter = new TeamsWebAdapter({
     sourceId: 'teams-web',
     config,
@@ -145,12 +172,14 @@ export function harness(
     logger: silentLogger,
     timezone: 'Asia/Tokyo',
     profileExists: () => options.profileExists ?? true,
-    withClient: async (fn) =>
-      options.auth ? { auth: options.auth } : { result: await fn(client) },
+    withClient: async (fn, o) => {
+      sessions.push(o?.url);
+      return options.auth ? { auth: options.auth } : { result: await fn(client) };
+    },
     random: () => 0,
     ...(options.extract ? { extract: options.extract } : {}),
   });
-  return { adapter, client, clock, config };
+  return { adapter, client, clock, config, sessions };
 }
 
 export function toView(item: RawItem, sourceId = 'teams-web'): RawItemView {

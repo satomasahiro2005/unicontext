@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { hasVisibleCredentialField, type PageLike } from '@unicontext/adapter-browser';
 import {
   AuthRequiredError,
@@ -10,7 +11,9 @@ import {
 import {
   CLIENT_READY,
   call,
-  DOWNLOAD_FILE,
+  DOWNLOAD_CLOSE,
+  DOWNLOAD_OPEN,
+  DOWNLOAD_READ,
   DRIVE_DELTA,
   NAVIGATE_HASH,
   READ_CONVERSATIONS,
@@ -71,7 +74,39 @@ export interface TeamsWebClient {
   /** Open the Assignments (課題) app; every `edu/me/work` item it received, all tabs. */
   assignments(): Promise<{ items: Record<string, unknown>[]; complete: boolean }>;
   driveDelta(siteUrl: string, deltaLink: string | undefined): Promise<DriveDeltaResult>;
-  downloadFile(siteUrl: string, itemId: string, maxBytes: number): Promise<Uint8Array | undefined>;
+  /**
+   * Stream one file's content from a page on the team site (same-origin GET with the page's own
+   * session). `onChunk` receives the bytes in order (awaited: back-pressure).
+   */
+  streamFile(
+    request: StreamFileRequest,
+    onChunk: (chunk: Uint8Array) => Promise<void>,
+  ): Promise<StreamFileResult>;
+}
+
+export interface StreamFileRequest {
+  siteUrl: string;
+  itemId: string;
+  /** SharePoint UniqueId (from the eTag) for the classic-REST fallback. */
+  uniqueId?: string;
+  maxBytes: number;
+}
+
+export type StreamFileResult =
+  | { ok: true; bytes: number; contentType: string | undefined }
+  | { ok: false; reason: 'tooLarge' | 'notFound' | 'failed'; status?: number };
+
+/** Read a whole (small) file into memory through `streamFile`; undefined when it was not read. */
+export async function readFileBytes(
+  client: TeamsWebClient,
+  request: StreamFileRequest,
+): Promise<Uint8Array | undefined> {
+  const parts: Uint8Array[] = [];
+  const r = await client.streamFile(request, (chunk) => {
+    parts.push(chunk);
+    return Promise.resolve();
+  });
+  return r.ok ? new Uint8Array(Buffer.concat(parts)) : undefined;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -153,6 +188,10 @@ interface PwFrame {
 }
 interface PwPage {
   url(): string;
+  waitForLoadState(
+    state?: 'load' | 'domcontentloaded',
+    options?: { timeout?: number },
+  ): Promise<void>;
   goto(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<unknown>;
   evaluate(expression: string): Promise<unknown>;
   waitForTimeout(ms: number): Promise<void>;
@@ -385,6 +424,14 @@ export class PlaywrightTeamsClient implements TeamsWebClient {
     const origin = new URL(siteUrl).origin;
     if (this.sharepoint && !this.sharepoint.isClosed() && this.sharepoint.url().startsWith(origin))
       return this.sharepoint;
+    // A download session starts on the site itself (withClient `url`): use that page.
+    if (!this.sharepoint && this.page.url().startsWith(origin)) {
+      this.sharepoint = this.page;
+      await this.page
+        .waitForLoadState('domcontentloaded', { timeout: 60_000 })
+        .catch(() => undefined);
+      return this.page;
+    }
     if (!this.sharepoint || this.sharepoint.isClosed()) {
       this.sharepoint = await this.context.newPage();
       // Data only: skip images, fonts and media on the SharePoint page.
@@ -441,21 +488,59 @@ export class PlaywrightTeamsClient implements TeamsWebClient {
     };
   }
 
-  async downloadFile(
-    siteUrl: string,
-    itemId: string,
-    maxBytes: number,
-  ): Promise<Uint8Array | undefined> {
-    const page = await this.sharepointPage(siteUrl);
-    const r = (await page.evaluate(call(DOWNLOAD_FILE, { siteUrl, itemId, maxBytes }))) as {
-      base64?: string;
+  async streamFile(
+    request: StreamFileRequest,
+    onChunk: (chunk: Uint8Array) => Promise<void>,
+  ): Promise<StreamFileResult> {
+    const page = await this.sharepointPage(request.siteUrl);
+    const key = randomBytes(12).toString('hex');
+    const opened = (await page.evaluate(
+      call(DOWNLOAD_OPEN, {
+        siteUrl: request.siteUrl,
+        itemId: request.itemId,
+        uniqueId: request.uniqueId ?? null,
+        maxBytes: request.maxBytes,
+        key,
+      }),
+    )) as {
+      ok?: boolean;
       error?: string;
+      status?: number;
+      retryAfter?: string | null;
+      contentType?: string;
     };
-    if (!r.base64) {
-      this.logger.debug('file not downloaded', { reason: r.error });
-      return undefined;
+    if (!opened.ok) {
+      if (opened.error === 'too large') return { ok: false, reason: 'tooLarge' };
+      const status = opened.status ?? 0;
+      if (status === 429 || status === 503) {
+        const sec = Number(opened.retryAfter ?? '60');
+        throw new RateLimitedError('SharePoint is throttling', {
+          retryAfterMs: (Number.isFinite(sec) ? sec : 60) * 1000,
+        });
+      }
+      if (status === 401) throw new AuthRequiredError('SharePoint answered 401');
+      return { ok: false, reason: status === 404 ? 'notFound' : 'failed', status };
     }
-    return new Uint8Array(Buffer.from(r.base64, 'base64'));
+    let bytes = 0;
+    try {
+      for (;;) {
+        const r = (await page.evaluate(call(DOWNLOAD_READ, { key, maxChunk: 1024 * 1024 }))) as {
+          base64?: string;
+          done?: boolean;
+          error?: string;
+        };
+        if (r.error === 'too large') return { ok: false, reason: 'tooLarge' };
+        if (r.error || r.base64 === undefined) return { ok: false, reason: 'failed' };
+        const chunk = Buffer.from(r.base64, 'base64');
+        bytes += chunk.byteLength;
+        if (bytes > request.maxBytes) return { ok: false, reason: 'tooLarge' };
+        if (chunk.byteLength > 0) await onChunk(new Uint8Array(chunk));
+        if (r.done) break;
+      }
+    } finally {
+      await page.evaluate(call(DOWNLOAD_CLOSE, { key })).catch(() => undefined);
+    }
+    return { ok: true, bytes, contentType: opened.contentType || undefined };
   }
 
   async close(): Promise<void> {

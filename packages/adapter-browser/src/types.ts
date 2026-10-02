@@ -29,7 +29,10 @@ export interface PageLike {
   url(): string;
   title(): Promise<string>;
   content(): Promise<string>;
-  goto(url: string, options?: { waitUntil?: LoadState; timeout?: number }): Promise<unknown>;
+  goto(
+    url: string,
+    options?: { waitUntil?: LoadState | 'commit'; timeout?: number },
+  ): Promise<unknown>;
   locator(selector: string): LocatorLike;
   waitForLoadState(state?: LoadState, options?: { timeout?: number }): Promise<void>;
   isClosed(): boolean;

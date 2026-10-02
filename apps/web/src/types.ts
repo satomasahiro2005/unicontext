@@ -5,6 +5,7 @@
 export type {
   AnnouncementReadResponse,
   OpenAnnouncementsReport,
+  DownloadFilesResponse,
   AdditionResponse,
   AdditionsResponse,
   AdditionView,

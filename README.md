@@ -86,6 +86,8 @@ UniContext is an MCP server with high-level tools (`get_today`, `get_week`, `get
 
 `open_announcement` (and `unicontext announcements open <id…>` / `--unread-all`, or the button on a notice in the Web UI) fetches the body of LiveCampusU notices that are unread there. Opening one marks it read in LiveCampusU, which cannot be undone, so the sync never does it and the tool asks for the user's consent; UniContext keeps the notice unread until you read it in UniContext (`unicontext announcements read <id>`).
 
+`download_course_file` (and `unicontext files download <document id | course/folder/file…>`, or the ダウンロード button on a file in a course's file list) downloads a class file from the Teams/SharePoint library to this computer, read-only at the source, extracts its text (PDF, Word, PowerPoint, text, Markdown) and indexes it, so `search` and ChatGPT can answer from the file's contents. Locally the tool returns the path and an excerpt with `[p.N]` / `[スライド N]` markers; on the remote surface it returns the excerpt and, on request, a ten-minute download link that only the calling OAuth client can use. An opt-in mirror keeps a copy of the linked class teams' files under `~/University/Teams` (`unicontext files mirror`; see [docs/connectors/teams-web.md](docs/connectors/teams-web.md#downloads-and-the-mirror)).
+
 `correct_fact` is propose-only. It creates a pending proposal; you approve it with `unicontext confirm <id>` or in the Web UI (Settings). There is no tool for submitting assignments, changing enrolment or touching grades.
 
 Record tools let an AI client write what it heard in a lecture recording (ChatGPT Record) into UniContext's own database, never to a university system:

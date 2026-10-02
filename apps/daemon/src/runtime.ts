@@ -69,6 +69,8 @@ export interface Runtime {
   config: UniContextConfig;
   profile: UniversityProfile | undefined;
   paths: DataPaths;
+  /** Downloaded class files (on-demand cache, indexes of the mirror): `<data dir>/files`. */
+  filesDir: string;
   secrets: SecretStore;
   logger: Logger;
   dev: boolean;
@@ -275,6 +277,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
     config,
     profile,
     paths,
+    filesDir: path.join(paths.root, 'files'),
     secrets,
     logger,
     dev,

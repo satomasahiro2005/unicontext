@@ -1,6 +1,14 @@
+import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { Capability, HealthStatus } from '@unicontext/canonical-model';
 import type {
   AuthResult,
+  DownloadableFile,
+  FileDownloadAdapter,
+  FileDownloadOutcome,
+  FileDownloadRequest,
+  FileDownloadSettings,
   InteractiveAuthAdapter,
   InteractiveLoginOptions,
   RawDeletion,
@@ -17,24 +25,29 @@ import {
   RateLimitedError,
   zonedParts,
 } from '@unicontext/core';
-import type {
-  ClientConversations,
-  ConversationRow,
-  ReplyChainRow,
-  TeamsWebClient,
+import {
+  type ClientConversations,
+  type ConversationRow,
+  readFileBytes,
+  type ReplyChainRow,
+  type StreamFileResult,
+  type TeamsWebClient,
 } from './client.js';
 import type { TeamsWebConfig } from './config.js';
 import { PRODUCT } from './metadata.js';
 import {
   ASSIGNMENTS_BOT_MRI,
   decodeAssignmentCard,
+  driveFolder,
   extensionOf,
   folderNameOf,
   jsonList,
   scrubSecrets,
   toIso,
   truthy,
+  uniqueIdFromEtag,
 } from './parse.js';
+import { DriveItemPayloadSchema } from './schemas.js';
 
 export const CAPABILITIES: Capability[] = [
   'courses',
@@ -264,6 +277,8 @@ export function planChannels(
 
 export type WithClient = <T>(
   fn: (client: TeamsWebClient) => Promise<T>,
+  /** `url`: start on this page (a SharePoint site) instead of booting the Teams client. */
+  options?: { url?: string },
 ) => Promise<{ result: T } | { auth: AuthResult }>;
 
 export interface TeamsWebAdapterOptions {
@@ -300,8 +315,10 @@ interface RunOutput {
  * §6): the client's own cache after it loaded each channel, the Assignments responses the client
  * received, and SharePoint's documented drive API from a page on the team site. Read-only.
  */
-export class TeamsWebAdapter implements InteractiveAuthAdapter {
+export class TeamsWebAdapter implements InteractiveAuthAdapter, FileDownloadAdapter {
   readonly id: string;
+  readonly fileSourceTypes = ['teamsweb.driveItem'] as const;
+  readonly fileTextSourceTypes = ['teamsweb.fileText'] as const;
   readonly version = '1.0.0';
   private healthState: HealthStatus;
   lastRunCounts: Record<string, number> = {};
@@ -650,10 +667,9 @@ export class TeamsWebAdapter implements InteractiveAuthAdapter {
           const key = `${team.groupId}/${id}`;
           if (item.deleted) {
             deletions.push({ sourceType: 'teamsweb.driveItem', externalId: key });
-            if (state.extracted[key]) {
-              deletions.push({ sourceType: 'teamsweb.fileText', externalId: key });
-              delete state.extracted[key];
-            }
+            // Text may also come from an on-demand download or the mirror: always drop it.
+            deletions.push({ sourceType: 'teamsweb.fileText', externalId: key });
+            delete state.extracted[key];
             counts.filesDeleted = (counts.filesDeleted ?? 0) + 1;
             continue;
           }
@@ -747,7 +763,11 @@ export class TeamsWebAdapter implements InteractiveAuthAdapter {
       const key = `${job.groupId}/${job.itemId}`;
       state.extractQueue = state.extractQueue.filter((q) => q !== job);
       try {
-        const data = await client.downloadFile(job.siteUrl, job.itemId, cfg.maxExtractBytes);
+        const data = await readFileBytes(client, {
+          siteUrl: job.siteUrl,
+          itemId: job.itemId,
+          maxBytes: cfg.maxExtractBytes,
+        });
         state.extracted[key] = job.version;
         if (!data) continue;
         const content = await extract(data, extensionOf(job.name));
@@ -771,6 +791,249 @@ export class TeamsWebAdapter implements InteractiveAuthAdapter {
       await this.pause(1000);
     }
   }
+
+  // -------------------------------------------------------------------------------------------
+  // On-demand downloads and the mirror (FileDownloadAdapter)
+
+  fileSettings(): FileDownloadSettings {
+    const cfg = this.options.config;
+    const mb = (n: number): number => Math.round(n * 1024 * 1024);
+    return {
+      maxDownloadBytes: mb(cfg.files.maxDownloadMB),
+      mirror: {
+        enabled: cfg.mirror.enabled,
+        root: expandHome(cfg.mirror.root),
+        courses: cfg.mirror.courses,
+        maxFileBytes: mb(cfg.mirror.maxFileMB),
+        maxFilesPerPass: cfg.mirror.maxFilesPerPass,
+        trashRetentionDays: cfg.mirror.trashRetentionDays,
+      },
+    };
+  }
+
+  describeFile(item: {
+    sourceType: string;
+    externalId: string;
+    payload: unknown;
+  }): DownloadableFile | undefined {
+    if (item.sourceType !== 'teamsweb.driveItem') return undefined;
+    const r = DriveItemPayloadSchema.safeParse(item.payload);
+    if (!r.success) return undefined;
+    const p = r.data;
+    const it = p.item;
+    if (it.folder || !it.file || it.deleted || !it.name || !it.id) return undefined;
+    return {
+      externalId: item.externalId,
+      name: it.name,
+      container: p.teamName,
+      containerId: p.teamGroupId,
+      isClass: p.spaceType === 'class',
+      folder: driveFolder(it.parentReference?.path),
+      version: versionOf(it),
+      sizeBytes: typeof it.size === 'number' ? it.size : undefined,
+      modifiedAt: str(it.lastModifiedDateTime),
+      mimeType: str(it.file.mimeType),
+    };
+  }
+
+  /**
+   * Download files into local paths: same-origin GETs from a page on the team site, streamed to
+   * disk chunk by chunk, one file at a time with a pause in between. Nothing at SharePoint
+   * changes. Text of supported formats is extracted afterwards (browser closed) and returned as
+   * `teamsweb.fileText` items.
+   */
+  async downloadFiles(
+    requests: readonly FileDownloadRequest[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ results: FileDownloadOutcome[]; items: RawItem[]; warnings: string[] }> {
+    const cfg = this.options.config.files;
+    const results = new Map<string, FileDownloadOutcome>();
+    const items: RawItem[] = [];
+    const warnings: string[] = [];
+    const jobs: { req: FileDownloadRequest; p: ParsedDownload }[] = [];
+    for (const req of requests) {
+      const p = parseDownload(req.payload);
+      if (!p) {
+        results.set(req.externalId, { externalId: req.externalId, status: 'notFound' });
+        continue;
+      }
+      if (!req.extractOnly && p.size !== undefined && p.size > req.maxBytes) {
+        results.set(req.externalId, {
+          externalId: req.externalId,
+          status: 'tooLarge',
+          bytes: p.size,
+          version: p.version,
+        });
+        continue;
+      }
+      jobs.push({ req, p });
+    }
+
+    const downloads = jobs.filter((j) => !j.req.extractOnly);
+    const first = downloads[0];
+    if (first) {
+      let started = false;
+      const session = () =>
+        this.options.withClient(
+          async (client) => {
+            started = true;
+            await this.downloadAll(client, downloads, results, warnings, options.signal);
+          },
+          { url: first.p.siteUrl },
+        );
+      let out;
+      try {
+        out = await session();
+      } catch (e) {
+        // A cold site sometimes stalls in its sign-in redirects: try the session once more.
+        if (started || e instanceof AuthRequiredError || !/timeout/i.test(errorMessage(e))) throw e;
+        this.options.logger.info('teams-web: SharePoint did not open in time, retrying once');
+        await this.pause(3000);
+        out = await session();
+      }
+      if ('auth' in out)
+        throw new AuthRequiredError(out.auth.message ?? 'Microsoft sign-in required');
+    }
+
+    // Text extraction after the browser is closed (one file in memory at a time).
+    const extract = this.options.extract ?? defaultExtract;
+    for (const { req, p } of jobs) {
+      const prev = results.get(req.externalId);
+      if (!req.extractOnly && prev?.status !== 'downloaded') continue;
+      const outcome: FileDownloadOutcome = prev ?? {
+        externalId: req.externalId,
+        status: 'extracted',
+        version: p.version,
+      };
+      const ext = extensionOf(p.name);
+      if (req.extract && cfg.extractExtensions.includes(ext)) {
+        try {
+          const size = (await stat(req.targetPath)).size;
+          if (size <= cfg.maxExtractBytes) {
+            const content = await extract(new Uint8Array(await readFile(req.targetPath)), ext);
+            if (content.text.trim()) {
+              items.push({
+                sourceType: 'teamsweb.fileText',
+                externalId: req.externalId,
+                payload: {
+                  teamGroupId: p.groupId,
+                  itemId: p.itemId,
+                  name: p.name,
+                  version: p.version,
+                  text: content.text,
+                  ...(content.pages?.length ? { pages: content.pages } : {}),
+                },
+              });
+              outcome.text = { chars: content.text.length, pages: content.pages?.length ?? 0 };
+            }
+          } else warnings.push(`${p.name}: too large for text extraction`);
+        } catch (e) {
+          warnings.push(`text of ${p.name}: ${errorMessage(e)}`);
+          if (req.extractOnly) outcome.error = errorMessage(e);
+        }
+      }
+      results.set(req.externalId, outcome);
+    }
+    return {
+      results: requests.map(
+        (r) =>
+          results.get(r.externalId) ?? {
+            externalId: r.externalId,
+            status: 'failed',
+            error: 'not processed',
+          },
+      ),
+      items,
+      warnings,
+    };
+  }
+
+  private async downloadAll(
+    client: TeamsWebClient,
+    downloads: { req: FileDownloadRequest; p: ParsedDownload }[],
+    results: Map<string, FileDownloadOutcome>,
+    warnings: string[],
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const cfg = this.options.config.files;
+    for (const [i, { req, p }] of downloads.entries()) {
+      if (signal?.aborted) {
+        results.set(req.externalId, {
+          externalId: req.externalId,
+          status: 'failed',
+          error: 'aborted',
+        });
+        continue;
+      }
+      try {
+        results.set(req.externalId, await this.downloadOne(client, req, p));
+      } catch (e) {
+        if (e instanceof AuthRequiredError) throw e;
+        results.set(req.externalId, {
+          externalId: req.externalId,
+          status: 'failed',
+          error: errorMessage(e),
+        });
+        if (e instanceof RateLimitedError) {
+          warnings.push('SharePoint is throttling; the remaining files were not downloaded');
+          for (const rest of downloads.slice(i + 1))
+            results.set(rest.req.externalId, {
+              externalId: rest.req.externalId,
+              status: 'failed',
+              error: 'throttled',
+            });
+          break;
+        }
+      }
+      if (i < downloads.length - 1) await this.pause(cfg.downloadDelayMs);
+    }
+  }
+
+  private async downloadOne(
+    client: TeamsWebClient,
+    req: FileDownloadRequest,
+    p: ParsedDownload,
+  ): Promise<FileDownloadOutcome> {
+    await mkdir(dirname(req.targetPath), { recursive: true });
+    const part = `${req.targetPath}.part`;
+    const handle = await open(part, 'w');
+    let r: StreamFileResult;
+    try {
+      r = await client.streamFile(
+        {
+          siteUrl: p.siteUrl,
+          itemId: p.itemId,
+          ...(p.uniqueId ? { uniqueId: p.uniqueId } : {}),
+          maxBytes: req.maxBytes,
+        },
+        async (chunk) => {
+          await handle.write(chunk);
+        },
+      );
+    } catch (e) {
+      await handle.close();
+      await rm(part, { force: true });
+      throw e;
+    }
+    await handle.close();
+    if (!r.ok) {
+      await rm(part, { force: true });
+      return {
+        externalId: req.externalId,
+        status: r.reason,
+        version: p.version,
+        ...(r.status ? { error: `HTTP ${r.status}` } : {}),
+      };
+    }
+    await rename(part, req.targetPath);
+    return {
+      externalId: req.externalId,
+      status: 'downloaded',
+      bytes: r.bytes,
+      version: p.version,
+      ...(r.contentType ? { contentType: r.contentType } : {}),
+    };
+  }
 }
 
 async function defaultExtract(
@@ -789,4 +1052,45 @@ async function defaultExtract(
       })),
     };
   return { text: c.text ?? '' };
+}
+
+interface ParsedDownload {
+  groupId: string;
+  itemId: string;
+  siteUrl: string;
+  name: string;
+  version: string;
+  size: number | undefined;
+  uniqueId: string | undefined;
+}
+
+function versionOf(it: {
+  cTag?: string | null;
+  eTag?: string | null;
+  lastModifiedDateTime?: string | null;
+}): string {
+  return str(it.cTag) ?? str(it.eTag) ?? str(it.lastModifiedDateTime) ?? '';
+}
+
+function parseDownload(payload: unknown): ParsedDownload | undefined {
+  const r = DriveItemPayloadSchema.safeParse(payload);
+  if (!r.success) return undefined;
+  const it = r.data.item;
+  if (it.folder || !it.file || it.deleted || !it.id || !it.name) return undefined;
+  return {
+    groupId: r.data.teamGroupId,
+    itemId: it.id,
+    siteUrl: r.data.siteUrl,
+    name: it.name,
+    version: versionOf(it),
+    size: typeof it.size === 'number' ? it.size : undefined,
+    uniqueId: uniqueIdFromEtag(it.eTag),
+  };
+}
+
+/** `~` / `~/…` → the home directory. */
+export function expandHome(path: string): string {
+  if (path === '~') return homedir();
+  if (/^~[\\/]/.test(path)) return join(homedir(), path.slice(2));
+  return path;
 }

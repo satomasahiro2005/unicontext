@@ -19,7 +19,7 @@ import { acquireLock, type DaemonLock } from './lock.js';
 import { createRestServer, defaultWebDir } from './rest.js';
 import { createRemoteServer } from './remote/server.js';
 import { buildLogger, createRuntime, type Runtime, type RuntimeOptions } from './runtime.js';
-import { startWatchers } from './wiring.js';
+import { startFileMirror, startWatchers } from './wiring.js';
 import { loadOrCreateApiToken } from './token.js';
 import { VERSION } from './version.js';
 import { resolveDataPaths, dataPathsFromRoot, type DataPaths } from '@unicontext/core';
@@ -144,6 +144,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
   let remote: RunningRemote | undefined;
   let notifications: NotificationService | undefined;
   let watchers: WatchHandle[] = [];
+  let fileMirror: { stop(): Promise<void> } | undefined;
   try {
     runtime = await createRuntime({
       ...options,
@@ -167,6 +168,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
           notifications?.stop();
           rt.uc.scheduler.stop();
           await Promise.allSettled(watchers.map((w) => w.close()));
+          await fileMirror?.stop();
           await remote?.app.close();
           await app?.close();
           // A scheduled sync may still be writing; closing the database under it would turn its
@@ -266,6 +268,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
     if (background) {
       rt.uc.scheduler.start();
       watchers = await startWatchers(rt.uc, logger);
+      fileMirror = startFileMirror(rt.uc, rt.filesDir, logger);
     }
 
     if (options.handleSignals) {

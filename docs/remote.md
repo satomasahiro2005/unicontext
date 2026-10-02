@@ -14,8 +14,9 @@ ChatGPT / claude.ai ──https──▶ Cloudflare ──tunnel──▶ cloudf
                               unicontextd remote listener 127.0.0.1:17879
                               ├─ /.well-known/*  OAuth metadata (RFC 9728, RFC 8414)
                               ├─ /register /authorize /token /revoke   OAuth 2.1 AS
-                              └─ /mcp            MCP (streamable HTTP): read tools,
-                                                 + record tools with unicontext.write
+                              ├─ /mcp            MCP (streamable HTTP): read tools,
+                              │                  + record tools with unicontext.write
+                              └─ /files/<token>  10-minute links to downloaded class files
 
 unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in the tunnel
 ```
@@ -30,7 +31,15 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
   `add_note`, `add_task`, `list_my_additions` and `retract_addition` (`readOnlyHint: false`,
   `destructiveHint` only on `retract_addition`), and `open_announcement` (fetches the body of
   LiveCampusU notices that are unread there; this marks them read in LiveCampusU and cannot be
-  undone, so it is `destructiveHint: true`, `openWorldHint: true` and ChatGPT asks first). The propose-only tools (`correct_fact`,
+  undone, so it is `destructiveHint: true`, `openWorldHint: true` and ChatGPT asks first).
+  `download_course_file` (read-only) fetches a class file from Teams/SharePoint into the local cache
+  and returns its extracted text (truncated at `maxChars`, with `[p.N]` / `[スライド N]` markers),
+  never a local path. With `link: true` it also returns a link `https://<host>/files/<token>` to the
+  cached file: a random 256-bit token, valid about 10 minutes, kept in memory only (a restart drops
+  it), bound to the calling OAuth client — a request that carries another client's bearer token is
+  refused (403); the link itself is the capability, since ChatGPT or the user's browser fetch it
+  without the MCP token. Minting (`file_link`) and every fetch (`file_fetch`, ok/status, bytes) are
+  audited with a hash tag of the token, never the token. The propose-only tools (`correct_fact`,
   `propose_pace_slot`) are **never registered** on this surface, so a call to them fails as an
   unknown tool. `get_source` returns the citation and the facts it supports, but no raw source
   payloads.

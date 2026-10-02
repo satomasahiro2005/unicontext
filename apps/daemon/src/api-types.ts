@@ -23,11 +23,16 @@ import type {
   DeadlineContext,
   DeadlineItem,
   DiscussionItem,
+  DownloadedFileResult,
+  DownloadFilesReport,
   GradeAttempt,
   GradeCourse,
   GradeLabelCount,
   GradePeriodTotals,
   GradeReport,
+  MirrorReport,
+  MirrorSourceReport,
+  MirrorStatusItem,
   CreditRequirementsView,
   LectureBundle,
   PaceCourseItem,
@@ -195,6 +200,18 @@ export interface AnnouncementResponse {
  * them 未読 until they are read in UniContext (POST /api/v1/announcements/:id/read).
  */
 export type { OpenAnnouncementResult, OpenAnnouncementsReport } from '@unicontext/context-engine';
+export type { DownloadedFileResult, MirrorSourceReport, MirrorStatusItem };
+/** POST /api/v1/files/download: document ids, material ids or "<course>/<path>". */
+export interface DownloadFilesBody {
+  ids: string[];
+  /** Extract text for search (default true). */
+  extract?: boolean;
+}
+export type DownloadFilesResponse = DownloadFilesReport;
+export type MirrorResponse = MirrorReport;
+export interface MirrorStatusResponse {
+  sources: MirrorStatusItem[];
+}
 export interface OpenAnnouncementsBody {
   ids: string[];
 }
