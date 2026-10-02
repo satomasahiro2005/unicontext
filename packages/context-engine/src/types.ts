@@ -165,6 +165,57 @@ export interface MaterialItem extends Cited {
   documentId: string | undefined;
 }
 
+/** One post of a thread-based platform (Teams channel, forum): an announcement or a message. */
+export interface DiscussionItem extends Cited {
+  id: string;
+  kind: 'announcement' | 'message';
+  /** Post subject / announcement title, when there is one. */
+  title: string | undefined;
+  /** Plain text trimmed to 400 characters. */
+  body: string;
+  author: string | undefined;
+  authorRole: string | undefined;
+  sentAt: string | undefined;
+  /** Thread (channel) title. */
+  channel: string | undefined;
+  platform: string | undefined;
+  url: string | undefined;
+  isReply: boolean;
+  attachments: { name: string; url: string | undefined }[];
+}
+
+/** A file of the course's shared library (Teams SharePoint), with its folder. */
+export interface CourseFileItem extends Cited {
+  id: string;
+  title: string;
+  /** Library-relative path, e.g. "/00_講義資料/week1.pdf". */
+  path: string | undefined;
+  /** Folder without leading or trailing slash; '' = library root. */
+  folder: string;
+  channel: string | undefined;
+  sizeBytes: number | undefined;
+  modifiedAt: string | undefined;
+  modifiedBy: string | undefined;
+  url: string | undefined;
+  mimeType: string | undefined;
+  /** Kind of the material that points at this file, if any. */
+  materialKind: string | undefined;
+}
+
+/** An assignment of a course with the student's submission state (all, not only upcoming). */
+export interface CourseAssignmentItem extends Cited {
+  id: string;
+  title: string;
+  dueAt: string | undefined;
+  availableFrom: string | undefined;
+  points: number | undefined;
+  /** Status of the submission entity for this assignment; undefined when there is none. */
+  status: 'not_submitted' | 'submitted' | 'late' | 'graded' | 'returned' | undefined;
+  submittedAt: string | undefined;
+  url: string | undefined;
+  sourceId: string | undefined;
+}
+
 export interface ConflictItem extends Cited {
   id: string;
   subject: string;
@@ -336,9 +387,40 @@ export interface CourseContext extends BundleBase<'course'> {
   deadlines: DeadlineItem[];
   announcements: AnnouncementItem[];
   materials: MaterialItem[];
+  /** Newest 20 posts (announcements and messages) of thread-based platforms for the course. */
+  discussion: DiscussionItem[];
+  /** Files of the course (folder, then title), at most 200; `filesTotal` is the full count. */
+  files: CourseFileItem[];
+  filesTotal: number;
+  /** All assignments of the course, newest due first. */
+  assignments: CourseAssignmentItem[];
   changes: ChangeItem[];
   conflicts: ConflictItem[];
   pendingLinks: IdentityLink[];
+}
+
+export interface TeamsActivityContext extends BundleBase<'teams-activity'> {
+  since: string;
+  posts: DiscussionItem[];
+  files: CourseFileItem[];
+  assignments: CourseAssignmentItem[];
+  conflicts: ConflictItem[];
+}
+
+export interface CourseFolderItem {
+  name: string;
+  /** Folder path without leading or trailing slash. */
+  path: string;
+  /** Files in the folder and everything below it. */
+  fileCount: number;
+}
+
+export interface CourseFilesContext extends BundleBase<'course-files'> {
+  course: CourseRef;
+  /** Normalized folder path ('' = library root). */
+  path: string;
+  folders: CourseFolderItem[];
+  files: CourseFileItem[];
 }
 
 export interface DeadlineContext extends BundleBase<'deadline'> {

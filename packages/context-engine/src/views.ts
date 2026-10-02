@@ -7,8 +7,10 @@ import type {
   ClassPreparationContext,
   ClassReviewContext,
   CourseContext,
+  CourseFilesContext,
   DeadlineContext,
   ExamPreparationContext,
+  TeamsActivityContext,
   TodayContext,
   TomorrowContext,
   WeekContext,
@@ -50,6 +52,16 @@ export const CONTEXT_VIEWS = [
     description: '試験準備（日時・教室・範囲・授業中の言及）',
   },
   { name: 'admin', uri: 'context://admin', description: '大学からのお知らせ、接続状態、確認待ち' },
+  {
+    name: 'teams-activity',
+    uri: 'context://teams-activity',
+    description: 'Teams の最近の投稿・ファイル・課題（since 以降）',
+  },
+  {
+    name: 'course-files',
+    uri: 'context://course-files/{courseOfferingId}',
+    description: '1科目のファイルをフォルダごとに',
+  },
 ] as const;
 
 export type ContextViewName = (typeof CONTEXT_VIEWS)[number]['name'];
@@ -65,6 +77,8 @@ export interface ContextViewResultMap {
   'class-review': ClassReviewContext;
   'exam-preparation': ExamPreparationContext;
   admin: AdminContext;
+  'teams-activity': TeamsActivityContext;
+  'course-files': CourseFilesContext;
 }
 
 /** Parameters accepted by each view (validated; usable as MCP tool input schemas). */
@@ -97,6 +111,14 @@ export const ContextViewParams = {
     .object({ examId: z.string().optional(), courseOfferingId: z.string().optional() })
     .strict(),
   admin: z.object({}).strict(),
+  'teams-activity': z
+    .object({
+      since: z.string().optional(),
+      courseOfferingId: z.string().optional(),
+      limit: z.number().int().positive().max(500).optional(),
+    })
+    .strict(),
+  'course-files': z.object({ courseOfferingId: z.string(), path: z.string().optional() }).strict(),
 } satisfies Record<ContextViewName, z.ZodType>;
 
 export function isContextViewName(name: string): name is ContextViewName {
@@ -160,6 +182,18 @@ export function getView<N extends ContextViewName>(
         }),
       ),
     admin: () => engine.admin(),
+    'teams-activity': () =>
+      engine.teamsActivity(
+        opt({
+          since: p.since as string | undefined,
+          courseOfferingId: p.courseOfferingId as string | undefined,
+          limit: p.limit as number | undefined,
+        }),
+      ),
+    'course-files': () =>
+      engine.courseFiles(
+        opt({ courseOfferingId: String(p.courseOfferingId), path: p.path as string | undefined }),
+      ),
   };
   return results[name]();
 }

@@ -140,6 +140,22 @@ export function formatDateJa(
   return `${p.month}月${p.day}日(${WEEKDAYS_JA[p.weekday]})`;
 }
 
+/** `2026/10/10 23:59` (instants) or `2026/10/10` (plain dates); the year is always shown. */
+export function formatDateTimeYear(
+  input: string | number | Date | undefined,
+  timeZone: string = DEFAULT_TIMEZONE,
+): string {
+  if (input === undefined) return '';
+  const p = dayParts(input, timeZone);
+  if (!p) return '';
+  const date = `${p.year}/${p.month}/${p.day}`;
+  if (typeof input === 'string' && isPlainDate(input)) return date;
+  const d = toDate(input);
+  if (!d) return '';
+  const t = zonedParts(d, timeZone);
+  return `${date} ${pad2(t.hour)}:${pad2(t.minute)}`;
+}
+
 /** `月` for 1 (0 = Sunday). */
 export function weekdayJa(dayOfWeek: number): string {
   return WEEKDAYS_JA[((dayOfWeek % 7) + 7) % 7] ?? '';

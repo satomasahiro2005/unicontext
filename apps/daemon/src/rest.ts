@@ -46,6 +46,7 @@ import type {
   AssignmentsResponse,
   ConflictsResponse,
   CoursesResponse,
+  CourseFilesResponse,
   GradesResponse,
   HealthResponse,
   NotificationsResponse,
@@ -59,6 +60,7 @@ import type {
   SourcesResponse,
   SyncJob,
   SyncJobResponse,
+  TeamsActivityResponse,
 } from './api-types.js';
 import { listCourses } from './courses.js';
 import type { Runtime } from './runtime.js';
@@ -374,6 +376,29 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
   app.get<{ Params: { id: string } }>('/api/v1/courses/:id', async (request) =>
     getView(uc.context, 'course', { courseOfferingId: request.params.id }),
   );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/v1/courses/:id/files',
+    async (request): Promise<CourseFilesResponse> =>
+      getView(
+        uc.context,
+        'course-files',
+        opt({ courseOfferingId: request.params.id, path: q(request).path }),
+      ),
+  );
+
+  app.get('/api/v1/teams-activity', async (request): Promise<TeamsActivityResponse> => {
+    const query = q(request);
+    return getView(
+      uc.context,
+      'teams-activity',
+      opt({
+        since: query.since,
+        courseOfferingId: query.course,
+        limit: intParam(query.limit, 'limit'),
+      }),
+    );
+  });
 
   app.get('/api/v1/pace', async (): Promise<PaceResponse> => uc.context.paceOverview());
 

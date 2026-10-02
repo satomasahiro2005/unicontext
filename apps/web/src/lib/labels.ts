@@ -161,6 +161,26 @@ export function taskStatusTone(status: string): Tone {
   return 'muted';
 }
 
+const SUBMISSION_STATUS_LABELS: Record<string, string> = {
+  not_submitted: '未提出',
+  submitted: '提出済み',
+  late: '遅れて提出',
+  graded: '採点済み',
+  returned: '返却済み',
+};
+
+/** Status of the student's submission entity (Teams assignments). */
+export function submissionStatusLabel(status: string): string {
+  return SUBMISSION_STATUS_LABELS[status] ?? status;
+}
+
+export function submissionStatusTone(status: string): Tone {
+  if (status === 'submitted' || status === 'graded' || status === 'returned') return 'ok';
+  if (status === 'late') return 'warn';
+  if (status === 'not_submitted') return 'info';
+  return 'muted';
+}
+
 const IMPORTANCE_LABELS: Record<string, string> = {
   critical: '緊急',
   high: '重要',
