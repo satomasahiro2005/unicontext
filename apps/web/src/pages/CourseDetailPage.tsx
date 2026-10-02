@@ -14,6 +14,7 @@ import { ConflictBanner } from '../components/ConflictBanner';
 import { ConflictSummary } from '../components/ConflictCard';
 import { PaceSection } from '../components/PaceSection';
 import { PendingLinks } from '../components/PendingLinks';
+import { AssignmentsSection, DiscussionSection, FilesSection } from '../components/TeamsSections';
 import { Async, Badge, Empty, PageHeader, Section } from '../components/ui';
 import { useApi, usePageTitle } from '../hooks';
 import { scheduleText } from '../lib/calendar';
@@ -126,6 +127,8 @@ function CourseBody({ course, onChanged }: { course: CourseContext; onChanged: (
         )}
       </Section>
 
+      <FilesSection items={course.files} total={course.filesTotal} />
+
       <Section title="お知らせ" count={course.announcements.length}>
         {course.announcements.length === 0 ? (
           <Empty />
@@ -138,6 +141,8 @@ function CourseBody({ course, onChanged }: { course: CourseContext; onChanged: (
         )}
       </Section>
 
+      <DiscussionSection items={course.discussion} />
+
       <Section title="締切" count={course.deadlines.length}>
         {course.deadlines.length === 0 ? (
           <Empty />
@@ -149,6 +154,8 @@ function CourseBody({ course, onChanged }: { course: CourseContext; onChanged: (
           </div>
         )}
       </Section>
+
+      <AssignmentsSection items={course.assignments} />
 
       <Section title="変更" count={course.changes.length}>
         {course.changes.length === 0 ? (

@@ -84,3 +84,34 @@ export function formatFileSize(bytes: number): string {
   const mb = kb / 1024;
   return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)}MB`;
 }
+
+export interface FolderGroup<T> {
+  folder: string;
+  items: T[];
+}
+
+/** Groups items by `folder` in first-seen order (the engine already sorts folder then title). */
+export function groupByFolder<T extends { folder: string }>(items: readonly T[]): FolderGroup<T>[] {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const list = groups.get(item.folder);
+    if (list) list.push(item);
+    else groups.set(item.folder, [item]);
+  }
+  return [...groups].map(([folder, list]) => ({ folder, items: list }));
+}
+
+/** Groups posts by channel in first-seen order; posts without a channel go last. */
+export function groupByChannel<T extends { channel: string | undefined }>(
+  items: readonly T[],
+): { channel: string | undefined; items: T[] }[] {
+  const groups = new Map<string | undefined, T[]>();
+  for (const item of items) {
+    const list = groups.get(item.channel);
+    if (list) list.push(item);
+    else groups.set(item.channel, [item]);
+  }
+  return [...groups]
+    .map(([channel, list]) => ({ channel, items: list }))
+    .sort((a, b) => Number(a.channel === undefined) - Number(b.channel === undefined));
+}

@@ -545,6 +545,18 @@ changes, conflicts}`.
     `retake`, resolved room,
     per-source ids, upcoming classes, recent lectures, deadlines, announcements, materials,
     changes, conflicts, `pendingLinks` (suggested identity links to confirm).
+    Thread-based platforms (Teams) fill `discussion: DiscussionItem[]` (newest 20 announcements and
+    messages whose `extra.platform` is set or that sit in a thread), `files: CourseFileItem[]`
+    (documents of the course by folder then title, at most 200, `filesTotal` is the full count) and
+    `assignments: CourseAssignmentItem[]` (all assignments, newest due first, `status` from the
+    submission entity). The views are source-neutral; they only read `extra.platform`,
+    `extra.channelName`, `extra.folder`, `extra.modifiedBy`, `extra.attachments`.
+  - `teamsActivity({since?, courseOfferingId?, limit?})` → `{since, posts, files, assignments, conflicts}`
+    (view `teams-activity`; entities whose `extra.platform` starts with `teams`; default since =
+    7 days ago) and `courseFiles({courseOfferingId, path?})` → `{course, path, folders, files}` (view
+    `course-files`; `folders` are the immediate subfolders with their file counts). MCP tools
+    `get_teams_activity` / `list_course_files`, REST `GET /api/v1/teams-activity?since=&course=` and
+    `GET /api/v1/courses/:id/files?path=`.
   - `deadline({days?, courseOfferingId?})` → `{overdue, upcoming}`.
   - `changesSince({since?, courseOfferingId?})` → `{since, changes, conflicts}`.
   - `classPreparation({sessionId? | courseOfferingId?})` → `{session, preparation,

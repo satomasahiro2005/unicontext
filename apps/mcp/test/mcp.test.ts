@@ -77,6 +77,8 @@ const REQUIRED_TOOLS = [
   'get_today',
   'get_week',
   'get_course',
+  'get_teams_activity',
+  'list_course_files',
   'get_assignments',
   'get_deadlines',
   'get_recent_changes',

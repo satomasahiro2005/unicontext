@@ -53,7 +53,7 @@ beforeEach(async () => {
 afterEach(async () => uc.close());
 
 describe('context views', () => {
-  it('lists the ten built-in views with params', () => {
+  it('lists the twelve built-in views with params', () => {
     expect(CONTEXT_VIEWS.map((v) => v.name)).toEqual([
       'today',
       'tomorrow',
@@ -65,8 +65,10 @@ describe('context views', () => {
       'class-review',
       'exam-preparation',
       'admin',
+      'teams-activity',
+      'course-files',
     ]);
-    expect(Object.keys(ContextViewParams)).toHaveLength(10);
+    expect(Object.keys(ContextViewParams)).toHaveLength(12);
     expect(isContextViewName('today')).toBe(true);
     expect(isContextViewName('grades')).toBe(false);
   });

@@ -7,3 +7,4 @@ export * from './grades.js';
 export * from './additions.js';
 export * from './announcements.js';
 export * from './announcement-open.js';
+export * from './discussion.js';

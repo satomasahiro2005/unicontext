@@ -1,6 +1,7 @@
 import {
   ADDITIONS_SOURCE_ID,
   type Announcement,
+  type Assignment,
   type CanonicalEntity,
   type ChangeEvent,
   type ClassSession,
@@ -8,12 +9,16 @@ import {
   type CourseOffering,
   type Enrollment,
   entityLabel,
+  type Document,
   type Exam,
   type Importance,
   type JsonValue,
   type Lecture,
   type Material,
+  type Message,
+  type Submission,
   type Task,
+  type Thread,
 } from '@unicontext/canonical-model';
 import {
   addZonedDays,
@@ -58,6 +63,13 @@ import {
   weekStartOfDue,
 } from '@unicontext/task-engine';
 import { readAnnouncementExtra } from './announcements.js';
+import {
+  compareFiles,
+  extraString,
+  folderOfFile,
+  normalizeFolderPath,
+  readAttachments,
+} from './discussion.js';
 import type {
   AdminContext,
   AnnouncementDetail,
@@ -69,11 +81,16 @@ import type {
   ClassPreparationContext,
   ClassReviewContext,
   ConflictItem,
+  CourseAssignmentItem,
   CourseContext,
+  CourseFileItem,
+  CourseFilesContext,
+  CourseFolderItem,
   CourseRef,
   DayContext,
   DeadlineContext,
   DeadlineItem,
+  DiscussionItem,
   RecordedMarker,
   ExamPreparationContext,
   FactItem,
@@ -90,6 +107,7 @@ import type {
   SegmentItem,
   SourceStatus,
   TaskItem,
+  TeamsActivityContext,
   TodayContext,
   TomorrowContext,
   WeekContext,
@@ -122,6 +140,7 @@ export interface EnrollmentScope {
 
 const OPEN_STATUSES: Task['status'][] = ['pending', 'in_progress', 'unknown'];
 const DAY = 86_400_000;
+const COURSE_FILES_LIMIT = 200;
 
 function hms(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -681,6 +700,157 @@ export class ContextEngine {
       .map((m) => this.materialItem(m));
   }
 
+  // ---------- thread-based platforms (Teams), files, assignments ----------
+
+  private platformOf(
+    extra: Record<string, JsonValue> | undefined,
+    thread?: Thread,
+  ): string | undefined {
+    return (
+      extraString(extra, 'platform') ??
+      (thread ? (extraString(thread.extra, 'platform') ?? thread.platform) : undefined)
+    );
+  }
+
+  /** Announcements and messages of thread-based platforms for the offerings, newest first. */
+  private discussionFor(courseIds: readonly string[] | undefined): DiscussionItem[] {
+    const threads = new Map<string, Thread>(
+      this.entities.list('thread').map((t) => [t.id, t] as const),
+    );
+    const out: { at: string | undefined; item: DiscussionItem }[] = [];
+    let messages: Message[];
+    if (courseIds) {
+      const threadIds = [...threads.values()]
+        .filter((t) => t.courseOfferingId !== undefined && courseIds.includes(t.courseOfferingId))
+        .map((t) => t.id);
+      messages = [
+        ...this.entities.list('message', { where: { courseOfferingId: courseIds } }),
+        ...this.entities
+          .list('message', { where: { threadId: threadIds } })
+          .filter((m) => !m.courseOfferingId),
+      ];
+    } else messages = this.entities.list('message');
+    for (const m of messages) {
+      const thread = m.threadId ? threads.get(m.threadId) : undefined;
+      const platform = this.platformOf(m.extra, thread);
+      if (!platform && !m.threadId) continue;
+      out.push({ at: m.sentAt, item: this.messageItem(m, thread, platform) });
+    }
+    const announcements = this.entities
+      .list('announcement', courseIds ? { where: { courseOfferingId: courseIds } } : {})
+      .filter((a) => extraString(a.extra, 'platform') !== undefined);
+    for (const a of announcements) out.push({ at: a.publishedAt, item: this.postItem(a) });
+    return out
+      .sort((x, y) => (y.at ?? '').localeCompare(x.at ?? '') || x.item.id.localeCompare(y.item.id))
+      .map((x) => x.item);
+  }
+
+  private messageItem(
+    m: Message,
+    thread: Thread | undefined,
+    platform: string | undefined,
+  ): DiscussionItem {
+    return {
+      id: m.id,
+      kind: 'message',
+      title: extraString(m.extra, 'subject'),
+      body: truncate(m.body, 400),
+      author: m.authorName,
+      authorRole: m.authorRole,
+      sentAt: m.sentAt,
+      channel: thread?.title ?? extraString(m.extra, 'channelName'),
+      platform,
+      url: m.url ?? thread?.url,
+      isReply: m.extra?.isReply === true,
+      attachments: readAttachments(m.extra),
+      citations: this.citationsFor([m.id]),
+    };
+  }
+
+  private postItem(a: Announcement): DiscussionItem {
+    return {
+      id: a.id,
+      kind: 'announcement',
+      title: a.title,
+      body: truncate(a.body, 400),
+      author: a.authorName,
+      authorRole: undefined,
+      sentAt: a.publishedAt,
+      channel: extraString(a.extra, 'channelName'),
+      platform: extraString(a.extra, 'platform'),
+      url: a.url,
+      isReply: false,
+      attachments: readAttachments(a.extra),
+      citations: this.citationsFor([a.id]),
+    };
+  }
+
+  /** Documents of the offerings as file items, folder then title; no `courseIds` = every course's. */
+  private filesFor(
+    courseIds: readonly string[] | undefined,
+    filter: (d: Document) => boolean = () => true,
+  ): CourseFileItem[] {
+    const materialKinds = new Map<string, string>();
+    for (const m of this.entities.list(
+      'material',
+      courseIds ? { where: { courseOfferingId: courseIds } } : {},
+    ))
+      if (m.documentId && m.materialKind !== 'other')
+        materialKinds.set(m.documentId, m.materialKind);
+    return this.entities
+      .list('document', courseIds ? { where: { courseOfferingId: courseIds } } : {})
+      .filter((d) => d.courseOfferingId !== undefined && filter(d))
+      .map((d): CourseFileItem => ({
+        id: d.id,
+        title: d.title,
+        path: d.path,
+        folder: folderOfFile(d.extra, d.path),
+        channel: extraString(d.extra, 'channelName'),
+        sizeBytes: d.sizeBytes,
+        modifiedAt: d.modifiedAt,
+        modifiedBy: extraString(d.extra, 'modifiedBy'),
+        url: d.url,
+        mimeType: d.mimeType,
+        materialKind: materialKinds.get(d.id),
+        citations: this.citationsFor([d.id]),
+      }))
+      .sort(compareFiles);
+  }
+
+  /** Assignments of the offerings with their submission state, newest due first (undated last). */
+  private assignmentsFor(
+    courseIds: readonly string[] | undefined,
+    filter: (a: Assignment) => boolean = () => true,
+  ): CourseAssignmentItem[] {
+    const assignments = this.entities
+      .list('assignment', courseIds ? { where: { courseOfferingId: courseIds } } : {})
+      .filter(filter);
+    if (assignments.length === 0) return [];
+    const latest = new Map<string, Submission>();
+    for (const s of this.entities.list('submission', {
+      where: { assignmentId: assignments.map((a) => a.id) },
+    })) {
+      const prev = latest.get(s.assignmentId);
+      if (!prev || (s.submittedAt ?? '') > (prev.submittedAt ?? '')) latest.set(s.assignmentId, s);
+    }
+    const dueMs = (a: CourseAssignmentItem): number =>
+      a.dueAt ? Date.parse(a.dueAt) : Number.NEGATIVE_INFINITY;
+    return assignments
+      .map((a): CourseAssignmentItem => ({
+        id: a.id,
+        title: a.title,
+        dueAt: a.dueAt,
+        availableFrom: a.availableFrom,
+        points: a.points,
+        status: latest.get(a.id)?.status,
+        submittedAt: latest.get(a.id)?.submittedAt,
+        url: a.url,
+        sourceId: this.entities.meta(a.id)?.sourceId,
+        citations: this.citationsFor([a.id]),
+      }))
+      .sort((x, y) => dueMs(y) - dueMs(x) || x.title.localeCompare(y.title, 'ja'));
+  }
+
   private preparationFor(item: ClassItem): PreparationItem {
     const start = item.startsAt
       ? new Date(item.startsAt)
@@ -943,6 +1113,7 @@ export class ContextEngine {
       .slice(-3)
       .reverse()
       .map((l) => this.lectureBundle(l));
+    const files = this.filesFor(ids);
     return {
       ...this.base('course'),
       course: { id: c.id, title: c.title, courseCode: c.courseCode, linkedIds: c.linkedIds },
@@ -981,6 +1152,10 @@ export class ContextEngine {
         .slice(0, 10)
         .map((a) => this.announcementItem(a)),
       materials: this.materialsFor(ids),
+      discussion: this.discussionFor(ids).slice(0, 20),
+      files: files.slice(0, COURSE_FILES_LIMIT),
+      filesTotal: files.length,
+      assignments: this.assignmentsFor(ids),
       changes: this.changes
         .list({ since: new Date(now.getTime() - 14 * DAY).toISOString(), courseOfferingIds: ids })
         .reverse()
@@ -1023,6 +1198,83 @@ export class ContextEngine {
         .reverse()
         .map((c) => this.changeItem(c)),
       conflicts: this.openConflicts(ids),
+    };
+  }
+
+  /**
+   * Teams activity since `since` (default: 7 days ago): posts, changed files and assignments that
+   * are new, due or changed. Only entities of a `teams*` platform.
+   */
+  teamsActivity(
+    options: { since?: string; courseOfferingId?: string; limit?: number } = {},
+  ): TeamsActivityContext {
+    const since = /^\d{4}-\d{2}-\d{2}$/.test(options.since ?? '')
+      ? parseZonedDate(options.since ?? '', this.timezone).toISOString()
+      : (options.since ??
+        addZonedDays(startOfZonedDay(this.now(), this.timezone), -7, this.timezone).toISOString());
+    const sinceMs = Date.parse(since);
+    if (Number.isNaN(sinceMs))
+      throw new ValidationError(`since must be an ISO date or time: ${since}`);
+    const ids = options.courseOfferingId ? this.linkedIdsOf(options.courseOfferingId) : undefined;
+    const isTeams = (platform: string | undefined): boolean =>
+      platform?.startsWith('teams') ?? false;
+    const after = (v: string | undefined): boolean => {
+      const t = v ? Date.parse(v) : Number.NaN;
+      return !Number.isNaN(t) && t >= sinceMs;
+    };
+    const posts = this.discussionFor(ids)
+      .filter((p) => isTeams(p.platform) && after(p.sentAt))
+      .slice(0, options.limit ?? 50);
+    const files = this.filesFor(
+      ids,
+      (d) => isTeams(extraString(d.extra, 'platform')) && after(d.modifiedAt),
+    ).sort((a, b) => (b.modifiedAt ?? '').localeCompare(a.modifiedAt ?? '') || compareFiles(a, b));
+    const touched = new Set<string>();
+    for (const c of this.changes.list({ since, types: ['updated'] })) {
+      if (c.entityKind === 'assignment') touched.add(c.entityId);
+      else if (c.entityKind === 'submission') {
+        const s = this.entities.getOfKind('submission', c.entityId);
+        if (s) touched.add(s.assignmentId);
+      }
+    }
+    const assignments = this.assignmentsFor(
+      ids,
+      (a) =>
+        isTeams(extraString(a.extra, 'platform')) &&
+        (after(a.availableFrom) || after(a.dueAt) || touched.has(a.id)),
+    );
+    const subjects = new Set([...posts, ...files, ...assignments].map((x) => x.id));
+    return {
+      ...this.base('teams-activity'),
+      since,
+      posts,
+      files,
+      assignments,
+      conflicts: this.openConflicts().filter((c) => subjects.has(c.subject)),
+    };
+  }
+
+  /** The files of a course directly in a folder, plus its immediate subfolders. */
+  courseFiles(options: { courseOfferingId: string; path?: string }): CourseFilesContext {
+    const c = this.requireCourse(options.courseOfferingId);
+    const path = normalizeFolderPath(options.path);
+    const all = this.filesFor(c.linkedIds);
+    const prefix = path === '' ? '' : `${path}/`;
+    const counts = new Map<string, number>();
+    for (const f of all) {
+      if (f.folder === path || !f.folder.startsWith(prefix)) continue;
+      const name = f.folder.slice(prefix.length).split('/')[0] ?? '';
+      if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    const folders: CourseFolderItem[] = [...counts]
+      .map(([name, fileCount]) => ({ name, path: `${prefix}${name}`, fileCount }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true }));
+    return {
+      ...this.base('course-files'),
+      course: { id: c.id, title: c.title, courseCode: c.courseCode, linkedIds: c.linkedIds },
+      path,
+      folders,
+      files: all.filter((f) => f.folder === path),
     };
   }
 

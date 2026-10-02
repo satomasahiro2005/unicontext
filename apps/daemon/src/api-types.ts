@@ -15,9 +15,14 @@ import type {
   ChangesContext,
   ClassItem,
   ConflictItem,
+  CourseAssignmentItem,
   CourseContext,
+  CourseFileItem,
+  CourseFilesContext,
+  CourseFolderItem,
   DeadlineContext,
   DeadlineItem,
+  DiscussionItem,
   GradeAttempt,
   GradeCourse,
   GradeLabelCount,
@@ -30,6 +35,7 @@ import type {
   PaceOverview,
   PaceSlotView,
   SourceStatus,
+  TeamsActivityContext,
   TodayContext,
   TomorrowContext,
   WeekContext,
@@ -59,9 +65,14 @@ export type {
   ClassItem,
   Citation,
   ConflictItem,
+  CourseAssignmentItem,
   CourseContext,
+  CourseFileItem,
+  CourseFilesContext,
+  CourseFolderItem,
   CourseRef,
   DeadlineContext,
+  DiscussionItem,
   DeadlineItem,
   GradeAttempt,
   GradeCourse,
@@ -78,6 +89,7 @@ export type {
   SearchResponse,
   SourceStatus,
   SyncRunReport,
+  TeamsActivityContext,
   TodayContext,
   TomorrowContext,
   WeekContext,
@@ -131,6 +143,12 @@ export interface TermSummary {
   courses: number;
 }
 /** GET /api/v1/courses[?term=<id|前期|all>] (default: the current term's registered courses) */
+/** GET /api/v1/teams-activity?since=&course=: recent Teams posts, files and assignments. */
+export type TeamsActivityResponse = TeamsActivityContext;
+
+/** GET /api/v1/courses/:id/files?path=: subfolders and files of one folder of the course. */
+export type CourseFilesResponse = CourseFilesContext;
+
 export interface CoursesResponse {
   courses: CourseSummary[];
   /** The term shown; undefined when every term is shown (term=all) or no calendar is known. */

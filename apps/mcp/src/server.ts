@@ -438,10 +438,55 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '科目の全体像',
       description:
-        '1科目の全体像（担当・教室・今後の授業・直近の講義・締切・お知らせ・資料・変更・食い違い）を全ソース統合で返す。courseOfferingId には id のほか「データベース」のような科目名や科目コードも使える。 / One course across all sources. Accepts an id or a fuzzy title / course code.',
+        '1科目の全体像（担当・教室・今後の授業・直近の講義・締切・お知らせ・資料・Teamsの投稿・フォルダごとのファイル・課題と提出状況・変更・食い違い）を全ソース統合で返す。courseOfferingId には id のほか「データベース」のような科目名や科目コードも使える。 / One course across all sources, including Teams posts (discussion), files with folders, and assignments with submission status. Accepts an id or a fuzzy title / course code.',
     },
     { courseOfferingId: courseIdField },
     (a) => view('course', { courseOfferingId: courseId(a.courseOfferingId) }),
+  );
+
+  tool(
+    'get_teams_activity',
+    {
+      title: 'Teamsの最近の動き',
+      description:
+        'Teamsの最近の投稿・更新されたファイル・課題を返す（since 以降、既定は7日前から。course で科目を絞れる）。「Teamsで新しい投稿は？」「先生が資料を上げた？」に使う。 / Recent Teams posts, changed files and assignments since `since` (default 7 days ago), optionally for one course.',
+    },
+    {
+      since: z
+        .string()
+        .optional()
+        .describe(
+          'ISO-8601 日時または YYYY-MM-DD。省略時は7日前 / ISO datetime or YYYY-MM-DD (default: 7 days ago)',
+        ),
+      course: courseIdField.optional(),
+    },
+    (a) =>
+      view(
+        'teams-activity',
+        opt({
+          since: a.since === undefined ? undefined : normalizeSince(uc, a.since),
+          courseOfferingId: courseId(a.course),
+        }),
+      ),
+  );
+
+  tool(
+    'list_course_files',
+    {
+      title: '科目のファイル一覧',
+      description:
+        '1科目の共有ファイル（Teamsのファイルなど）を、フォルダ単位で返す。path を省略するとルート、path にフォルダ名（例: 00_講義資料）を渡すとその中のサブフォルダとファイルを返す。 / Files of one course (e.g. the Teams file library) by folder: subfolders with file counts and the files directly in `path` (default: root).',
+    },
+    {
+      course: courseIdField,
+      path: z
+        .string()
+        .optional()
+        .describe(
+          'フォルダのパス（例: 00_講義資料/sub）。省略時はルート / Folder path (default: root)',
+        ),
+    },
+    (a) => view('course-files', opt({ courseOfferingId: courseId(a.course), path: a.path })),
   );
 
   tool(
