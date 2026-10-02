@@ -24,6 +24,7 @@ describe('migrations', () => {
       '006_search',
       '007_source_monitoring',
       '008_additions',
+      '009_read_marks',
     ]);
   });
 
@@ -77,7 +78,7 @@ describe('migrations', () => {
       )
       .run();
     const res = migrate(sqlite);
-    expect(res.applied.map((m) => m.version)).toEqual([4, 5, 6, 7, 8]);
+    expect(res.applied.map((m) => m.version)).toEqual([4, 5, 6, 7, 8, 9]);
     expect(sqlite.prepare('SELECT id FROM raw_sources').all()).toEqual([{ id: 's' }]);
   });
 

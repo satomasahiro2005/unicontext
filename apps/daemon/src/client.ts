@@ -78,8 +78,8 @@ export class DaemonClient {
     return this.request<T>('GET', path, undefined, query);
   }
 
-  post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>('POST', path, body ?? {});
+  post<T>(path: string, body?: unknown, options: { timeoutMs?: number } = {}): Promise<T> {
+    return this.request<T>('POST', path, body ?? {}, undefined, options.timeoutMs);
   }
 
   put<T>(path: string, body?: unknown): Promise<T> {
@@ -95,6 +95,7 @@ export class DaemonClient {
     path: string,
     body?: unknown,
     query?: Record<string, string | number | undefined>,
+    timeoutMs: number = this.timeoutMs,
   ): Promise<T> {
     const url = new URL(this.baseUrl + path);
     for (const [k, v] of Object.entries(query ?? {}))
@@ -114,7 +115,7 @@ export class DaemonClient {
       method,
       headers,
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await res.text();
     let json: unknown;

@@ -1,3 +1,4 @@
+import { openAnnouncements, type OpenAnnouncementsReport } from '@unicontext/context-engine';
 import type { Command } from 'commander';
 import { action, type Harness } from '../harness.js';
 import { VERSION } from '../version.js';
@@ -20,6 +21,17 @@ export function registerMcp(program: Command, h: Harness): void {
             proposals: rt.proposals,
             logger: rt.logger,
             version: VERSION,
+            // The daemon holds the LiveCampusU session and serializes this with its sync.
+            openAnnouncements: async (ids) => {
+              const daemon = await ctx.daemon();
+              return daemon
+                ? daemon.post<OpenAnnouncementsReport>(
+                    '/api/v1/announcements/open',
+                    { ids },
+                    { timeoutMs: 15 * 60_000 },
+                  )
+                : openAnnouncements(rt.uc, ids);
+            },
           });
         },
         { alwaysLog: true },

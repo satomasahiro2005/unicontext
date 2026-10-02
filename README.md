@@ -84,6 +84,8 @@ Service management: `unicontext service install|uninstall|status`. macOS install
 
 UniContext is an MCP server with high-level tools (`get_today`, `get_week`, `get_course`, `get_assignments`, `get_deadlines`, `get_recent_changes`, `get_announcements`, `get_announcement`, `prepare_for_class`, `review_class`, `search`, `get_source`, `get_conflicts`, `get_tasks`) and resources (`unicontext://today`, `unicontext://week`, `unicontext://course/{id}`, `unicontext://lecture/{id}`, `unicontext://document/{id}`). Every answer carries citations and conflict notices, so the model can reply like: "Tomorrow's 2nd period is Database Systems, room 21. Source: Academic system, fetched 10/1 09:42."
 
+`open_announcement` (and `unicontext announcements open <id…>` / `--unread-all`, or the button on a notice in the Web UI) fetches the body of LiveCampusU notices that are unread there. Opening one marks it read in LiveCampusU, which cannot be undone, so the sync never does it and the tool asks for the user's consent; UniContext keeps the notice unread until you read it in UniContext (`unicontext announcements read <id>`).
+
 `correct_fact` is propose-only. It creates a pending proposal; you approve it with `unicontext confirm <id>` or in the Web UI (Settings). There is no tool for submitting assignments, changing enrolment or touching grades.
 
 Record tools let an AI client write what it heard in a lecture recording (ChatGPT Record) into UniContext's own database, never to a university system:

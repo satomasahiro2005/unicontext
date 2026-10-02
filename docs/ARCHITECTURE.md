@@ -220,7 +220,8 @@ better-sqlite3 + Drizzle ORM. Secrets are never stored here (§32).
 - Migrations (§67): `MIGRATIONS` = `001_initial` (raw layer, sync_state, connector_health, all
   entity tables, source_references), `002_fact_model` (facts, conflicts), `003_change_events`,
   `004_identity_links`, `005_tasks`, `006_search` (FTS5 + embeddings), `007_source_monitoring`
-  (schema_drift, product_versions), `008_additions` (ledger of MCP record-tool writes). `migrate(sqlite, {targetVersion?})`, `getAppliedMigrations`,
+  (schema_drift, product_versions), `008_additions` (ledger of MCP record-tool writes),
+  `009_read_marks` (UniContext's own read/unread flag per announcement, `ReadMarkStore`). `migrate(sqlite, {targetVersion?})`, `getAppliedMigrations`,
   `currentSchemaVersion`, `migrationChecksum`. Applied migrations are checksummed; editing one or
   opening a newer DB throws `MigrationError`. Each migration runs in a transaction. Add a migration
   by appending `008_<name>.ts` to `src/migrations/` and to `MIGRATIONS`; never edit old ones. The
@@ -583,6 +584,12 @@ candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `Task
   budget per client. Writes run `runPipeline()`. Views: `DeadlineItem.recorded` / `TaskItem.recorded`
   (「録音から」, evidence, timestamp) when a task rests only on unconfirmed additions;
   `LectureBundle.notes` (summaries and notes).
+- Announcement bodies on request (`announcement-open.ts`): `openAnnouncements(uc, ids)` sends the
+  ids' raw items to their adapter's `openAnnouncements()` (SDK extension `OpenAnnouncementsAdapter`,
+  implemented by LiveCampusU and serialized there with `sync()`), ingests the returned items and
+  sets UniContext's own read mark to unread; `AnnouncementItem.unread` is that mark, else the
+  source's `read === false`. `context.setAnnouncementRead(id, read)` changes only UniContext's
+  flag; `context.unopenedAnnouncements()` lists notices without a fetched body.
 - `CONTEXT_VIEWS` (name, `context://<name>` URI, description), `ContextViewParams` (zod schemas per
   view, usable as MCP tool input schemas), `getView(engine, name, params)` (validated dispatcher),
   `isContextViewName`.

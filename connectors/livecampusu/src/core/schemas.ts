@@ -173,6 +173,8 @@ export const NoticeDetailPayloadSchema = z.object({
   fetchedAt: str.optional(),
   /** LCU read state of the row when the detail was opened (always read: unread rows are never opened). */
   openedWhileRead: z.boolean().optional(),
+  /** Opened because the user explicitly asked for it (it may have been unread before). */
+  openedOnDemand: z.boolean().optional(),
 });
 export type NoticeDetailPayload = z.infer<typeof NoticeDetailPayloadSchema>;
 

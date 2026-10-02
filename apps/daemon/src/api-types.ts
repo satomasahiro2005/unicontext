@@ -168,6 +168,24 @@ export interface AnnouncementResponse {
   announcement: AnnouncementDetail;
 }
 
+/**
+ * POST /api/v1/announcements/open `{ids}`: fetch the bodies of these notices on the user's request.
+ * Unread LiveCampusU notices become READ in LiveCampusU (it cannot be undone); UniContext keeps
+ * them 未読 until they are read in UniContext (POST /api/v1/announcements/:id/read).
+ */
+export type { OpenAnnouncementResult, OpenAnnouncementsReport } from '@unicontext/context-engine';
+export interface OpenAnnouncementsBody {
+  ids: string[];
+}
+/** POST /api/v1/announcements/:id/read `{read?: boolean}` (UniContext only, never the source). */
+export interface AnnouncementReadResponse {
+  announcement: AnnouncementItem;
+}
+/** GET /api/v1/announcements/unopened: notices without a fetched body (newest first). */
+export interface UnopenedAnnouncementsResponse {
+  announcements: AnnouncementItem[];
+}
+
 /** GET /api/v1/conflicts (open conflicts) */
 export interface ConflictsResponse {
   conflicts: ConflictItem[];

@@ -544,6 +544,33 @@ describe('write endpoints', () => {
     expect((await post('/api/v1/additions/addition:nope/reject', {}, bearer)).statusCode).toBe(404);
   });
 
+  it('announcements: open on request (write) and UniContext-only read marks', async () => {
+    const list = json<{ announcements: { id: string; unread: boolean }[] }>(
+      await get('/api/v1/announcements'),
+    ).announcements;
+    const id = list[0]?.id ?? '';
+    expect((await post('/api/v1/announcements/open', { ids: [id] })).statusCode).toBe(401);
+    expect((await post('/api/v1/announcements/open', { ids: [] }, bearer)).statusCode).toBe(400);
+    // The seed's fake connector cannot open notices on request: reported, nothing changes.
+    const res = await post('/api/v1/announcements/open', { ids: [id] }, bearer);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(json<{ results: { status: string }[] }>(res).results[0]?.status).toBe('unsupported');
+    const unopened = await get('/api/v1/announcements/unopened');
+    expect(unopened.statusCode).toBe(200);
+    // Mark unread / read in UniContext only.
+    const u = await post(`/api/v1/announcements/${id}/read`, { read: false }, bearer);
+    expect(json<{ announcement: { unread: boolean } }>(u).announcement.unread).toBe(true);
+    const unreadOnly = json<{ announcements: { id: string }[] }>(
+      await get('/api/v1/announcements?unreadOnly=1'),
+    ).announcements;
+    expect(unreadOnly.map((a) => a.id)).toContain(id);
+    const r = await post(`/api/v1/announcements/${id}/read`, {}, bearer);
+    expect(json<{ announcement: { unread: boolean } }>(r).announcement.unread).toBe(false);
+    expect(
+      (await post('/api/v1/announcements/announcement:nope/read', {}, bearer)).statusCode,
+    ).toBe(404);
+  });
+
   it('rejects oversized bodies', async () => {
     const res = await post(
       '/api/v1/facts/x/correct',

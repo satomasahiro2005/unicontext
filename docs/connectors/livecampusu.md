@@ -107,7 +107,7 @@ University profile (`profiles/<id>/profile.yaml`) keys read from `products.livec
   rule: `POST fileUpload/load/<id>` (the detail screen's read-only file-list call) with the
   `notice-attachments` grant, which only `loadNoticeAttachments()` issues while a READ notice's
   detail is open; downloads, uploads and deletes stay denied.
-- **Unread notices are never opened.** Opening a detail marks the notice read in LCU (observed
+- **Unread notices are never opened by a sync.** Opening a detail marks the notice read in LCU (observed
   2026-10-02 over plain HTTP: the row left the unread set), and LCU has **no way back to unread**:
   the list's only read action is 「既読にする」 (`SC_17001B00_01/readMark`, posts the checked
   `checkArray` row indexes of `TableForm`); posting it for a read row leaves it read, and neither
@@ -116,6 +116,20 @@ University profile (`profiles/<id>/profile.yaml`) keys read from `products.livec
   student reads them in LCU. `openNoticeDetail(proof)` needs a proof built from the current list
   page; the session re-parses that page itself and refuses unread rows, unknown rows, stale list
   versions, or calls made while not on the list.
+- **On request only: `openAnnouncements()`.** The one path that opens UNREAD notices is the user's
+  explicit request for specific notices (`unicontext announcements open <id…>` /
+  `--unread-all` after a count and y/N, `POST /api/v1/announcements/open`, the Web UI button
+  「本文を取得（LCUで既読になります）」, MCP `open_announcement`). The adapter runs it serialized with
+  `sync()` (one LCU session, one current screen); the daemon holds that session, so the CLI and
+  `unicontext mcp` go through the daemon when it runs. `LcuSession.openNoticeOnDemand(proof,
+permit)` opens a row only with an `OnDemandNoticePermit` for that notice's key (single use; the
+  session checks the row index against its own parse of the list), with the
+  `notice-detail-on-demand` policy grant, and **never while a sync runs** (`runLcuSync` runs inside
+  `session.duringSync()`, which makes the session refuse it). `readMark` stays denied with this
+  grant too. The fetched detail is stored like the backfill's (`openedOnDemand: true`,
+  `openedWhileRead: false` when it was unread) and checkpointed; UniContext keeps the notice 未読 in
+  its own read state (`read_marks`) until the user reads it in UniContext or runs
+  `unicontext announcements read <id>`.
 - **Read state** comes from the list's inline 「検索結果一覧の未読行のスタイル適用」 script, not from
   `tr.is-unread` (which every row carries): unread rows get `$("[_index='N']").css("font-weight",
 "bold")`. This set equals the rows the 「未読のみ」 search returns (checked 2026-10-02, 167 = 167).
@@ -209,7 +223,8 @@ as drift findings (missing/mismatched ⇒ `degraded`).
   encoding of the assignment search form, the `rowIndex`-only `rowSelect` body, the exam timetable
   columns, the `submissionInformation` item shape, the maintenance window time.
 - Unread notices have no body (title, type and dates only, `bodyStatus: notOpened`) until the user
-  reads them in LCU: opening them would mark them read and LCU cannot set them back to unread.
+  reads them in LCU or asks UniContext to open them (which marks them read in LCU; it cannot be
+  undone).
 - Course matching for notices without a hidden subject code, assignments, exams and attendance is
   by title (+ class name) within the year's offerings; ambiguous titles stay unlinked.
 - Timetable `room` is LCU's text as-is (e.g. 共通講義棟３１, full-width digits).

@@ -16,7 +16,9 @@ import { PolicyViolationError } from '@unicontext/core';
  * - whole screens: 課題提出 (SC_14002B00_03), 履修登録 (SC_07002B00_*), 予約申込 (SC_18001B00_04);
  * - row transitions (`rowSelect` / `rowselect` / `linkselect`) and the notice detail screen,
  *   unless the caller holds the notice-detail grant (issued only for rows the list shows as READ —
- *   opening an unread notice marks it read);
+ *   opening an unread notice marks it read) or the notice-detail-on-demand grant (issued only by
+ *   LcuSession.openNoticeOnDemand(): the user explicitly asked to fetch these unread notices and
+ *   accepted that LCU marks them read; never during a sync);
  * - grade screens unless grades were enabled in the config (opt-in).
  *
  * `readMark` stays denied with every grant. It only ever marks rows READ (observed 2026-10-02: a
@@ -57,7 +59,12 @@ const DEFAULT_NOTICE_DETAIL_SCREENS = ['SC_17001B00_02'];
 const DEFAULT_GRADE_SCREENS = ['SC_10004B00_01', 'SC_10004B00_02', 'SC_15005B00_01'];
 const GRADE_ACTIONS = /^(grede|grade)information$/i;
 
-export type PolicyGrant = 'notice-detail' | 'notice-attachments';
+export type PolicyGrant = 'notice-detail' | 'notice-detail-on-demand' | 'notice-attachments';
+
+const NOTICE_DETAIL_GRANTS: ReadonlySet<PolicyGrant | undefined> = new Set([
+  'notice-detail',
+  'notice-detail-on-demand',
+]);
 
 /** `fileUpload/load/<id>`: the only fileUpload* call ever made (notice-attachments grant). */
 const ATTACHMENT_LIST_PATH = /^fileUpload\/load\/[A-Za-z0-9]{1,16}$/;
@@ -117,7 +124,7 @@ export function assertRequestAllowed(method: string, path: string, ctx: PolicyCo
       if (noticeDetailScreens.has(seg)) {
         const action = segments[i + 1];
         // Leaving the detail screen ("back") is fine; showing it requires the grant.
-        if (!(action && /^back$/i.test(action)) && ctx.grant !== 'notice-detail')
+        if (!(action && /^back$/i.test(action)) && !NOTICE_DETAIL_GRANTS.has(ctx.grant))
           deny('notice details may only be opened through the read-state-checked transition');
       }
       continue;
@@ -132,7 +139,7 @@ export function assertRequestAllowed(method: string, path: string, ctx: PolicyCo
       const isNoticeList =
         screen !== undefined &&
         (screen === (ctx.noticeListScreen ?? 'SC_17001B00_01') || screen === 'SC_17001B00_01');
-      if (!isNoticeList || ctx.grant !== 'notice-detail')
+      if (!isNoticeList || !NOTICE_DETAIL_GRANTS.has(ctx.grant))
         deny('row transitions are only allowed for read notices via openNoticeDetail()');
     }
   }

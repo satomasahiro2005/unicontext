@@ -6,11 +6,19 @@ import type {
   ConnectorContext,
   InteractiveAuthAdapter,
   InteractiveLoginOptions,
+  OpenAnnouncementsAdapter,
+  OpenAnnouncementsResult,
   SyncInput,
   SyncResult,
   VersionAwareAdapter,
 } from '@unicontext/connector-sdk';
-import { AuthRequiredError, OfflineError, RateLimitedError, zonedParts } from '@unicontext/core';
+import {
+  AuthRequiredError,
+  OfflineError,
+  PolicyViolationError,
+  RateLimitedError,
+  zonedParts,
+} from '@unicontext/core';
 import { type AuthStrategyKind, createAuthStrategy, selectAuthStrategy } from './auth/index.js';
 import type { BrowserSsoStrategyOptions } from './auth/browser-sso.js';
 import type { LiveCampusUConfig } from './config.js';
@@ -22,9 +30,12 @@ import {
   resolveDeployment,
 } from './core/deployment.js';
 import { LcuSession } from './core/session.js';
+import { NoticePayloadSchema } from './core/schemas.js';
 import {
   type LcuCursorExtra,
+  type LcuSyncContext,
   type NoticeCacheEntry,
+  openNoticesOnDemand,
   runLcuSync,
   type VersionState,
 } from './core/sync.js';
@@ -74,7 +85,9 @@ export function currentAcademicYear(now: Date, tz: string): number {
  * LiveCampusU SourceAdapter (§26): read-only plain-HTTP replay of a browser SSO session.
  * Implements VersionAwareAdapter (§72) and InteractiveAuthAdapter (login/logout via the strategy).
  */
-export class LiveCampusUAdapter implements VersionAwareAdapter, InteractiveAuthAdapter {
+export class LiveCampusUAdapter
+  implements VersionAwareAdapter, InteractiveAuthAdapter, OpenAnnouncementsAdapter
+{
   readonly id: string;
   readonly version = metadata.version;
   readonly deployment: LcuDeploymentProfile;
@@ -86,6 +99,14 @@ export class LiveCampusUAdapter implements VersionAwareAdapter, InteractiveAuthA
   private noticeCheckpointLoaded = false;
   private versionState: VersionState | undefined;
   private lastHealth: HealthStatus | undefined;
+  /** sync() and openAnnouncements() share one LCU session (one current screen): never interleave. */
+  private queue: Promise<unknown> = Promise.resolve();
+
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn, fn);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
 
   constructor(
     private readonly ctx: ConnectorContext<LiveCampusUConfig>,
@@ -198,7 +219,85 @@ export class LiveCampusUAdapter implements VersionAwareAdapter, InteractiveAuthA
     return inMaintenanceWindow(this.deployment.maintenanceWindow, p.hour, p.minute);
   }
 
-  async sync(input: SyncInput): Promise<SyncResult> {
+  sync(input: SyncInput): Promise<SyncResult> {
+    return this.exclusive(() => this.syncNow(input));
+  }
+
+  /**
+   * Fetch the bodies of notices the user explicitly asked for (`unicontext announcements open`,
+   * REST, Web UI, MCP open_announcement). Unread notices are opened too — LCU marks them read and
+   * cannot set them back, which the caller confirms with `acceptMarksRead`. Serialized with sync().
+   */
+  openAnnouncements(
+    requests: readonly { externalId: string; previousPayload?: unknown }[],
+    options: { acceptMarksRead: true; signal?: AbortSignal },
+  ): Promise<OpenAnnouncementsResult> {
+    if (options.acceptMarksRead !== true)
+      throw new PolicyViolationError(
+        'Opening LiveCampusU notices marks unread ones read; the caller must accept that',
+      );
+    return this.exclusive(async () => {
+      if (this.inMaintenance())
+        throw new OfflineError(
+          `LiveCampusU nightly maintenance window (${this.deployment.maintenanceWindow ?? ''})`,
+        );
+      this.loadNoticeCheckpoint();
+      const outcome = await openNoticesOnDemand(
+        this.syncContext(this.ctx.clock.now()),
+        requests.map((r) => {
+          const prev = NoticePayloadSchema.safeParse(r.previousPayload);
+          return { key: r.externalId, ...(prev.success ? { previous: prev.data } : {}) };
+        }),
+        options.signal,
+      );
+      try {
+        this.saveNoticeCheckpoint();
+      } catch (e) {
+        this.ctx.logger.warn('notice detail checkpoint not written', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      this.ctx.logger.info('LiveCampusU notices opened on request', {
+        opened: outcome.results.filter((r) => r.status === 'opened').length,
+        markedRead: outcome.results.filter((r) => r.wasUnread).length,
+      });
+      return {
+        items: outcome.items,
+        results: outcome.results.map((r) => ({
+          externalId: r.key,
+          status: r.status,
+          ...(r.wasUnread !== undefined ? { wasUnread: r.wasUnread } : {}),
+          ...(r.error ? { error: r.error } : {}),
+        })),
+        warnings: outcome.warnings,
+      };
+    });
+  }
+
+  private syncContext(now: Date): LcuSyncContext {
+    const cfg = this.ctx.config;
+    return {
+      session: this.session,
+      deployment: this.deployment,
+      options: {
+        academicYear: cfg.academicYear ?? currentAcademicYear(now, this.timezone),
+        semesters: cfg.semesters ?? this.deployment.semesters.map((s) => s.code),
+        grades: cfg.grades,
+        attendance: cfg.attendance,
+        noticeDetails: cfg.noticeDetails,
+        maxNoticeDetailsPerRun: cfg.maxNoticeDetailsPerRun,
+      },
+      clock: this.ctx.clock,
+      timezone: this.timezone,
+      logger: this.ctx.logger,
+      product: PRODUCT,
+      noticeCache: this.noticeCache,
+      onNoticeDetail: () => this.saveNoticeCheckpoint(),
+      version: this.versionState,
+    };
+  }
+
+  private async syncNow(input: SyncInput): Promise<SyncResult> {
     const now = this.ctx.clock.now();
     if (this.inMaintenance(now)) {
       const message = `LiveCampusU nightly maintenance window (${this.deployment.maintenanceWindow ?? ''}); sync skipped`;
@@ -211,30 +310,8 @@ export class LiveCampusUAdapter implements VersionAwareAdapter, InteractiveAuthA
       for (const [k, v] of Object.entries(extra.notices)) this.noticeCache.set(k, v);
     this.loadNoticeCheckpoint();
     if (!this.versionState && extra?.version) this.versionState = extra.version;
-    const cfg = this.ctx.config;
     try {
-      const outcome = await runLcuSync(
-        {
-          session: this.session,
-          deployment: this.deployment,
-          options: {
-            academicYear: cfg.academicYear ?? currentAcademicYear(now, this.timezone),
-            semesters: cfg.semesters ?? this.deployment.semesters.map((s) => s.code),
-            grades: cfg.grades,
-            attendance: cfg.attendance,
-            noticeDetails: cfg.noticeDetails,
-            maxNoticeDetailsPerRun: cfg.maxNoticeDetailsPerRun,
-          },
-          clock: this.ctx.clock,
-          timezone: this.timezone,
-          logger: this.ctx.logger,
-          product: PRODUCT,
-          noticeCache: this.noticeCache,
-          onNoticeDetail: () => this.saveNoticeCheckpoint(),
-          version: this.versionState,
-        },
-        input,
-      );
+      const outcome = await runLcuSync(this.syncContext(now), input);
       this.versionState = outcome.version;
       const nd = outcome.stats.noticeDetails;
       this.ctx.logger.info('LiveCampusU notice bodies', { ...nd });

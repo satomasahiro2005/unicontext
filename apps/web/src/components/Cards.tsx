@@ -200,9 +200,7 @@ export function AnnouncementRow({ item }: { item: AnnouncementItem }) {
           <Badge tone={importanceTone(item.importance)}>{importanceLabel(item.importance)}</Badge>
         ) : null}
         <Badge>{scopeLabel(item.scope)}</Badge>
-        {item.read === false ? (
-          <span className="dot" role="img" aria-label="未読" title="未読" />
-        ) : null}
+        {item.unread ? <span className="dot" role="img" aria-label="未読" title="未読" /> : null}
         <h3 className="card-title">
           <Link to="/announcements/$id" params={{ id: item.id }}>
             {item.title}

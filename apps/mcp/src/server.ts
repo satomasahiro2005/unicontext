@@ -11,6 +11,8 @@ import {
 import {
   type AdditionResult,
   CONTEXT_VIEWS,
+  openAnnouncements as openAnnouncementsInProcess,
+  type OpenAnnouncementsReport,
   formatPaceSlot,
   getView,
   normalizePaceSlots,
@@ -39,6 +41,8 @@ import {
   courseIdForWrite,
   LIST_RESULT_SHAPE,
   listAdditionsShape,
+  OPEN_ANNOUNCEMENT_RESULT_SHAPE,
+  openAnnouncementShape,
   recordLectureShape,
   retractAdditionShape,
   toStatuses as toAdditionStatuses,
@@ -91,6 +95,11 @@ export interface McpDeps {
   allowWrite?: boolean;
   /** Who is calling (remote: the OAuth client). Default `local:<MCP client name>`. */
   client?: AdditionClient;
+  /**
+   * Fetch notice bodies on request (open_announcement). The daemon runs it in-process (it holds the
+   * LiveCampusU session); `unicontext mcp` routes it to the running daemon. Default: in-process.
+   */
+  openAnnouncements?: (ids: string[]) => Promise<OpenAnnouncementsReport>;
   /** Called after every tool call (audit log of the remote surface). Never receives arguments. */
   onToolCall?: (event: ToolCallEvent) => void;
 }
@@ -315,7 +324,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   /** Record tools (UniContext-only writes). Remote: only with the unicontext.write scope. */
   function writeTool<S extends z.ZodRawShape>(
     name: keyof typeof WRITE_TOOLS,
-    meta: { outputShape: z.ZodRawShape; destructive?: boolean },
+    meta: { outputShape: z.ZodRawShape; destructive?: boolean; openWorld?: boolean },
     shape: S,
     run: (
       args: z.infer<z.ZodObject<S>>,
@@ -368,7 +377,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           readOnlyHint: false,
           destructiveHint: meta.destructive === true,
           idempotentHint: true,
-          openWorldHint: false,
+          openWorldHint: meta.openWorld === true,
         },
       },
       callback as unknown as Parameters<typeof server.registerTool>[2],
@@ -565,7 +574,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: 'お知らせの全文',
       description:
-        'お知らせ1件の全文（本文・差出人・分類・添付ファイル名・本文中のリンク・対象講義・対象日・既読/未読）を返す。id は get_announcements や search の結果の id（announcement:...）。LiveCampusUの未読のお知らせは本文を取得していないことがあり（bodyStatus が notOpened）、その場合 body は空。本人がLiveCampusUで読んだあとの同期で取得される。 / Full text of one announcement by id (announcement:...), with sender, category, attachments, links, target courses and date, read state. Unread LiveCampusU notices may have an empty body (bodyStatus "notOpened") until the student reads them there.',
+        'お知らせ1件の全文（本文・差出人・分類・添付ファイル名・本文中のリンク・対象講義・対象日・既読/未読）を返す。id は get_announcements や search の結果の id（announcement:...）。LiveCampusUの未読のお知らせは本文を取得していないことがあり（bodyStatus が notOpened）、その場合 body は空。本人がLiveCampusUで読むか、本人の了承を得て open_announcement で取得する（LiveCampusUで既読になる）と読める。 / Full text of one announcement by id (announcement:...), with sender, category, attachments, links, target courses and date, read state. Unread LiveCampusU notices may have an empty body (bodyStatus "notOpened") until the student reads them there.',
     },
     { id: z.string().min(1).describe('announcement:... の id') },
     (a) => {
@@ -829,6 +838,40 @@ export function createMcpServer(deps: McpDeps): McpServer {
             list.length === 0
               ? 'この接続から追加した内容はありません。'
               : 'この接続から追加した内容です。unconfirmed は本人がまだ確認していないもの、confirmed は本人が確認したものです。',
+        },
+      };
+    },
+  );
+
+  // Changes state in LiveCampusU (read mark): destructive, open world, never during a sync.
+  writeTool(
+    'open_announcement',
+    { outputShape: OPEN_ANNOUNCEMENT_RESULT_SHAPE, destructive: true, openWorld: true },
+    openAnnouncementShape,
+    async (a) => {
+      const ids = a.ids.map((x) => x.trim());
+      for (const id of ids)
+        if (!isIdOf('announcement', id))
+          throw new ValidationError(`not an announcement id: ${id} (use get_announcements)`);
+      const report = await (deps.openAnnouncements ?? ((x) => openAnnouncementsInProcess(uc, x)))(
+        ids,
+      );
+      const marked = report.markedReadAtSource;
+      return {
+        structured: {
+          results: report.results,
+          opened: report.opened,
+          markedReadAtSource: marked,
+          answerHint:
+            report.opened === 0
+              ? '本文を取得したお知らせはありません（status を確認してください）。'
+              : `${report.opened}件の本文を取得しました${marked > 0 ? `（うち${marked}件はLiveCampusUで既読になりました）` : ''}。get_announcement で本文を読めます。UniContextでは本人が読むまで未読のままです。`,
+        },
+        write: {
+          status: 'opened',
+          additionId: '',
+          entityIds: report.results.filter((r) => r.status === 'opened').map((r) => r.id),
+          factIds: [],
         },
       };
     },

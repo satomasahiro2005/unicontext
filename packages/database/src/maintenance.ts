@@ -388,6 +388,7 @@ export function purgeSource(db: UniContextDatabase, sourceId: string): PurgeRepo
     for (const id of entityIds) {
       report.changeEvents += del('DELETE FROM change_events WHERE entity_id = ?', id);
       del('DELETE FROM embeddings WHERE entity_id = ?', id);
+      del('DELETE FROM read_marks WHERE entity_id = ?', id);
     }
     report.rawBlobs = raw.deleteBlobsBySource(sourceId, (f) => blobFiles.push(f));
     report.rawItems = del('DELETE FROM raw_items WHERE source_id = ?', sourceId);

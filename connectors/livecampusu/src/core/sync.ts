@@ -15,6 +15,7 @@ import { parseAssignmentList } from './parsers/assignments.js';
 import { parseCalendarEvents } from './parsers/calendar.js';
 import {
   type NoticeListRow,
+  noticeKey,
   parseNoticeAttachments,
   parseNoticeDetail,
   parseNoticeList,
@@ -49,7 +50,12 @@ import {
   type NoticePayload,
   RAW_TYPES,
 } from './schemas.js';
-import { type LcuPage, type LcuSession, SessionRestartedError } from './session.js';
+import {
+  type LcuPage,
+  type LcuSession,
+  OnDemandNoticePermit,
+  SessionRestartedError,
+} from './session.js';
 import { parseSubjectText, splitTitleClass, titleKey } from './text.js';
 import {
   composeVersion,
@@ -132,9 +138,7 @@ function shortHash(...parts: string[]): string {
   return sha256(parts.join('\u0000')).slice(0, 16);
 }
 
-export function noticeKey(contactDateTime: string, typeCode: string, title: string): string {
-  return `n-${shortHash(contactDateTime.replace(/\s+/g, ' ').trim(), typeCode, titleKey(title))}`;
-}
+export { noticeKey };
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -215,6 +219,11 @@ class OfferingIndex {
  * otherwise is reported as a warning and its types are not marked complete (no false deletions).
  */
 export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise<LcuSyncOutcome> {
+  // While a sync runs the session refuses to open unread notices, even with a permit.
+  return ctx.session.duringSync(() => runLcuSyncSteps(ctx, input));
+}
+
+async function runLcuSyncSteps(ctx: LcuSyncContext, input: SyncInput): Promise<LcuSyncOutcome> {
   const { session, deployment: d, options: o } = ctx;
   const items = new Map<string, RawItem>();
   const warnings: string[] = [];
@@ -834,6 +843,48 @@ function gradeItem(
   };
 }
 
+/** Read the notice detail that is currently open (body + attachment names) into a cache entry. */
+async function readOpenNoticeDetail(
+  ctx: LcuSyncContext,
+  detailPage: LcuPage,
+  listed: NoticeListRow,
+  hash: string,
+  opened: { whileRead: boolean; onDemand?: boolean },
+  warnings: string[],
+  stats?: NoticeDetailStats,
+): Promise<NoticeCacheEntry> {
+  const { session } = ctx;
+  const detail = parseNoticeDetail(detailPage.html);
+  if (!detail) throw new Error('the detail screen had no notice heading');
+  let attachments = detail.attachments;
+  let attachmentsComplete = true;
+  if (listed.hasAttachment) {
+    try {
+      const parsedFiles = parseNoticeAttachments(await session.loadNoticeAttachments());
+      if (parsedFiles) {
+        attachments = parsedFiles;
+        if (stats) stats.attachmentLists++;
+      } else attachmentsComplete = false;
+    } catch (e) {
+      if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+      attachmentsComplete = false;
+      warnings.push(`notice attachments (${detail.title}): ${errorMessage(e)}`);
+    }
+  }
+  return {
+    rowHash: hash,
+    detail: {
+      ...detail,
+      body: detail.body.slice(0, MAX_DETAIL_BODY),
+      attachments,
+      ...(attachmentsComplete ? {} : { attachmentsComplete: false }),
+      fetchedAt: ctx.clock.now().toISOString(),
+      openedWhileRead: opened.whileRead,
+      ...(opened.onDemand ? { openedOnDemand: true } : {}),
+    },
+  };
+}
+
 function rowHash(row: NoticeListRow): string {
   const { rowIndex: _i, unread: _u, ...rest } = row;
   return contentHash(rest);
@@ -893,34 +944,15 @@ async function syncNotices(
           listVersion: list.noticeListVersion,
         });
         opened = true;
-        const detail = parseNoticeDetail(detailPage.html);
-        if (!detail) throw new Error('the detail screen had no notice heading');
-        let attachments = detail.attachments;
-        let attachmentsComplete = true;
-        if (listed.hasAttachment) {
-          try {
-            const parsedFiles = parseNoticeAttachments(await session.loadNoticeAttachments());
-            if (parsedFiles) {
-              attachments = parsedFiles;
-              details.attachmentLists++;
-            } else attachmentsComplete = false;
-          } catch (e) {
-            if (e instanceof SessionRestartedError || isFatal(e)) throw e;
-            attachmentsComplete = false;
-            warnings.push(`notice attachments (${detail.title}): ${errorMessage(e)}`);
-          }
-        }
-        const entry: NoticeCacheEntry = {
-          rowHash: hash,
-          detail: {
-            ...detail,
-            body: detail.body.slice(0, MAX_DETAIL_BODY),
-            attachments,
-            ...(attachmentsComplete ? {} : { attachmentsComplete: false }),
-            fetchedAt: ctx.clock.now().toISOString(),
-            openedWhileRead: true,
-          },
-        };
+        const entry = await readOpenNoticeDetail(
+          ctx,
+          detailPage,
+          listed,
+          hash,
+          { whileRead: true },
+          warnings,
+          details,
+        );
         ctx.noticeCache.set(key, entry);
         details.fetched++;
         try {
@@ -1012,6 +1044,119 @@ async function syncNotices(
     for (const k of [...ctx.noticeCache.keys()]) if (!byKey.has(k)) ctx.noticeCache.delete(k);
 
   return { items, listOk: rows !== undefined, details };
+}
+
+export interface OnDemandNoticeRequest {
+  key: string;
+  /** The notice's last stored raw payload (merged so nothing the sync stored is lost). */
+  previous?: NoticePayload | undefined;
+}
+
+export interface OnDemandNoticeResult {
+  key: string;
+  status: 'opened' | 'notFound' | 'failed';
+  /** It was unread in LCU before this request (opening it marked it read there). */
+  wasUnread?: boolean;
+  error?: string;
+}
+
+export interface OnDemandNoticeOutcome {
+  items: RawItem[];
+  results: OnDemandNoticeResult[];
+  warnings: string[];
+}
+
+/**
+ * Fetch the bodies of notices the USER explicitly asked for (CLI `announcements open`, REST, Web UI
+ * button, MCP open_announcement) — the only path that opens UNREAD notices: LCU marks an opened
+ * notice read and has no way back, which the user accepted. Never called by a sync (and the
+ * session refuses it while one runs). Returns the notices as raw items with the body, merged over
+ * the previously stored payload.
+ */
+export async function openNoticesOnDemand(
+  ctx: LcuSyncContext,
+  requests: readonly OnDemandNoticeRequest[],
+  signal?: AbortSignal,
+): Promise<OnDemandNoticeOutcome> {
+  const { session, deployment: d } = ctx;
+  const warnings: string[] = [];
+  const results: OnDemandNoticeResult[] = [];
+  const items: RawItem[] = [];
+  const wanted = new Map(requests.map((r) => [r.key, r]));
+  const permit = OnDemandNoticePermit.forKeys(wanted.keys());
+  session.beginRun(signal);
+  await session.bootstrap();
+  let list = await session.open(d.screens.noticeList);
+  for (const [key, req] of wanted) {
+    const current = parseNoticeList(list.html).find(
+      (r) => noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title) === key,
+    );
+    if (!current || list.noticeListVersion === undefined) {
+      results.push({ key, status: 'notFound' });
+      continue;
+    }
+    const wasUnread = current.unread;
+    let opened = false;
+    try {
+      const detailPage = await session.openNoticeOnDemand(
+        {
+          rowIndex: current.rowIndex,
+          unread: current.unread,
+          listVersion: list.noticeListVersion,
+          key,
+        },
+        permit,
+      );
+      opened = true;
+      const entry = await readOpenNoticeDetail(
+        ctx,
+        detailPage,
+        current,
+        rowHash(current),
+        { whileRead: !wasUnread, onDemand: true },
+        warnings,
+      );
+      ctx.noticeCache.set(key, entry);
+      try {
+        await ctx.onNoticeDetail?.(key, entry);
+      } catch (e) {
+        warnings.push(`notice detail checkpoint: ${errorMessage(e)}`);
+      }
+      const { rowIndex: _ri, ...listRow } = current;
+      const type = d.contactTypes[current.typeCode ?? ''];
+      const base: NoticePayload = req.previous ?? {
+        key,
+        kind: type?.kind ?? 'notice',
+        ...(type?.title ? { typeTitle: type.title } : {}),
+        context: {},
+        source: {
+          screen: d.screens.noticeList,
+          selector: `tr[contactDateTime="${current.contactDateTime ?? ''}"]`,
+        },
+      };
+      const payload: NoticePayload = {
+        ...base,
+        key,
+        // Opening it made it read in LCU.
+        listRow: { ...(base.listRow ?? listRow), ...listRow, unread: false },
+        ...(entry.detail ? { detail: entry.detail } : {}),
+        bodyStatus: 'fetched',
+      };
+      items.push({ sourceType: RAW_TYPES.notice, externalId: key, payload });
+      results.push({ key, status: 'opened', wasUnread });
+    } catch (e) {
+      if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+      results.push({ key, status: 'failed', wasUnread, error: errorMessage(e) });
+      warnings.push(`notice detail: ${errorMessage(e)}`);
+    }
+    list = opened
+      ? await session.post(d.actions.noticeDetailBack)
+      : list.screenId === d.screens.noticeList
+        ? list
+        : await session.open(d.screens.noticeList);
+    if (list.screenId !== d.screens.noticeList) list = await session.open(d.screens.noticeList);
+  }
+  return { items, results, warnings };
 }
 
 export { VERSION_PRODUCT };

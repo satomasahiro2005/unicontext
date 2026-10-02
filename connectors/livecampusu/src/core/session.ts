@@ -19,7 +19,7 @@ import {
   screenIdFromUrl,
   stripJsessionid,
 } from './html.js';
-import { noticeAttachmentLoadPath, parseNoticeList } from './parsers/notices.js';
+import { noticeAttachmentLoadPath, noticeRowKey, parseNoticeList } from './parsers/notices.js';
 import { assertRequestAllowed, type PolicyGrant } from './policy.js';
 
 /** The session is gone (login screen, error screen, CSRF failure, idle timeout, IdP redirect). */
@@ -61,6 +61,28 @@ export interface NoticeReadProof {
   rowIndex: number;
   unread: boolean;
   listVersion: number;
+}
+
+/**
+ * The user's explicit request to fetch the bodies of specific notices even though they are
+ * unread in LCU (opening one marks it read there, and LCU cannot set it back). Each key can be
+ * used once. Only the on-demand path (LiveCampusUAdapter.openAnnouncements) issues permits; a
+ * sync never has one, and the session refuses permits while a sync is running.
+ */
+export class OnDemandNoticePermit {
+  private readonly remaining: Set<string>;
+  private constructor(keys: Iterable<string>) {
+    this.remaining = new Set(keys);
+  }
+
+  static forKeys(keys: Iterable<string>): OnDemandNoticePermit {
+    return new OnDemandNoticePermit(keys);
+  }
+
+  /** @internal consumed by LcuSession.openNoticeOnDemand */
+  take(key: string): boolean {
+    return this.remaining.delete(key);
+  }
 }
 
 export type FormFields = readonly (readonly [string, string])[] | Readonly<Record<string, string>>;
@@ -111,6 +133,9 @@ export class LcuSession {
   private lastActivityMs: number | undefined;
   private lastFetchMs: number | undefined;
   private noticeRows = new Map<number, boolean>();
+  private noticeRowKeys = new Map<number, string>();
+  /** >0 while runLcuSync() runs: on-demand opening of unread notices is refused then. */
+  private syncDepth = 0;
   private listVersion = 0;
   private reauthLeft: number;
   private signal: AbortSignal | undefined;
@@ -160,6 +185,7 @@ export class LcuSession {
     this.current = undefined;
     this.lastActivityMs = undefined;
     this.noticeRows.clear();
+    this.noticeRowKeys.clear();
   }
 
   /** Persist rotated cookies through the strategy (e.g. a new JSESSIONID). */
@@ -248,11 +274,65 @@ export class LcuSession {
     });
   }
 
+  /** Run a sync: while it runs, unread notices cannot be opened even with a permit. */
+  async duringSync<T>(fn: () => Promise<T>): Promise<T> {
+    this.syncDepth++;
+    try {
+      return await fn();
+    } finally {
+      this.syncDepth--;
+    }
+  }
+
+  /**
+   * Open the detail of a notice the user explicitly asked for (the on-demand path). A READ row is
+   * opened like openNoticeDetail(); an UNREAD row is opened only with a permit for its key, never
+   * during a sync — opening it marks it read in LCU, which is what the user accepted. The proof is
+   * re-checked against the session's own parse of the current list (row index ↔ notice key).
+   */
+  openNoticeOnDemand(
+    proof: NoticeReadProof & { key: string },
+    permit: OnDemandNoticePermit,
+  ): Promise<LcuPage> {
+    if (this.syncDepth > 0)
+      throw new PolicyViolationError(
+        'Unread notices are never opened during a sync; only an explicit on-demand request may',
+      );
+    if (!(permit instanceof OnDemandNoticePermit))
+      throw new PolicyViolationError('Opening an unread notice needs an on-demand permit');
+    const path = this.d.actions.noticeRowSelect;
+    this.check('POST', path, 'notice-detail-on-demand');
+    return this.run('op', async () => {
+      if (this.syncDepth > 0)
+        throw new PolicyViolationError(
+          'Unread notices are never opened during a sync; only an explicit on-demand request may',
+        );
+      if (this.current?.screenId !== this.d.screens.noticeList)
+        throw new PolicyViolationError('Notice detail requested while not on the notice list');
+      if (proof.listVersion !== this.listVersion)
+        throw new PolicyViolationError('Stale notice proof (the list was reloaded)');
+      if (this.noticeRowKeys.get(proof.rowIndex) !== proof.key)
+        throw new PolicyViolationError(`Notice row ${proof.rowIndex} is not the requested notice`);
+      const unread = this.noticeRows.get(proof.rowIndex);
+      if (unread !== false && !permit.take(proof.key))
+        throw new PolicyViolationError(
+          'Refusing to open an unread notice without the user’s explicit request for it',
+        );
+      return this.pageRequest('POST', path, {
+        form: [
+          [this.d.actions.rowIndexField, String(proof.rowIndex)],
+          ['viewRowIndexArray', ''],
+        ],
+        grant: unread === false ? 'notice-detail' : 'notice-detail-on-demand',
+      });
+    });
+  }
+
   /**
    * Attachment list of the notice detail that is currently open: the same read-only
    * `POST fileUpload/load/<id>` (X-CSRF-TOKEN, empty body) the detail screen makes on every view.
    * Returns undefined when the page has no file widget. Refused unless the current screen is the
-   * notice detail (which is only ever opened for READ notices).
+   * notice detail (opened for READ notices, or for unread ones the user explicitly asked for).
    */
   loadNoticeAttachments(): Promise<unknown> {
     return this.run('op', async () => {
@@ -333,6 +413,7 @@ export class LcuSession {
     this.current = undefined;
     this.tokens = {};
     this.noticeRows.clear();
+    this.noticeRowKeys.clear();
     this.lastActivityMs = undefined;
     if (this.reauthLeft <= 0)
       throw new AuthRequiredError(
@@ -504,7 +585,9 @@ export class LcuSession {
       status: res.status,
     };
     if (screenId === this.d.screens.noticeList) {
-      this.noticeRows = new Map(parseNoticeList(html).map((r) => [r.rowIndex, r.unread]));
+      const rows = parseNoticeList(html);
+      this.noticeRows = new Map(rows.map((r) => [r.rowIndex, r.unread]));
+      this.noticeRowKeys = new Map(rows.map((r) => [r.rowIndex, noticeRowKey(r)]));
       this.listVersion++;
       page.noticeListVersion = this.listVersion;
     }

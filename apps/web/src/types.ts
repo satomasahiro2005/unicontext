@@ -3,6 +3,8 @@
  * browser bundle at runtime. Every file in src imports types through here.
  */
 export type {
+  AnnouncementReadResponse,
+  OpenAnnouncementsReport,
   AdditionResponse,
   AdditionsResponse,
   AdditionView,

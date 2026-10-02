@@ -505,7 +505,7 @@ describe('authorization code + PKCE + resource binding', () => {
     expect(names).not.toContain('correct_fact');
     expect(names).not.toContain('propose_pace_slot');
     const isWrite = (n: string): boolean =>
-      /^(record_lecture|add_deadline|add_note|add_task|list_my_additions|retract_addition)$/.test(
+      /^(record_lecture|add_deadline|add_note|add_task|list_my_additions|retract_addition|open_announcement)$/.test(
         n,
       );
     for (const t of tools) expect(t.annotations?.readOnlyHint, t.name).toBe(!isWrite(t.name));

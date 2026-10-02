@@ -1,6 +1,22 @@
+import { sha256 } from '@unicontext/core';
 import { load } from 'cheerio';
 import { cleanLines, cleanText, fragmentText, htmlText } from '../html.js';
+import { titleKey } from '../text.js';
 import { parseTable } from './table.js';
+
+/** Stable key of a notice across list pages: contact time + type + title (no row index). */
+export function noticeKey(contactDateTime: string, typeCode: string, title: string): string {
+  const hash = sha256(
+    [contactDateTime.replace(/\s+/g, ' ').trim(), typeCode, titleKey(title)].join('\u0000'),
+  ).slice(0, 16);
+  return `n-${hash}`;
+}
+
+export function noticeRowKey(
+  r: Pick<NoticeListRow, 'contactDateTime' | 'typeCode' | 'title'>,
+): string {
+  return noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title);
+}
 
 /** One row of 連絡一覧 (SC_17001B00_01), hidden sort columns included. */
 export interface NoticeListRow {

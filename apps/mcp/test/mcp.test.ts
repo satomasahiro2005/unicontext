@@ -109,6 +109,7 @@ describe('MCP contract: tools listing', () => {
       'add_task',
       'list_my_additions',
       'retract_addition',
+      'open_announcement',
     ]);
     for (const t of tools) {
       if (writeCapable.has(t.name)) expect(t.annotations?.readOnlyHint, t.name).toBe(false);

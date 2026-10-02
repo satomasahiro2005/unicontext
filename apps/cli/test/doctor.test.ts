@@ -45,7 +45,7 @@ describe('doctor on the dev seed', () => {
     const checks = checksOf(r);
     expect(checks.filter((c) => c.status === 'ng')).toEqual([]);
     expect(byId(checks, 'node').status).toBe('ok');
-    expect(byId(checks, 'database').message).toMatch(/スキーマv8/);
+    expect(byId(checks, 'database').message).toMatch(/スキーマv9/);
     for (const id of ['lcu', 'teams', 'lms', 'record'])
       expect(byId(checks, `source:${id}`).status).toBe('ok');
     expect(byId(checks, 'daemon')).toMatchObject({ status: 'warn', label: '警告' });

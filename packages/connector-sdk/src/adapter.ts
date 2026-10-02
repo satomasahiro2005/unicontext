@@ -146,3 +146,34 @@ export interface WatchableAdapter extends SourceAdapter {
 export function isWatchable(adapter: SourceAdapter): adapter is WatchableAdapter {
   return typeof (adapter as Partial<WatchableAdapter>).watch === 'function';
 }
+
+/**
+ * Fetch announcement bodies the user explicitly asked for, even when that changes state at the
+ * source (LiveCampusU marks an opened notice read and cannot set it back). Never part of a sync:
+ * only the CLI / REST / Web UI / MCP "open" actions call it, and adapters serialize it with sync().
+ */
+export interface OpenAnnouncementsAdapter extends SourceAdapter {
+  openAnnouncements(
+    requests: readonly { externalId: string; previousPayload?: unknown }[],
+    options: { acceptMarksRead: true; signal?: AbortSignal },
+  ): Promise<OpenAnnouncementsResult>;
+}
+
+export interface OpenAnnouncementsResult {
+  /** The announcements' raw items with their bodies (ingest them with SyncEngine.ingest). */
+  items: RawItem[];
+  results: {
+    externalId: string;
+    status: 'opened' | 'notFound' | 'failed';
+    /** It was unread at the source before (opening it marked it read there). */
+    wasUnread?: boolean;
+    error?: string;
+  }[];
+  warnings: string[];
+}
+
+export function supportsOpenAnnouncements(
+  adapter: SourceAdapter,
+): adapter is OpenAnnouncementsAdapter {
+  return typeof (adapter as Partial<OpenAnnouncementsAdapter>).openAnnouncements === 'function';
+}

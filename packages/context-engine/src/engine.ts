@@ -35,6 +35,7 @@ import {
   ChangeEventStore,
   EntityStore,
   RawStore,
+  ReadMarkStore,
   SourceReferenceStore,
   createStores,
   type UniContextDatabase,
@@ -143,6 +144,7 @@ export class ContextEngine {
   private readonly entities: EntityStore;
   private readonly refs: SourceReferenceStore;
   private readonly changes: ChangeEventStore;
+  private readonly readMarks: ReadMarkStore;
   private readonly resolver: ConflictResolver;
   private readonly identity: IdentityResolver;
   private readonly tasks: TaskEngine;
@@ -158,6 +160,7 @@ export class ContextEngine {
     this.entities = new EntityStore(this.db, { clock: this.clock });
     this.refs = new SourceReferenceStore(this.db);
     this.changes = new ChangeEventStore(this.db);
+    this.readMarks = new ReadMarkStore(this.db);
     this.resolver = options.resolver;
     this.identity = options.identity;
     this.tasks = options.tasks;
@@ -499,6 +502,34 @@ export class ContextEngine {
     };
   }
 
+  /**
+   * UniContext's own unread flag: the user's mark when there is one (a notice fetched on request
+   * stays unread here until read in UniContext), otherwise the source's read state.
+   */
+  isUnread(a: Announcement): boolean {
+    const mark = this.readMarks.get(a.id);
+    if (mark) return mark.unread;
+    return readAnnouncementExtra(a.extra).read === false;
+  }
+
+  /** Mark an announcement read/unread in UniContext only (never at the source). */
+  setAnnouncementRead(id: string, read: boolean, reason = 'user'): AnnouncementItem {
+    const a = this.entities.getOfKind('announcement', id);
+    if (!a) throw new NotFoundError(`announcement ${id}`);
+    this.readMarks.set(id, !read, reason, this.now().toISOString());
+    return this.announcementItem(a);
+  }
+
+  /**
+   * Announcements whose body the connector has not fetched: unread at the source (`notOpened`,
+   * fetching marks them read there) or read but not fetched yet (`pending`). Newest first.
+   */
+  unopenedAnnouncements(): AnnouncementItem[] {
+    return this.listAnnouncements().filter(
+      (a) => a.bodyStatus === 'notOpened' || a.bodyStatus === 'pending',
+    );
+  }
+
   announcementItem(a: Announcement): AnnouncementItem {
     const extra = readAnnouncementExtra(a.extra);
     return {
@@ -512,6 +543,7 @@ export class ContextEngine {
       course: this.courseRef(a.courseOfferingId),
       category: a.category,
       read: extra.read,
+      unread: this.isUnread(a),
       bodyStatus: extra.bodyStatus,
       attachments: extra.attachments,
       citations: this.citationsFor([a.id]),
@@ -560,7 +592,7 @@ export class ContextEngine {
       .list('announcement', ids ? { where: { courseOfferingId: ids } } : {})
       .filter((a) => {
         if (opts.importance && !opts.importance.includes(a.importance)) return false;
-        if (opts.unreadOnly && readAnnouncementExtra(a.extra).read !== false) return false;
+        if (opts.unreadOnly && !this.isUnread(a)) return false;
         if (since !== undefined || until !== undefined) {
           const t = a.publishedAt ? Date.parse(a.publishedAt) : Number.NaN;
           if (Number.isNaN(t)) return false;

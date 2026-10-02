@@ -167,6 +167,27 @@ export const listAdditionsShape = {
   limit: z.number().int().positive().max(200).optional(),
 };
 
+export const openAnnouncementShape = {
+  ids: z
+    .array(z.string().min(1).max(200))
+    .min(1)
+    .max(10)
+    .describe('announcement:… の id（get_announcements の結果。最大10件）'),
+};
+
+export const OPEN_ANNOUNCEMENT_RESULT_SHAPE = {
+  results: z.array(
+    z.looseObject({
+      id: z.string(),
+      status: z.enum(['opened', 'alreadyFetched', 'notFound', 'unsupported', 'failed']),
+      markedReadAtSource: z.boolean(),
+    }),
+  ),
+  opened: z.number().int(),
+  markedReadAtSource: z.number().int(),
+  answerHint: z.string(),
+};
+
 export const retractAdditionShape = {
   additionId: z.string().min(1).max(100).describe('addition:… の id'),
 };
@@ -197,6 +218,11 @@ export const WRITE_TOOLS = {
     title: '自分が追加した内容',
     description:
       'この接続（クライアント）が追加した内容と、その状態（unconfirmed=未確認 / confirmed=本人が確認済み / rejected=本人が却下 / retracted=取り消し済み）を新しい順に返す。他のクライアントの追加は見えない。 / This client’s own additions and their status.',
+  },
+  open_announcement: {
+    title: 'お知らせの本文を取得（LiveCampusUで既読になる）',
+    description:
+      '【LiveCampusUのお知らせが既読になる・元に戻せない】本文を取得していない（bodyStatus が notOpened）LiveCampusUのお知らせを、指定したものだけ開いて本文を取得する。LiveCampusUは開いたお知らせを既読にし、未読に戻す方法がないため、必ず事前にユーザー本人の了承を得てから呼ぶこと。UniContextの中では本人が読むまで未読のまま表示される。本文以外は何も変更・送信しない。 / Opens the given unread LiveCampusU notices to fetch their bodies. THIS MARKS THEM READ IN LIVECAMPUSU AND CANNOT BE UNDONE: ask the user first. UniContext keeps them unread until the user reads them there. Nothing else is changed or sent.',
   },
   retract_addition: {
     title: '追加を取り消す',

@@ -28,7 +28,9 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
   `get_syllabus`, `get_credit_summary`, …), each with `readOnlyHint: true` and an output schema.
   With the `unicontext.write` scope only, also the record tools `record_lecture`, `add_deadline`,
   `add_note`, `add_task`, `list_my_additions` and `retract_addition` (`readOnlyHint: false`,
-  `destructiveHint` only on `retract_addition`). The propose-only tools (`correct_fact`,
+  `destructiveHint` only on `retract_addition`), and `open_announcement` (fetches the body of
+  LiveCampusU notices that are unread there; this marks them read in LiveCampusU and cannot be
+  undone, so it is `destructiveHint: true`, `openWorldHint: true` and ChatGPT asks first). The propose-only tools (`correct_fact`,
   `propose_pace_slot`) are **never registered** on this surface, so a call to them fails as an
   unknown tool. `get_source` returns the citation and the facts it supports, but no raw source
   payloads.

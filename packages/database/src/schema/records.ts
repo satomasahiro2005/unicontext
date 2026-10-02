@@ -174,3 +174,11 @@ export const additions = sqliteTable(
     uniqueIndex('additions_idempotency').on(t.clientId, t.idempotencyKey),
   ],
 );
+
+/** UniContext's own read state of an entity (009_read_marks), independent of the source's. */
+export const readMarks = sqliteTable('read_marks', {
+  entityId: text('entity_id').primaryKey(),
+  unread: integer('unread').notNull(),
+  reason: text('reason'),
+  updatedAt: text('updated_at').notNull(),
+});

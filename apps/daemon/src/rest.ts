@@ -9,7 +9,13 @@ import {
   type TaskStatus,
   TASK_STATUSES,
 } from '@unicontext/canonical-model';
-import { buildGradeReport, getView, setPaceSlots } from '@unicontext/context-engine';
+import {
+  buildGradeReport,
+  getView,
+  MAX_OPEN_PER_REQUEST,
+  openAnnouncements,
+  setPaceSlots,
+} from '@unicontext/context-engine';
 import {
   isUniContextError,
   NotFoundError,
@@ -33,8 +39,10 @@ import { z } from 'zod';
 import type {
   AdditionResponse,
   AdditionsResponse,
+  AnnouncementReadResponse,
   AnnouncementResponse,
   AnnouncementsResponse,
+  UnopenedAnnouncementsResponse,
   AssignmentsResponse,
   ConflictsResponse,
   CoursesResponse,
@@ -440,6 +448,10 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
     };
   });
 
+  app.get('/api/v1/announcements/unopened', async (): Promise<UnopenedAnnouncementsResponse> => ({
+    announcements: uc.context.unopenedAnnouncements(),
+  }));
+
   app.get<{ Params: { id: string } }>(
     '/api/v1/announcements/:id',
     async (request): Promise<AnnouncementResponse> => {
@@ -676,6 +688,26 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
   app.post<{ Params: { id: string } }>('/api/v1/proposals/:id/reject', write, async (request) => {
     return { proposal: toProposalView(runtime.proposals.reject(request.params.id)) };
   });
+
+  // Fetch notice bodies on the user's request. Unread LiveCampusU notices become read there
+  // (cannot be undone); the adapter serializes this with the sync, which never opens them.
+  app.post<{ Body: unknown }>('/api/v1/announcements/open', write, async (request) => {
+    const body = parse(
+      z.object({ ids: z.array(z.string().min(1).max(200)).min(1).max(MAX_OPEN_PER_REQUEST) }),
+      request.body,
+    );
+    return openAnnouncements(uc, body.ids);
+  });
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    '/api/v1/announcements/:id/read',
+    write,
+    async (request): Promise<AnnouncementReadResponse> => {
+      const body = parse(z.object({ read: z.boolean().optional() }), request.body ?? {});
+      return {
+        announcement: uc.context.setAnnouncementRead(request.params.id, body.read ?? true),
+      };
+    },
+  );
 
   // What AI clients wrote from lecture recordings: the user confirms (→ user facts) or rejects.
   app.post<{ Params: { id: string } }>(

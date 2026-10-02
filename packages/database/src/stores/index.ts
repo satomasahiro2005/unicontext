@@ -1,6 +1,7 @@
 import { type Clock, systemClock } from '@unicontext/core';
 import type { UniContextDatabase } from '../db.js';
 import { AdditionStore } from './addition-store.js';
+import { ReadMarkStore } from './read-mark-store.js';
 import { ChangeEventStore } from './change-event-store.js';
 import { EntityStore } from './entity-store.js';
 import { RawStore } from './raw-store.js';
@@ -22,6 +23,7 @@ export interface Stores {
   drift: SchemaDriftStore;
   versions: ProductVersionStore;
   additions: AdditionStore;
+  readMarks: ReadMarkStore;
 }
 
 export function createStores(db: UniContextDatabase, clock: Clock = systemClock): Stores {
@@ -35,5 +37,6 @@ export function createStores(db: UniContextDatabase, clock: Clock = systemClock)
     drift: new SchemaDriftStore(db, clock),
     versions: new ProductVersionStore(db, clock),
     additions: new AdditionStore(db),
+    readMarks: new ReadMarkStore(db),
   };
 }

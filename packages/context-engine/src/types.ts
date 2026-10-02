@@ -130,6 +130,11 @@ export interface AnnouncementItem extends Cited {
   category: string | undefined;
   /** Read state mirrored from the source system (true = read). Undefined = unknown / not tracked. */
   read: boolean | undefined;
+  /**
+   * UniContext's own unread flag (what to show as 未読): the user's mark in UniContext when set —
+   * a notice fetched on request stays unread here until read in UniContext — else `read === false`.
+   */
+  unread: boolean;
   /** 'fetched' | 'notOpened' | 'pending' from the connector. 'notOpened' = unread at the source, body deliberately not fetched. */
   bodyStatus: string | undefined;
   attachments: AnnouncementAttachment[];

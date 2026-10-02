@@ -1,6 +1,7 @@
 import { CommanderError, Command } from 'commander';
 import { redact } from '@unicontext/core';
 import { registerAdditions } from './commands/additions.js';
+import { registerAnnouncements } from './commands/announcements.js';
 import { registerConfirm } from './commands/confirm.js';
 import { registerCorrect } from './commands/correct.js';
 import { registerDaemon } from './commands/daemon.js';
@@ -64,6 +65,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerCorrect(program, harness);
   registerConfirm(program, harness);
   registerAdditions(program, harness);
+  registerAnnouncements(program, harness);
   registerPace(program, harness);
   registerDoctor(program, harness);
   registerDataCommands(program, harness);

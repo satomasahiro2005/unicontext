@@ -129,7 +129,12 @@ describe('hard-coded request policy (denylist)', () => {
 });
 
 describe('notice grants', () => {
-  const grants = [undefined, 'notice-detail', 'notice-attachments'] as const;
+  const grants = [
+    undefined,
+    'notice-detail',
+    'notice-detail-on-demand',
+    'notice-attachments',
+  ] as const;
 
   it('readMark stays denied with every grant (it can only mark read, never restore unread)', () => {
     for (const grant of grants)
