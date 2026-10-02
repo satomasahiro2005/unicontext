@@ -17,7 +17,7 @@ main{max-width:440px;margin:0 auto;padding:32px 16px}
 .card{background:var(--card);border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.12)}
 h1{font-size:1.25rem;margin:0 0 12px}p{margin:8px 0}.muted{color:var(--muted);font-size:.9rem}
 .warn{color:var(--warn)}dl{margin:12px 0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px}dt{color:var(--muted)}dd{margin:0;word-break:break-all}
-label{display:block;margin:16px 0 4px}input[type=password]{width:100%;padding:10px;font-size:1rem;border:1px solid var(--muted);border-radius:8px;background:transparent;color:var(--fg)}
+label{display:block;margin:16px 0 4px}label.check{display:flex;gap:8px;align-items:flex-start;margin:12px 0 0}label.check input{margin-top:5px}input[type=password]{width:100%;padding:10px;font-size:1rem;border:1px solid var(--muted);border-radius:8px;background:transparent;color:var(--fg)}
 .row{display:flex;gap:12px;margin-top:16px}button{flex:1;padding:10px;font-size:1rem;border-radius:8px;border:1px solid var(--accent);cursor:pointer}
 button.primary{background:var(--accent);color:#fff}button.secondary{background:transparent;color:var(--accent)}
 `;
@@ -31,6 +31,8 @@ export interface ConsentPageInput {
   clientId: string;
   redirectHost: string;
   scope: string;
+  /** The client asked for unicontext.write: the checkbox starts ticked. */
+  writeRequested: boolean;
   sealed: string;
   message?: string | undefined;
   canUnlock: boolean;
@@ -42,6 +44,7 @@ export function consentPage(input: ConsentPageInput): string {
   const form = input.canUnlock
     ? `<form method="post" action="/authorize" autocomplete="off">
 <input type="hidden" name="request" value="${escapeHtml(input.sealed)}">
+<label class="check"><input type="checkbox" name="write" value="1"${input.writeRequested ? ' checked' : ''}>講義の記録・締切・メモをUniContextに追加することも許可する（unicontext.write）</label>
 <label for="passphrase">UniContextのパスフレーズ</label>
 <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" autofocus>
 <div class="row" style="flex-direction:row-reverse"><button class="primary" type="submit" name="action" value="approve">許可</button>
@@ -50,7 +53,7 @@ export function consentPage(input: ConsentPageInput): string {
   return page(
     'UniContextへの接続',
     `<h1>UniContextへの接続を許可しますか</h1>
-<p><strong>${escapeHtml(who)}</strong>が、あなたのUniContextの内容を<strong>読み取り専用</strong>で使えるようになります。何かを変更・送信することはできません。</p>
+<p><strong>${escapeHtml(who)}</strong>が、あなたのUniContextの内容を読み取れるようになります。大学のシステムに何かを送信することはできません。</p>
 <dl><dt>接続元</dt><dd>${escapeHtml(input.redirectHost)}</dd><dt>クライアント</dt><dd>${escapeHtml(input.clientId)}</dd><dt>範囲</dt><dd>${escapeHtml(input.scope)}</dd></dl>
 ${message}${form}
 <p class="muted">許可は<code>unicontext remote revoke</code>でいつでも取り消せます。</p>`,

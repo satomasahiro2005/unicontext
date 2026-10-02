@@ -83,7 +83,7 @@ describe('backup (§62) and purge (§63)', () => {
     expect(path.basename(b.directory)).toBe('unicontext-backup-20261001-000000');
     expect(JSON.parse(readFileSync(b.metadataFile, 'utf8'))).toMatchObject({
       containsSecrets: false,
-      schemaVersion: 7,
+      schemaVersion: 8,
     });
     expect(JSON.parse(readFileSync(b.mappingsFile, 'utf8'))).toEqual({ identityLinks: [] });
     db.close();

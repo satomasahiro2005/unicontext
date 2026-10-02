@@ -8,6 +8,7 @@ export * from './stores/entity-store.js';
 export * from './stores/source-ref-store.js';
 export * from './stores/change-event-store.js';
 export * from './stores/source-state-stores.js';
+export * from './stores/addition-store.js';
 export * from './maintenance.js';
 export { createStores, type Stores } from './stores/index.js';
 

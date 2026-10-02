@@ -9,6 +9,7 @@ import {
   type TaskStatus,
 } from '@unicontext/canonical-model';
 import {
+  type AdditionResult,
   CONTEXT_VIEWS,
   formatPaceSlot,
   getView,
@@ -29,6 +30,22 @@ import {
 } from '@unicontext/core';
 import { toCitation, type Citation } from '@unicontext/provenance';
 import { z } from 'zod';
+import {
+  type AdditionClient,
+  addDeadlineShape,
+  addNoteShape,
+  addTaskShape,
+  compactAddition,
+  courseIdForWrite,
+  LIST_RESULT_SHAPE,
+  listAdditionsShape,
+  recordLectureShape,
+  retractAdditionShape,
+  toStatuses as toAdditionStatuses,
+  WRITE_RESULT_SHAPE,
+  WRITE_TOOLS,
+  writeOutput,
+} from './additions.js';
 import { ALL_TASK_STATUSES, buildAssignments, type AssignmentFilter } from './assignments.js';
 import { listCourses, resolveCourse } from './courses.js';
 import {
@@ -66,6 +83,14 @@ export interface McpDeps {
    * not registered at all, and `get_source` leaves out raw payloads.
    */
   surface?: McpSurface;
+  /**
+   * Remote surface: the OAuth grant includes `unicontext.write`, so the record tools
+   * (record_lecture, add_deadline, add_note, add_task, list_my_additions, retract_addition) are
+   * registered. The propose-only tools never are. The local surface always has the record tools.
+   */
+  allowWrite?: boolean;
+  /** Who is calling (remote: the OAuth client). Default `local:<MCP client name>`. */
+  client?: AdditionClient;
   /** Called after every tool call (audit log of the remote surface). Never receives arguments. */
   onToolCall?: (event: ToolCallEvent) => void;
 }
@@ -76,6 +101,13 @@ export interface ToolCallEvent {
   tool: string;
   ok: boolean;
   ms: number;
+  /** Write tools: what was written (ids only, never the text). */
+  write?: {
+    status: string;
+    additionId: string;
+    entityIds: string[];
+    factIds: string[];
+  };
 }
 
 export const MCP_SERVER_NAME = 'unicontext';
@@ -91,7 +123,8 @@ export const SERVER_INSTRUCTIONS = [
   'conflicts が空でないときは、情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典をユーザーに伝えてください。',
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
   '書き込みは propose-only です。correct_fact は提案を作るだけで、ユーザー本人が確認するまで何も変更されません。課題の提出・履修登録や削除・成績に関わる操作はできません（提出済み status は提出システムからのみ反映されます）。',
-  'Answers must cite sources, must report conflicting sources instead of picking one, and writes are propose-only.',
+  '講義の録音で聞いたこと（講義の要約・締切・試験・準備・メモ）は record_lecture / add_deadline / add_note / add_task でUniContextに保存できます（大学のシステムには送られず、本人が確認するまで「録音から」の未確認情報）。',
+  'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only; recorded additions stay unconfirmed until the owner confirms them.',
 ].join('\n');
 
 /** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */
@@ -102,6 +135,18 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
   'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
   'Read-only: answers must cite sources and report conflicting sources instead of picking one.',
+].join('\n');
+
+/** Instructions of the remote surface when the grant includes unicontext.write. */
+export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
+  'UniContextは学生本人の大学の予定・課題・お知らせ・講義録・シラバスを、情報源つきで返すサーバーです。',
+  '回答するときは、各結果のcitations・answerHintに従い「根拠: 学務情報システム 10/1 09:42取得」のように出典を添えてください。',
+  'conflictsが空でないときは情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典を伝えてください。',
+  '情報がない・見つからないときは推測で補わず、そう伝えてください。',
+  '講義の録音で聞いたことは record_lecture（要約・要点）・add_deadline（課題・レポート・小テスト・試験・準備の締切）・add_note・add_task で保存できます。保存先はUniContext自身のデータベースだけで、大学のシステムには何も送りません。',
+  '保存するときは evidence に発言をそのまま引用し、recordingTimestamp に録音の位置を入れてください。締切は聞いたままの表現（来週の金曜・次回など）でよく、解決した日時が返るのでユーザーに伝えてください。',
+  '保存した内容は本人が確認するまで「録音から」の未確認情報です。学務情報システムなどの値は変えられず、課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
+  'Writes go to UniContext only (never to a university system), stay unconfirmed until the owner confirms them, and cannot change authoritative data, task status or grades.',
 ].join('\n');
 
 // ---------- shared plumbing ----------
@@ -206,7 +251,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const remote = deps.surface === 'remote';
   const server = new McpServer(
     { name: MCP_SERVER_NAME, version: deps.version ?? DEFAULT_MCP_VERSION },
-    { instructions: remote ? REMOTE_SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS },
+    {
+      instructions: remote
+        ? deps.allowWrite
+          ? REMOTE_WRITE_SERVER_INSTRUCTIONS
+          : REMOTE_SERVER_INSTRUCTIONS
+        : SERVER_INSTRUCTIONS,
+    },
   );
 
   const courseId = (input: string | undefined): string | undefined =>
@@ -260,6 +311,79 @@ export function createMcpServer(deps: McpDeps): McpServer {
       callback as unknown as Parameters<typeof server.registerTool>[2],
     );
   }
+
+  /** Record tools (UniContext-only writes). Remote: only with the unicontext.write scope. */
+  function writeTool<S extends z.ZodRawShape>(
+    name: keyof typeof WRITE_TOOLS,
+    meta: { outputShape: z.ZodRawShape; destructive?: boolean },
+    shape: S,
+    run: (
+      args: z.infer<z.ZodObject<S>>,
+    ) => Promise<{ structured: Record<string, unknown>; write?: ToolCallEvent['write'] }>,
+  ): void {
+    if (remote && !deps.allowWrite) return;
+    const callback = async (args: unknown): Promise<CallToolResult> => {
+      const started = Date.now();
+      let write: ToolCallEvent['write'];
+      let ok = false;
+      try {
+        const out = await run(args as z.infer<z.ZodObject<S>>);
+        write = out.write;
+        ok = true;
+        if (write)
+          logger.info('mcp write', {
+            tool: name,
+            status: write.status,
+            additionId: write.additionId,
+            entities: write.entityIds.length,
+            facts: write.factIds.length,
+          });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(out.structured, null, remote ? 0 : 2) }],
+          structuredContent: out.structured,
+        };
+      } catch (e) {
+        return errorResult(e, logger, name, redactionOptions(uc));
+      } finally {
+        try {
+          deps.onToolCall?.({
+            tool: name,
+            ok,
+            ms: Date.now() - started,
+            ...(write ? { write } : {}),
+          });
+        } catch (e) {
+          logger.warn('mcp audit hook failed', { tool: name, error: errorMessage(e) });
+        }
+      }
+    };
+    server.registerTool(
+      name,
+      {
+        title: WRITE_TOOLS[name].title,
+        description: WRITE_TOOLS[name].description,
+        inputSchema: shape,
+        outputSchema: meta.outputShape,
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: meta.destructive === true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      callback as unknown as Parameters<typeof server.registerTool>[2],
+    );
+  }
+
+  const caller = (): AdditionClient => {
+    if (deps.client) return deps.client;
+    const name = server.server.getClientVersion()?.name;
+    return { id: `local:${name ?? 'unknown'}`, ...(name ? { name } : {}) };
+  };
+  const written = (r: AdditionResult) => ({
+    structured: writeOutput(r),
+    write: { status: r.status, ...r.audit },
+  });
 
   const view = (name: ContextViewName, params: unknown = {}): ToolOutput => ({
     data: getView(uc.context, name, params),
@@ -571,6 +695,103 @@ export function createMcpServer(deps: McpDeps): McpServer {
         .describe('例: ["土 10:00-11:30", "水2限"]。空配列で自習時間の解除 / Slots; [] clears'),
     },
     (a) => proposePaceSlot(a),
+  );
+
+  // ----- record tools: what the client heard in a lecture, stored in UniContext only -----
+
+  writeTool('record_lecture', { outputShape: WRITE_RESULT_SHAPE }, recordLectureShape, async (a) =>
+    written(
+      await uc.additions.recordLecture(caller(), {
+        courseOfferingId: courseIdForWrite(uc, a.course),
+        date: a.date,
+        period: a.period,
+        title: a.title,
+        summary: a.summary,
+        keyPoints: a.keyPoints,
+        transcriptExcerpt: a.transcriptExcerpt,
+        segments: a.segments,
+        recordingTimestamp: a.recordingTimestamp,
+        source: a.source,
+        idempotencyKey: a.idempotencyKey,
+      }),
+    ),
+  );
+
+  writeTool('add_deadline', { outputShape: WRITE_RESULT_SHAPE }, addDeadlineShape, async (a) =>
+    written(
+      await uc.additions.addDeadline(caller(), {
+        courseOfferingId: courseIdForWrite(uc, a.course),
+        title: a.title,
+        dueAt: a.dueAt,
+        kind: a.kind,
+        evidence: a.evidence,
+        recordingTimestamp: a.recordingTimestamp,
+        lectureDate: a.lectureDate,
+        notes: a.notes,
+        source: a.source,
+        idempotencyKey: a.idempotencyKey,
+      }),
+    ),
+  );
+
+  writeTool('add_note', { outputShape: WRITE_RESULT_SHAPE }, addNoteShape, async (a) =>
+    written(
+      await uc.additions.addNote(caller(), {
+        courseOfferingId: courseIdForWrite(uc, a.course),
+        title: a.title,
+        text: a.text,
+        evidence: a.evidence,
+        lectureDate: a.lectureDate,
+        recordingTimestamp: a.recordingTimestamp,
+        source: a.source,
+        idempotencyKey: a.idempotencyKey,
+      }),
+    ),
+  );
+
+  writeTool('add_task', { outputShape: WRITE_RESULT_SHAPE }, addTaskShape, async (a) =>
+    written(
+      await uc.additions.addTask(caller(), {
+        courseOfferingId: courseIdForWrite(uc, a.course),
+        title: a.title,
+        dueAt: a.dueAt,
+        notes: a.notes,
+        evidence: a.evidence,
+        lectureDate: a.lectureDate,
+        recordingTimestamp: a.recordingTimestamp,
+        source: a.source,
+        idempotencyKey: a.idempotencyKey,
+      }),
+    ),
+  );
+
+  writeTool(
+    'list_my_additions',
+    { outputShape: LIST_RESULT_SHAPE },
+    listAdditionsShape,
+    async (a) => {
+      const statuses = toAdditionStatuses(a.status);
+      const list = uc.additions.listFor(caller(), {
+        ...(statuses ? { statuses } : {}),
+        ...(a.limit ? { limit: a.limit } : {}),
+      });
+      return {
+        structured: {
+          additions: list.map(compactAddition),
+          answerHint:
+            list.length === 0
+              ? 'この接続から追加した内容はありません。'
+              : 'この接続から追加した内容です。unconfirmed は本人がまだ確認していないもの、confirmed は本人が確認したものです。',
+        },
+      };
+    },
+  );
+
+  writeTool(
+    'retract_addition',
+    { outputShape: WRITE_RESULT_SHAPE, destructive: true },
+    retractAdditionShape,
+    async (a) => written(await uc.additions.retract(caller(), a.additionId.trim())),
   );
 
   function subjectEntity(input: string): { id: string; label: string } {

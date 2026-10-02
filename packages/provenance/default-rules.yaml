@@ -18,9 +18,13 @@ predicates:
   starts_at: [academic-system, instructor-announcement, calendar, syllabus]
   grade: [academic-system]
   grade_letter: [academic-system]
-  assignment_due: [submission-system, instructor-announcement, syllabus]
+  # academic-system (学務) is listed so that a newer, different due date heard in a lecture
+  # (transcript, origin extracted) opens a Conflict with it instead of being outranked silently;
+  # transcript is last, so a recording never wins against a system that states the date.
+  assignment_due:
+    [submission-system, instructor-announcement, syllabus, academic-system, transcript]
   submission_status: [submission-system]
-  exam_at: [academic-system, instructor-announcement, syllabus]
+  exam_at: [academic-system, instructor-announcement, syllabus, transcript]
   deadline:
     [
       submission-system,
@@ -31,6 +35,9 @@ predicates:
       discussion,
       transcript,
     ]
+# Predicates whose facts are separate items rather than competing values for one slot (a lecture
+# can name several things to prepare): they are never turned into Conflicts.
+multiValued: [todo]
 # Used for predicates not listed above.
 default:
   [

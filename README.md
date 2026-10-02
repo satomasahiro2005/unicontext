@@ -86,6 +86,19 @@ UniContext is an MCP server with high-level tools (`get_today`, `get_week`, `get
 
 `correct_fact` is propose-only. It creates a pending proposal; you approve it with `unicontext confirm <id>` or in the Web UI (Settings). There is no tool for submitting assignments, changing enrolment or touching grades.
 
+Record tools let an AI client write what it heard in a lecture recording (ChatGPT Record) into UniContext's own database, never to a university system:
+
+| Tool                | What it stores                                                                                                                                                                          |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `record_lecture`    | Summary, key points and an optional timestamped transcript excerpt, linked to that day's class (Lecture, LectureTranscript, LectureSegments)                                            |
+| `add_deadline`      | An assignment, report, quiz, exam or preparation item. `dueAt` is ISO-8601 or Japanese as heard (`来週の金曜`, `次回`), resolved with the lecture date, timetable and academic calendar |
+| `add_note`          | A note on the course (searchable)                                                                                                                                                       |
+| `add_task`          | A to-do, with or without a due date                                                                                                                                                     |
+| `list_my_additions` | The calling client's own additions and their status                                                                                                                                     |
+| `retract_addition`  | Withdraws one of the calling client's own unconfirmed additions                                                                                                                         |
+
+Everything they write is `origin=extracted`, cites the recording (client, time, recording timestamp, quoted evidence), shows as 「録音から」 on Today and in the deadlines, gets deadline notifications for courses you take, and never overrides LiveCampusU or the syllabus: a different date becomes a conflict. You confirm (it becomes your own fact) or reject each one with `unicontext additions` (`confirm <id>`, `reject <id>`) or in the Web UI (Settings). The same item said twice is updated, not duplicated, and each call can carry an `idempotencyKey`. Writes are rate limited per client and cannot change task status, submissions or grades.
+
 Replace `/abs/path/to/unicontext` below with your checkout.
 
 ### Claude Code
@@ -131,7 +144,7 @@ Codex versions that support streamable HTTP servers can use the daemon instead: 
 
 ### ChatGPT
 
-ChatGPT on the web (developer-mode MCP app) and claude.ai connect to remote MCP servers over public HTTPS. UniContext listens on loopback only by default. If you want it there, enable the optional **read-only remote endpoint**: a separate listener with only read tools, published through a Cloudflare named tunnel and protected by OAuth 2.1 plus an owner passphrase on every authorization. It never exposes the REST API, the Web UI or the propose-only tools, and every remote tool call is audit-logged. Setup and revocation: [docs/remote.md](docs/remote.md) (`unicontext remote set-passphrase | tunnel-config | clients | revoke`).
+ChatGPT on the web (developer-mode MCP app) and claude.ai connect to remote MCP servers over public HTTPS. UniContext listens on loopback only by default. If you want it there, enable the optional **remote endpoint**: a separate listener with the read tools, published through a Cloudflare named tunnel and protected by OAuth 2.1 plus an owner passphrase on every authorization. The record tools above are added only for clients you grant the `unicontext.write` scope on the approval page. It never exposes the REST API, the Web UI or the propose-only tools, and every remote tool call is audit-logged. Setup and revocation: [docs/remote.md](docs/remote.md) (`unicontext remote set-passphrase | tunnel-config | clients | revoke`).
 
 ## Web UI
 

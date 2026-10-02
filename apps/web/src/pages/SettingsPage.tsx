@@ -12,6 +12,8 @@ import { describeNotification } from '../lib/notifications';
 import { formatValue } from '../lib/values';
 import { readTheme, saveTheme, THEME_OPTIONS, type ThemePreference } from '../theme';
 import type {
+  AdditionsResponse,
+  AdditionView,
   Citation,
   NotificationsResponse,
   ProposalsResponse,
@@ -25,6 +27,7 @@ export function SettingsPage() {
     <>
       <PageHeader title="設定" />
       <ThemeSection />
+      <AdditionsSection />
       <ProposalsSection />
       <NotificationsSection />
       <SettingsSection />
@@ -131,6 +134,103 @@ function ProposalsSection() {
             </ul>
           );
         }}
+      </Async>
+    </Section>
+  );
+}
+
+const ADDITION_KIND: Record<AdditionView['kind'], string> = {
+  lecture: '講義の記録',
+  assignment: '課題',
+  report: 'レポート',
+  quiz: '小テスト',
+  exam: '試験',
+  prep: '準備',
+  note: 'メモ',
+  task: 'やること',
+};
+
+/** What AI clients added from lecture recordings, waiting for the user to confirm or reject. */
+function AdditionsSection() {
+  const state = useApi<AdditionsResponse>('/api/v1/additions');
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | undefined>(undefined);
+
+  async function decide(a: AdditionView, action: 'confirm' | 'reject'): Promise<void> {
+    setBusy(a.id);
+    try {
+      await apiPost(`/api/v1/additions/${enc(a.id)}/${action}`);
+      toast.success(action === 'confirm' ? '確認しました' : '却下しました');
+      await state.refetch();
+    } catch (error) {
+      toast.error(errorMessage(error));
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
+  return (
+    <Section title="録音からの追加">
+      <Async state={state}>
+        {({ additions }) =>
+          additions.length === 0 ? (
+            <Empty />
+          ) : (
+            <ul className="plain-list stack">
+              {additions.map((a) => (
+                <li key={a.id} className="card">
+                  <header className="card-head">
+                    <h3 className="card-title">{a.title}</h3>
+                    <Badge>{ADDITION_KIND[a.kind]}</Badge>
+                    <Badge tone="warn">録音から</Badge>
+                    {a.conflicts.length > 0 ? <Badge tone="bad">大学側と食い違い</Badge> : null}
+                  </header>
+                  <p className="meta">
+                    {a.course ? <span>{a.course.title}</span> : null}
+                    {a.dueText ? (
+                      <>
+                        <span className="field-label">日時</span>
+                        <strong>{a.dueText}</strong>
+                      </>
+                    ) : null}
+                    <span>
+                      {a.source}
+                      {a.recordingTimestamp ? ` ${a.recordingTimestamp}` : ''}
+                    </span>
+                  </p>
+                  {a.attachedTo ? <p className="note">大学側の項目: {a.attachedTo.title}</p> : null}
+                  {a.conflicts.map((c) => (
+                    <p key={c.id} className="note">
+                      {c.values
+                        .map(
+                          (v) =>
+                            `${typeof v.value === 'string' ? v.value : JSON.stringify(v.value)}（${v.source}）`,
+                        )
+                        .join(' / ')}
+                    </p>
+                  ))}
+                  {a.evidence ? <blockquote className="evidence">{a.evidence}</blockquote> : null}
+                  <div className="actions">
+                    <button
+                      type="button"
+                      disabled={busy === a.id}
+                      onClick={() => void decide(a, 'confirm')}
+                    >
+                      確認
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy === a.id}
+                      onClick={() => void decide(a, 'reject')}
+                    >
+                      却下
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )
+        }
       </Async>
     </Section>
   );

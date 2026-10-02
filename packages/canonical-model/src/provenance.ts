@@ -33,6 +33,13 @@ export const KNOWN_AUTHORITIES = [
 ] as const;
 export type KnownAuthority = (typeof KNOWN_AUTHORITIES)[number];
 
+/**
+ * Source id under which everything an AI client writes through the MCP write tools
+ * (record_lecture, add_deadline, add_note, add_task) is stored. Never an authoritative source:
+ * every fact it carries is origin=extracted until the owner confirms it (§11, §48).
+ */
+export const ADDITIONS_SOURCE_ID = 'mcp-additions';
+
 export const SourceLocationSchema = z.object({
   page: z.number().int().positive().optional(),
   /** "HH:MM:SS" into a recording (§10: 講義録音の 00:42:18). */

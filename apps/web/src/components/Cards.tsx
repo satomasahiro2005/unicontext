@@ -146,6 +146,8 @@ interface TaskLike {
   overdue?: boolean | undefined;
   hoursLeft?: number | undefined;
   evidence?: string | undefined;
+  /** Only heard in a lecture recording (an AI client added it), not confirmed yet. */
+  recorded?: { label: string; timestamp: string | undefined; source: string } | undefined;
   citations: Citation[];
 }
 
@@ -161,7 +163,11 @@ export function TaskRow({ item }: { item: TaskLike }) {
       <header className="card-head">
         <h3 className="card-title">{item.title}</h3>
         <Badge tone={taskStatusTone(item.status)}>{taskStatusLabel(item.status)}</Badge>
-        {item.origin !== 'authoritative' ? <Badge>{originLabel(item.origin)}</Badge> : null}
+        {item.recorded ? (
+          <Badge tone="warn">{item.recorded.label}</Badge>
+        ) : item.origin !== 'authoritative' ? (
+          <Badge>{originLabel(item.origin)}</Badge>
+        ) : null}
       </header>
       <p className="meta">
         <CourseLink course={item.course} />

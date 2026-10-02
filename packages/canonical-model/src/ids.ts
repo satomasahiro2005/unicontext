@@ -37,6 +37,7 @@ export const RECORD_KINDS = [
   'conflict',
   'changeEvent',
   'identityLink',
+  'addition',
 ] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
 

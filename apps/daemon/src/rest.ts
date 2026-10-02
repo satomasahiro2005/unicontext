@@ -2,7 +2,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
-import { type JsonValue, type TaskStatus, TASK_STATUSES } from '@unicontext/canonical-model';
+import {
+  ADDITION_STATUSES,
+  type AdditionStatus,
+  type JsonValue,
+  type TaskStatus,
+  TASK_STATUSES,
+} from '@unicontext/canonical-model';
 import { buildGradeReport, getView, setPaceSlots } from '@unicontext/context-engine';
 import {
   isUniContextError,
@@ -25,6 +31,8 @@ import { toCitation } from '@unicontext/provenance';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type {
+  AdditionResponse,
+  AdditionsResponse,
   AssignmentsResponse,
   ConflictsResponse,
   CoursesResponse,
@@ -489,6 +497,27 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
     return { proposals: list.map(toProposalView) };
   });
 
+  app.get('/api/v1/additions', async (request): Promise<AdditionsResponse> => {
+    const status = q(request).status;
+    if (
+      status !== undefined &&
+      status !== 'all' &&
+      !(ADDITION_STATUSES as readonly string[]).includes(status)
+    )
+      throw new ValidationError(`unknown status: ${status}`);
+    const limit = intParam(q(request).limit, 'limit') ?? 200;
+    return {
+      additions: uc.additions.list({
+        ...(status === undefined
+          ? { statuses: ['unconfirmed'] }
+          : status === 'all'
+            ? {}
+            : { statuses: [status as AdditionStatus] }),
+        limit: Math.min(limit, 500),
+      }),
+    };
+  });
+
   app.get('/api/v1/settings', async (): Promise<SettingsResponse> => ({
     version: options.version,
     dataDir: runtime.paths.root,
@@ -619,6 +648,22 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
   app.post<{ Params: { id: string } }>('/api/v1/proposals/:id/reject', write, async (request) => {
     return { proposal: toProposalView(runtime.proposals.reject(request.params.id)) };
   });
+
+  // What AI clients wrote from lecture recordings: the user confirms (→ user facts) or rejects.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/additions/:id/confirm',
+    write,
+    async (request): Promise<AdditionResponse> => ({
+      addition: await uc.additions.confirm(request.params.id),
+    }),
+  );
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/additions/:id/reject',
+    write,
+    async (request): Promise<AdditionResponse> => ({
+      addition: await uc.additions.reject(request.params.id),
+    }),
+  );
 
   app.post('/api/v1/daemon/stop', write, async () => {
     setImmediate(() => options.onStop?.());

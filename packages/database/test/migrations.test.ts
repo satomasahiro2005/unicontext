@@ -23,6 +23,7 @@ describe('migrations', () => {
       '005_tasks',
       '006_search',
       '007_source_monitoring',
+      '008_additions',
     ]);
   });
 
@@ -76,7 +77,7 @@ describe('migrations', () => {
       )
       .run();
     const res = migrate(sqlite);
-    expect(res.applied.map((m) => m.version)).toEqual([4, 5, 6, 7]);
+    expect(res.applied.map((m) => m.version)).toEqual([4, 5, 6, 7, 8]);
     expect(sqlite.prepare('SELECT id FROM raw_sources').all()).toEqual([{ id: 's' }]);
   });
 
@@ -99,11 +100,11 @@ describe('migrations', () => {
       ...MIGRATIONS,
       {
         version: MIGRATIONS.length + 1,
-        name: '008_bad',
+        name: `${String(MIGRATIONS.length + 1).padStart(3, '0')}_bad`,
         sql: 'CREATE TABLE ok_table (x TEXT); SELECT * FROM missing_table;',
       },
     ];
-    expect(() => migrate(sqlite, { migrations: bad })).toThrow(/008_bad/);
+    expect(() => migrate(sqlite, { migrations: bad })).toThrow(/_bad/);
     expect(currentSchemaVersion(sqlite)).toBe(MIGRATIONS.length);
     expect(() => sqlite.prepare('SELECT * FROM ok_table').all()).toThrow();
   });

@@ -59,8 +59,14 @@ describe('remote (read-only) MCP surface', () => {
       expect(names).toEqual(
         expect.arrayContaining(['search_syllabus', 'get_syllabus', 'get_credit_summary']),
       );
-      for (const n of localNames.filter((x) => !['correct_fact', 'propose_pace_slot'].includes(x)))
+      // Record tools need the unicontext.write scope (apps/mcp/test/additions.test.ts).
+      const record =
+        /^(record_lecture|add_deadline|add_note|add_task|list_my_additions|retract_addition)$/;
+      for (const n of localNames.filter(
+        (x) => !['correct_fact', 'propose_pace_slot'].includes(x) && !record.test(x),
+      ))
         expect(names).toContain(n);
+      for (const n of localNames.filter((x) => record.test(x))) expect(names).not.toContain(n);
       for (const t of tools) {
         expect(t.annotations, t.name).toMatchObject({ readOnlyHint: true, destructiveHint: false });
         expect(t.outputSchema, t.name).toBeTruthy();

@@ -1,4 +1,5 @@
 import {
+  ADDITIONS_SOURCE_ID,
   type Announcement,
   type CanonicalEntity,
   type ChangeEvent,
@@ -68,9 +69,11 @@ import type {
   DayContext,
   DeadlineContext,
   DeadlineItem,
+  RecordedMarker,
   ExamPreparationContext,
   FactItem,
   LectureBundle,
+  LectureNoteItem,
   MaterialItem,
   PaceCourseItem,
   PaceItem,
@@ -382,14 +385,46 @@ export class ContextEngine {
     return uniqueCitations([...this.citationsFor(ids), ...fromFacts]);
   }
 
+  /**
+   * 「録音から」: the task rests only on what an AI client wrote from a lecture recording
+   * (unconfirmed, no system or user fact behind it).
+   */
+  recordedMarker(t: Task): RecordedMarker | undefined {
+    if (t.origin === 'authoritative' || t.origin === 'user' || t.sourceFactIds.length === 0)
+      return undefined;
+    const facts = this.resolver.facts
+      .withSources(this.resolver.facts.getMany(t.sourceFactIds))
+      .filter((f) => !f.fact.retractedAt);
+    if (facts.some((f) => f.fact.origin === 'authoritative' || f.fact.origin === 'user'))
+      return undefined;
+    const rec = facts.find((f) => f.source?.sourceId === ADDITIONS_SOURCE_ID);
+    if (!rec?.source) return undefined;
+    const item = rec.source.sourceItemId;
+    const hash = item.lastIndexOf('#');
+    return {
+      label: '録音から',
+      additionId: hash >= 0 ? item.slice(hash + 1) : undefined,
+      source: rec.source.sourceLabel ?? rec.source.sourceSystem,
+      timestamp: rec.source.location?.timestamp,
+      evidence: rec.fact.evidence ?? t.evidence,
+      confirmed: false,
+    };
+  }
+
   deadlineItem(t: Task): DeadlineItem | undefined {
     if (!t.dueAt) return undefined;
     const due = new Date(t.dueAt);
     const hoursLeft = Math.round(((due.getTime() - this.now().getTime()) / 3_600_000) * 10) / 10;
     const course = this.courseRef(t.courseOfferingId);
     const citations = this.taskCitations(t);
-    const origin =
-      t.origin === 'extracted' ? '（文章から抽出）' : t.origin === 'inferred' ? '（推定）' : '';
+    const recorded = this.recordedMarker(t);
+    const origin = recorded
+      ? '（録音から・未確認）'
+      : t.origin === 'extracted'
+        ? '（文章から抽出）'
+        : t.origin === 'inferred'
+          ? '（推定）'
+          : '';
     return {
       taskId: t.id,
       kind: t.taskKind,
@@ -400,9 +435,10 @@ export class ContextEngine {
       origin: t.origin,
       overdue: hoursLeft < 0,
       hoursLeft,
-      evidence: t.evidence,
-      summary: `${course ? `${course.title}: ` : ''}${t.title} 締切 ${formatShortJa(due, this.timezone)}${origin}${citations[0] ? `（根拠: ${citations[0].label}）` : ''}`,
+      evidence: t.evidence ?? recorded?.evidence,
+      summary: `${recorded ? '【録音から】' : ''}${course ? `${course.title}: ` : ''}${t.title} 締切 ${formatShortJa(due, this.timezone)}${origin}${citations[0] ? `（根拠: ${citations[0].label}）` : ''}`,
       citations,
+      ...(recorded ? { recorded } : {}),
     };
   }
 
@@ -417,6 +453,10 @@ export class ContextEngine {
       origin: t.origin,
       createdBy: t.createdBy,
       citations: this.taskCitations(t),
+      ...(() => {
+        const recorded = this.recordedMarker(t);
+        return recorded ? { recorded } : {};
+      })(),
     };
   }
 
@@ -1093,6 +1133,40 @@ export class ContextEngine {
         evidence: f.fact.evidence,
         citations: f.source ? [toCitation(f.source, this.timezone)] : [],
       }));
+    const notes: LectureNoteItem[] = [];
+    for (const id of lectureIds) {
+      const lec = this.entities.getOfKind('lecture', id);
+      const summary = lec?.extra?.summary;
+      if (lec && typeof summary === 'string')
+        notes.push({
+          id: lec.id,
+          kind: 'summary',
+          title: lec.title ?? l.date,
+          text: summary,
+          keyPoints: lec.topics,
+          origin: 'extracted',
+          citations: this.citationsFor([lec.id]),
+        });
+    }
+    if (ids.length > 0)
+      for (const d of this.entities.list('document', { where: { courseOfferingId: ids } })) {
+        const x = d.extra;
+        if (x?.recorded !== true) continue;
+        const lectureId = typeof x.lectureId === 'string' ? x.lectureId : undefined;
+        // record_lecture's own summary document is already listed as the lecture's summary.
+        if (lectureId && x.summaryOf === lectureId) continue;
+        const here = lectureId ? lectureIds.has(lectureId) : x.lectureDate === l.date;
+        if (!here) continue;
+        notes.push({
+          id: d.id,
+          kind: 'note',
+          title: d.title,
+          text: d.text ?? '',
+          keyPoints: [],
+          origin: 'extracted',
+          citations: this.citationsFor([d.id]),
+        });
+      }
     const session = sessionEntity ? this.classItem(sessionEntity) : undefined;
     const slides = materials
       .filter((m) => m.materialKind !== 'recording')
@@ -1112,6 +1186,7 @@ export class ContextEngine {
       announcements,
       questions,
       facts,
+      notes,
       citations: uniqueCitations([
         ...this.citationsFor([...lectureIds, ...transcripts.map((t) => t.id)]),
         ...(session?.citations ?? []),

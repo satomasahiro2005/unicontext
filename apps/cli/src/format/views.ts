@@ -141,8 +141,20 @@ function deadlineColumns(ctx: CliContext, tz: string): TableColumn<DeadlineItem>
     { header: '内容', value: (d) => ctx.text(d.title), max: 40 },
     { header: '科目', value: (d) => ctx.text(d.course?.title), max: 22 },
     { header: '状態', value: (d) => TASK_STATUS_LABELS[d.status] },
-    { header: '由来', value: (d) => ORIGIN_LABELS[d.origin] },
-    { header: '根拠', value: (d) => ctx.text(citationText(d.citations, 1)) },
+    {
+      header: '由来',
+      value: (d) => (d.recorded ? '録音から（未確認）' : ORIGIN_LABELS[d.origin]),
+    },
+    {
+      header: '根拠',
+      value: (d) =>
+        ctx.text(
+          d.recorded?.evidence
+            ? `「${d.recorded.evidence}」${citationText(d.citations, 1)}`
+            : citationText(d.citations, 1),
+        ),
+      max: 60,
+    },
   ];
 }
 
@@ -177,7 +189,10 @@ function printTasks(ctx: CliContext, tasks: readonly TaskItem[], tz: string): vo
       { header: '内容', value: (t) => ctx.text(t.title), max: 40 },
       { header: '科目', value: (t) => ctx.text(t.course?.title), max: 22 },
       { header: '状態', value: (t) => TASK_STATUS_LABELS[t.status] },
-      { header: '由来', value: (t) => ORIGIN_LABELS[t.origin] },
+      {
+        header: '由来',
+        value: (t) => (t.recorded ? '録音から（未確認）' : ORIGIN_LABELS[t.origin]),
+      },
       { header: '根拠', value: (t) => ctx.text(citationText(t.citations, 1)) },
     ],
     tasks,

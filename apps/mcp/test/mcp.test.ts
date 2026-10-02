@@ -96,11 +96,20 @@ describe('MCP contract: tools listing', () => {
     expect(names).toEqual(expect.arrayContaining(REQUIRED_TOOLS));
   });
 
-  it('marks read tools readOnly; only the two propose tools are write-capable', async () => {
+  it('marks read tools readOnly; only the propose and record tools are write-capable', async () => {
     const { tools } = await client.listTools();
+    const writeCapable = new Set([
+      'correct_fact',
+      'propose_pace_slot',
+      'record_lecture',
+      'add_deadline',
+      'add_note',
+      'add_task',
+      'list_my_additions',
+      'retract_addition',
+    ]);
     for (const t of tools) {
-      if (t.name === 'correct_fact' || t.name === 'propose_pace_slot')
-        expect(t.annotations?.readOnlyHint).toBe(false);
+      if (writeCapable.has(t.name)) expect(t.annotations?.readOnlyHint, t.name).toBe(false);
       else expect(t.annotations?.readOnlyHint, t.name).toBe(true);
       expect(t.description, t.name).toBeTruthy();
       expect(t.inputSchema.type).toBe('object');

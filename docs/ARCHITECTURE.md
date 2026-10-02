@@ -220,7 +220,7 @@ better-sqlite3 + Drizzle ORM. Secrets are never stored here (§32).
 - Migrations (§67): `MIGRATIONS` = `001_initial` (raw layer, sync_state, connector_health, all
   entity tables, source_references), `002_fact_model` (facts, conflicts), `003_change_events`,
   `004_identity_links`, `005_tasks`, `006_search` (FTS5 + embeddings), `007_source_monitoring`
-  (schema_drift, product_versions). `migrate(sqlite, {targetVersion?})`, `getAppliedMigrations`,
+  (schema_drift, product_versions), `008_additions` (ledger of MCP record-tool writes). `migrate(sqlite, {targetVersion?})`, `getAppliedMigrations`,
   `currentSchemaVersion`, `migrationChecksum`. Applied migrations are checksummed; editing one or
   opening a newer DB throws `MigrationError`. Each migration runs in a transaction. Add a migration
   by appending `008_<name>.ts` to `src/migrations/` and to `MIGRATIONS`; never edit old ones. The
@@ -254,6 +254,9 @@ types?, sourceId?, limit?})` (oldest first), `deleteBySource`.
   - `SyncStateStore`: `get(sourceId, scope = '')`, `set(sourceId, {cursor?, etag?, deltaToken?,
 lastModified?, extra?}, {scope?, mode?, fullSync?})`, `clear`. `scope` allows several cursors per
     source (e.g. one delta token per Graph resource).
+  - `AdditionStore` (`additions` table): `save`, `get`, `byIdempotencyKey(clientId, key)`,
+    `byDedupeKey(key, statuses)`, `list({clientId?, statuses?, courseOfferingIds?, limit?})`,
+    `countWritesSince(clientId, iso)`. `purgeSource(db, 'mcp-additions')` also clears it.
   - `HealthStore`: `get`, `list`, `set`, `delete`. `SchemaDriftStore`: `record(sourceId, type,
 findings, rawItemId?) → new findings`, `list({sourceId?, unresolvedOnly?})`, `resolve(id)`.
     `ProductVersionStore`: `record(sourceId, product, version, known)`, `latest`, `list`.
@@ -562,6 +565,24 @@ overdue, hoursLeft, evidence, summary}`; `ConflictItem {subject, subjectLabel, p
 candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `TaskItem`,
     `PreparationItem`, `SegmentItem`, `QuestionItem`, `FactItem`. `summary` strings embed the
     first citation (`…（根拠: 学務情報システム 10/1 09:42取得）`, §75).
+- AI additions (`additions.ts`, `uc.additions: AdditionsService`): what an MCP client heard in a
+  lecture recording, stored only in UniContext under source id `mcp-additions` (§11, §19–22,
+  §47–49, §74). `recordLecture` (Lecture linked to the day's ClassSession, a 講義メモ Document,
+  LectureTranscript + LectureSegments with per-segment timestamped references), `addDeadline`
+  (`kind` assignment/report → Assignment, quiz/exam → Exam, prep → `todo` fact; a title match on
+  the course's existing assignment/exam attaches an extracted `assignment_due`/`exam_at` fact to it
+  instead, so a different date becomes a Conflict), `addNote` (Document), `addTask` (`todo` fact),
+  `listFor`/`retract` (the client's own, unconfirmed), and for the owner `list`/`get`/`confirm`
+  (claims become origin=user facts via `resolver.correct`, todos are re-put as user facts) /
+  `reject` (facts retracted, own entities soft-deleted). Every fact is origin `extracted`, producer
+  `ai`, with one SourceReference per addition (`sourceSystem` "ChatGPT Record" or the client name,
+  `sourceItemId` `<client id>#<addition id>`, `location.timestamp`) and the quoted evidence.
+  `resolveDue(course, expr, lectureDate?)` resolves ISO or Japanese (来週の金曜, 次回) against the
+  class start of the lecture date and `TaskEngine.nextClassAt` (timetable + academic calendar).
+  Dedupe by course + kind group + normalized title within 36 h; idempotency key per client; write
+  budget per client. Writes run `runPipeline()`. Views: `DeadlineItem.recorded` / `TaskItem.recorded`
+  (「録音から」, evidence, timestamp) when a task rests only on unconfirmed additions;
+  `LectureBundle.notes` (summaries and notes).
 - `CONTEXT_VIEWS` (name, `context://<name>` URI, description), `ContextViewParams` (zod schemas per
   view, usable as MCP tool input schemas), `getView(engine, name, params)` (validated dispatcher),
   `isContextViewName`.
@@ -593,7 +614,10 @@ candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `Task
   syllabus module (`targetProvider`); `startWatchers` runs `watch()` of WatchableAdapters (local-files,
   chatgpt-record) into `SyncEngine.ingest` while the scheduler runs. `unicontext login` calls `authenticate()` and,
   when that is not enough, the adapter's interactive `login()` (InteractiveAuthAdapter).
-- Remote read-only endpoint (apps/daemon `src/remote/`, [docs/remote.md](remote.md)): when `config.remote.enabled`,
+- Remote endpoint (apps/daemon `src/remote/`, [docs/remote.md](remote.md)). Scopes: `unicontext.read` always,
+  `unicontext.write` only when the owner leaves the consent-page checkbox ticked (`OAuthServer.approve(..., {write})`);
+  with it, `/mcp` passes `allowWrite` and the OAuth client to `createMcpServer`, which then also registers the record
+  tools; the audit log gets the written ids. When `config.remote.enabled`,
   `startDaemon` starts a **second** Fastify instance on `127.0.0.1:remote.port` (default 17879) that a cloudflared
   named tunnel publishes at `remote.publicUrl`. It has no REST/Web UI routes, only an OAuth 2.1 authorization server
   (`OAuthServer`: RFC 9728/8414 metadata, PKCE S256 only, RFC 8707 resource binding, RFC 9207 `iss`, DCR and Client ID
@@ -725,10 +749,15 @@ path must go through propose → confirm → execute in the apps.
   Conflict ids: `stableId('conflict', canonicalSubject, predicate)`. Task ids:
   `stableId('task', 'assignment' | 'exam' | 'extracted', originId)`.
 - Predicates in use: `room`, `class_status`, `starts_at`, `assignment_due`, `exam_at`,
-  `submission_status`, `grade`, `grade_letter` (auto), `deadline` (task-engine extractor). New
+  `submission_status`, `grade`, `grade_letter` (auto), `deadline` (task-engine extractor), `todo`
+  (things to do an AI client heard in a lecture; multi-valued, never a Conflict — rules
+  `multiValued`). New
   predicates need no schema change; add them to the rules YAML when authority matters.
 - Authorities: `academic-system`, `submission-system`, `instructor-announcement`, `syllabus`,
   `lms`, `calendar`, `collaboration`, `discussion`, `transcript`, `local-file`, `user`.
+  `assignment_due` lists `academic-system` then `transcript` last and `exam_at` ends with
+  `transcript`, so a newer, different date heard in a lecture opens a Conflict with the system that
+  states it and never outranks it.
 
 ## 7. Decisions and deviations
 

@@ -40,6 +40,21 @@ import { extractDeadlines } from './deadline-extractor.js';
 import { paceStatus, type PaceStatus, weekStartOf, weekStartOfDue } from './pace.js';
 
 export const DEADLINE_PREDICATE = 'deadline';
+/**
+ * Something to do that an AI client heard in a lecture (add_task, add_deadline kind prep): one
+ * fact per item on the course offering, value {@link TodoValue}. Multi-valued (never a Conflict).
+ */
+export const TODO_PREDICATE = 'todo';
+
+export interface TodoValue {
+  /** The addition that wrote it; keeps the task id stable when the owner confirms it. */
+  additionId?: string;
+  title: string;
+  dueAt?: string;
+  kind?: string;
+  courseOfferingId?: string;
+  notes?: string;
+}
 export const EXTRACTOR_ID = 'ja-deadline-rules';
 
 /** Who is asking to change a task status. AI may never mark work as submitted/completed (§19). */
@@ -345,12 +360,21 @@ export class TaskEngine {
     return ok[0]?.fact;
   }
 
-  private dueOf(a: Assignment): { dueAt: string | undefined; factIds: string[] } {
+  private dueOf(a: Assignment): {
+    dueAt: string | undefined;
+    factIds: string[];
+    /** The fact the presented due date comes from (its origin becomes the task's origin). */
+    winner?: Fact;
+  } {
     if (this.resolver) {
       const r = this.resolver.resolve(a.id, 'assignment_due');
       const value = r.status === 'resolved' ? r.value : r.winner?.fact.value;
       if (typeof value === 'string')
-        return { dueAt: value, factIds: r.candidates.map((c) => c.fact.id) };
+        return {
+          dueAt: value,
+          factIds: r.candidates.map((c) => c.fact.id),
+          ...(r.winner ? { winner: r.winner.fact } : {}),
+        };
     }
     const facts = this.facts.active({ subjects: [a.id], predicate: 'assignment_due' });
     return { dueAt: a.dueAt, factIds: facts.map((f) => f.id) };
@@ -515,7 +539,11 @@ export class TaskEngine {
       const id = stableId('task', 'assignment', a.id);
       derivedIds.add(id);
       const prev = this.get(id);
-      const { dueAt, factIds } = this.dueOf(a);
+      const { dueAt, factIds, winner } = this.dueOf(a);
+      // A due date only heard in a lecture (an AI addition) stays extracted until the owner
+      // confirms it (§11, §48); everything else keeps the connector's authority.
+      const dueOrigin =
+        winner && winner.origin !== 'authoritative' ? winner.origin : 'authoritative';
       const evidence = this.submissionEvidence([a.id]);
       let status: TaskStatus = prev?.status ?? 'pending';
       let statusSetBy: Task['statusSetBy'] = prev?.statusSetBy ?? 'system';
@@ -543,11 +571,12 @@ export class TaskEngine {
         ] as Task['sourceFactIds'],
         ...(dueAt ? { dueAt } : {}),
         status,
-        createdBy: 'system',
+        createdBy: dueOrigin === 'extracted' ? 'extractor' : 'system',
         taskKind: 'assignment',
-        origin: 'authoritative',
+        origin: dueOrigin,
         statusSetBy,
         ...(statusEvidenceFactId ? { statusEvidenceFactId } : {}),
+        ...(dueOrigin !== 'authoritative' && winner?.evidence ? { evidence: winner.evidence } : {}),
         ...(prev?.notes ? { notes: prev.notes } : {}),
         createdAt: prev?.createdAt ?? now,
         updatedAt: now,
@@ -639,6 +668,48 @@ export class TaskEngine {
     }
 
     for (const t of assignmentTasks) count(this.save(t).status);
+
+    // Things to do heard in a lecture (AI additions): one task per todo fact.
+    const todoPairs = this.facts.activePairs().filter((p) => p.predicate === TODO_PREDICATE);
+    for (const f of this.facts.active({
+      subjects: [...new Set(todoPairs.map((p) => p.subject))],
+      predicate: TODO_PREDICATE,
+    })) {
+      const v = f.value as Partial<TodoValue> | null;
+      if (!v || typeof v.title !== 'string' || !v.title) continue;
+      const id = stableId('task', 'todo', typeof v.additionId === 'string' ? v.additionId : f.id);
+      if (derivedIds.has(id)) continue;
+      derivedIds.add(id);
+      const prev = this.get(id);
+      const course =
+        typeof v.courseOfferingId === 'string'
+          ? v.courseOfferingId
+          : f.subject.startsWith('courseOffering:')
+            ? f.subject
+            : undefined;
+      count(
+        this.save({
+          id,
+          title: v.title,
+          ...(course ? { courseOfferingId: course as Task['courseOfferingId'] } : {}),
+          sourceFactIds: [f.id],
+          ...(typeof v.dueAt === 'string' ? { dueAt: v.dueAt } : {}),
+          status: revived(prev),
+          createdBy: 'extractor',
+          taskKind: 'extracted',
+          origin: f.origin,
+          statusSetBy: prev?.statusSetBy ?? 'system',
+          ...(f.evidence ? { evidence: f.evidence } : {}),
+          ...(prev?.notes
+            ? { notes: prev.notes }
+            : typeof v.notes === 'string' && v.notes
+              ? { notes: v.notes }
+              : {}),
+          createdAt: prev?.createdAt ?? now,
+          updatedAt: now,
+        }).status,
+      );
+    }
 
     for (const status of this.deriveWeeklyPace(assignmentTasks, derivedIds, revived)) count(status);
 

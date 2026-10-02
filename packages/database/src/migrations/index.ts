@@ -5,6 +5,7 @@ import { migration4 } from './004_identity_links.js';
 import { migration5 } from './005_tasks.js';
 import { migration6 } from './006_search.js';
 import { migration7 } from './007_source_monitoring.js';
+import { migration8 } from './008_additions.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -18,4 +19,5 @@ export const MIGRATIONS: readonly Migration[] = [
   migration5,
   migration6,
   migration7,
+  migration8,
 ];

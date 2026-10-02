@@ -88,3 +88,49 @@ export const IdentityLinkSchema = z.object({
   updatedAt: IsoDateTimeSchema,
 });
 export type IdentityLink = z.infer<typeof IdentityLinkSchema>;
+
+/** What an AI client wrote into UniContext through an MCP write tool, and what became of it. */
+export const ADDITION_TOOLS = ['record_lecture', 'add_deadline', 'add_note', 'add_task'] as const;
+export type AdditionTool = (typeof ADDITION_TOOLS)[number];
+export const ADDITION_KINDS = [
+  'lecture',
+  'assignment',
+  'report',
+  'quiz',
+  'exam',
+  'prep',
+  'note',
+  'task',
+] as const;
+export type AdditionKind = (typeof ADDITION_KINDS)[number];
+/** unconfirmed → confirmed (owner, becomes user facts) | rejected (owner) | retracted (the client). */
+export const ADDITION_STATUSES = ['unconfirmed', 'confirmed', 'rejected', 'retracted'] as const;
+export type AdditionStatus = (typeof ADDITION_STATUSES)[number];
+
+export const AdditionSchema = z.object({
+  id: idSchema('addition'),
+  /** OAuth client id (remote) or `local:<client name>` (stdio / local HTTP). */
+  clientId: z.string().min(1),
+  clientName: z.string().optional(),
+  tool: z.enum(ADDITION_TOOLS),
+  kind: z.enum(ADDITION_KINDS),
+  status: z.enum(ADDITION_STATUSES),
+  courseOfferingId: idSchema('courseOffering').optional(),
+  title: z.string().min(1),
+  dueAt: IsoDateTimeSchema.optional(),
+  /** course + normalized title (+ kind group): additions with the same key and a close due date are one item. */
+  dedupeKey: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+  sourceReferenceId: idSchema('sourceReference').optional(),
+  /** Entities this addition created (its own) or attached facts to (someone else's). */
+  entityIds: z.array(EntityIdSchema).default([]),
+  /** Entities it created itself (removed again on reject/retract). */
+  ownEntityIds: z.array(EntityIdSchema).default([]),
+  factIds: z.array(idSchema('fact')).default([]),
+  /** What was stored, as echoed back to the client (no secrets; the text the client sent). */
+  data: z.record(z.string(), JsonValueSchema).default({}),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema,
+  decidedAt: IsoDateTimeSchema.optional(),
+});
+export type Addition = z.infer<typeof AdditionSchema>;

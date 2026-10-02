@@ -52,7 +52,14 @@ export interface ResolvedCourse {
  * Accepts a course offering id (any linked id) or a fuzzy title / course code, and returns the
  * canonical course (identity-resolved, §14). Throws NotFoundError/ValidationError.
  */
-export function resolveCourse(uc: UniContext, input: string): ResolvedCourse {
+export function resolveCourse(
+  uc: UniContext,
+  input: string,
+  options: {
+    /** Writes: when a name matches several offerings, prefer the ones the student takes. */
+    preferEnrolled?: boolean;
+  } = {},
+): ResolvedCourse {
   const text = input.trim();
   if (!text) throw new ValidationError('courseOfferingId is empty');
   const entities = uc.sync.stores.entities;
@@ -72,7 +79,11 @@ export function resolveCourse(uc: UniContext, input: string): ResolvedCourse {
     const prev = scored.get(ref.id);
     if (!prev || score > prev.score) scored.set(ref.id, { score, offering, ref });
   }
-  const ranked = [...scored.values()].sort((a, b) => b.score - a.score);
+  let ranked = [...scored.values()].sort((a, b) => b.score - a.score);
+  if (options.preferEnrolled) {
+    const enrolled = ranked.filter((r) => uc.context.enrollmentOf(r.ref.id).enrolled);
+    if (enrolled.length > 0) ranked = enrolled;
+  }
   const best = ranked[0];
   if (!best)
     throw new NotFoundError(`course "${text}" (no course offering matches that id, title or code)`);

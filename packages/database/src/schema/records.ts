@@ -142,3 +142,35 @@ export const embeddings = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.entityId, t.provider, t.model] })],
 );
+
+/** What AI clients wrote through the MCP write tools (008_additions). */
+export const additions = sqliteTable(
+  'additions',
+  {
+    id: text('id').primaryKey(),
+    clientId: text('client_id').notNull(),
+    clientName: text('client_name'),
+    tool: text('tool').notNull(),
+    kind: text('kind').notNull(),
+    status: text('status').notNull(),
+    courseOfferingId: text('course_offering_id'),
+    title: text('title').notNull(),
+    dueAt: text('due_at'),
+    dedupeKey: text('dedupe_key'),
+    idempotencyKey: text('idempotency_key'),
+    sourceReferenceId: text('source_reference_id'),
+    entityIdsJson: text('entity_ids_json').notNull(),
+    ownEntityIdsJson: text('own_entity_ids_json').notNull(),
+    factIdsJson: text('fact_ids_json').notNull(),
+    dataJson: text('data_json').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    decidedAt: text('decided_at'),
+  },
+  (t) => [
+    index('additions_client').on(t.clientId, t.updatedAt),
+    index('additions_status').on(t.status),
+    index('additions_dedupe').on(t.dedupeKey),
+    uniqueIndex('additions_idempotency').on(t.clientId, t.idempotencyKey),
+  ],
+);

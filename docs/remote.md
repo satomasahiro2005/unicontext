@@ -1,8 +1,10 @@
-# Using UniContext from ChatGPT and claude.ai (read-only remote MCP)
+# Using UniContext from ChatGPT and claude.ai (remote MCP)
 
 UniContext normally answers only on `127.0.0.1`. ChatGPT on the web and claude.ai cannot reach
-that, so the daemon can run a second, **read-only** listener that a Cloudflare named tunnel
-publishes at a public https hostname (for example `https://uc.nemut.ai`). Research behind the
+that, so the daemon can run a second listener that a Cloudflare named tunnel publishes at a public
+https hostname (for example `https://uc.nemut.ai`). It is read-only unless you grant a client the
+`unicontext.write` scope, which adds only the record tools that write into UniContext's own
+database (see [Letting ChatGPT write what it heard](#letting-chatgpt-write-what-it-heard-unicontextwrite)). Research behind the
 design: [research/chatgpt-connector.md](research/chatgpt-connector.md).
 
 ```
@@ -12,20 +14,23 @@ ChatGPT / claude.ai ──https──▶ Cloudflare ──tunnel──▶ cloudf
                               unicontextd remote listener 127.0.0.1:17879
                               ├─ /.well-known/*  OAuth metadata (RFC 9728, RFC 8414)
                               ├─ /register /authorize /token /revoke   OAuth 2.1 AS
-                              └─ /mcp            read-only MCP (streamable HTTP)
+                              └─ /mcp            MCP (streamable HTTP): read tools,
+                                                 + record tools with unicontext.write
 
 unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in the tunnel
 ```
 
 ## What is exposed, and what is not
 
-- **Tools**: only read tools (`get_today`, `get_week`, `get_course`, `get_deadlines`,
+- **Tools**: the read tools (`get_today`, `get_week`, `get_course`, `get_deadlines`,
   `get_assignments`, `get_tasks`, `search`, `get_source`, `get_conflicts`, `prepare_for_class`,
-  `review_class`, `get_recent_changes`, `search_syllabus`, `get_syllabus`, `get_credit_summary`, …).
-  Every tool carries `readOnlyHint: true` and an output schema. The propose-only tools
-  (`correct_fact`, `propose_pace_slot`) are **not registered** on this surface, so a call to them
-  fails as an unknown tool. `get_source` returns the citation and the facts it supports, but no raw
-  source payloads.
+  `review_class`, `get_recent_changes`, `search_syllabus`, `get_syllabus`, `get_credit_summary`, …),
+  each with `readOnlyHint: true` and an output schema. With the `unicontext.write` scope only, also
+  the record tools `record_lecture`, `add_deadline`, `add_note`, `add_task`, `list_my_additions`
+  and `retract_addition` (`readOnlyHint: false`, `destructiveHint` only on `retract_addition`).
+  The propose-only tools (`correct_fact`, `propose_pace_slot`) are **never registered** on this
+  surface, so a call to them fails as an unknown tool. `get_source` returns the citation and the
+  facts it supports, but no raw source payloads.
 - **Not exposed**: the REST admin API, the Web UI, proposals/confirmation, task status changes, sync,
   login, settings. They live on the local listener (`daemon.port`), which the tunnel config never
   maps.
@@ -38,8 +43,10 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
   stored only as SHA-256 hashes; the passphrase as scrypt. Tokens are bound to the resource
   `https://<host>/mcp` (RFC 8707) and checked on every request.
 - **Audit log**: every remote tool call (time, client id and name, tool, ok/error, duration,
-  client address — never arguments or results) and every OAuth event (register, authorize, token,
-  refresh, revoke, failed unlock, lockout) is appended to `<data dir>/logs/remote-audit.jsonl`.
+  client address — never arguments or results; for record tools also `write` (created/updated/…),
+  `additionId` and the ids of the entities and facts written, never their text) and every OAuth
+  event (register, authorize with the granted scope, token, refresh, revoke, failed unlock,
+  lockout) is appended to `<data dir>/logs/remote-audit.jsonl`.
 
 ## 1. Configure UniContext
 
@@ -138,13 +145,54 @@ developer mode).
 2. Open https://chatgpt.com/plugins → **+** → **Create MCP App**.
 3. URL: `https://uc.nemut.ai/mcp`. Authentication: **OAuth**. Leave client ID/secret empty —
    ChatGPT registers itself (Client ID Metadata Document or Dynamic Client Registration).
-4. ChatGPT opens `uc.nemut.ai/authorize`: check the client name and that the scope says
-   読み取りのみ, type your passphrase, press **許可**.
-5. The app appears under Drafts. Start a **new** chat and enable it there. All tools are read-only,
-   so ChatGPT does not ask for write confirmations.
+4. ChatGPT opens `uc.nemut.ai/authorize`: check the client name. Leave
+   「講義の記録・締切・メモをUniContextに追加することも許可する」 ticked if ChatGPT should be able to
+   save what it hears in lectures (next section), untick it for a read-only connection. Type your
+   passphrase, press **許可**.
+5. The app appears under Drafts. Start a **new** chat and enable it there. Read tools need no
+   confirmation; ChatGPT may ask before calling a record tool.
 
 After a UniContext update that changes tools, press **Refresh** on the app page and start a new
 chat (ChatGPT caches tool metadata).
+
+## Letting ChatGPT write what it heard (`unicontext.write`)
+
+With ChatGPT Record, ChatGPT listens to a lecture. With the write scope it can save what it heard
+into UniContext: `record_lecture` (summary, key points, timestamped excerpt), `add_deadline`
+(assignment / report / quiz / exam / preparation, with the quoted sentence and the recording
+position), `add_note` and `add_task`. Ask it for example 「今の講義の要点と、言われた締切をUniContextに保存して」.
+
+- It is stored **only in UniContext's database on this PC**. Nothing is sent to LiveCampusU or any
+  other university system.
+- Everything is marked 「録音から」 (origin `extracted`, source "ChatGPT Record" with the
+  timestamp) until you confirm it. It never changes what LiveCampusU, the LMS or the syllabus say:
+  if the recording gives a different date, UniContext shows a conflict. Relative dates (来週の金曜,
+  次回) are resolved with the lecture date, your timetable and the academic calendar, and ChatGPT
+  is told the resolved date.
+- Review: `unicontext additions` (list), `unicontext additions confirm <id>` (it becomes your own
+  fact and wins), `unicontext additions reject <id>` (removed), or Web UI → Settings → 録音からの追加.
+  ChatGPT can list and withdraw only its own unconfirmed additions.
+- The tools cannot submit anything, mark tasks submitted/completed, or touch grades or enrolment.
+  Each client may write at most 30 items per 10 minutes and 300 per day.
+
+### Re-authorizing an existing ChatGPT connection to get the write scope
+
+A grant keeps the scope it was approved with (refreshing never widens it), so an app connected
+before this feature, or approved with the box unticked, stays read-only until it is authorized
+again:
+
+1. Optional but tidy: `unicontext remote clients`, then `unicontext remote revoke <clientId>` for
+   the old ChatGPT client (or skip this; the new grant replaces it in practice).
+2. In ChatGPT open https://chatgpt.com/plugins → your UniContext app → **Disconnect** (or remove
+   the app and create it again with the same URL `https://uc.nemut.ai/mcp`), then **Connect**.
+   ChatGPT asks for `unicontext.read unicontext.write` because the server advertises both.
+3. On `uc.nemut.ai/authorize` keep 「講義の記録・締切・メモをUniContextに追加することも許可する」 ticked,
+   type the passphrase, **許可**. `unicontext remote clients` then shows 範囲 「読み取り＋追加」
+   (`--json`: `scopes`), and the `authorize` line in `logs/remote-audit.jsonl` has
+   `"scope":"unicontext.read unicontext.write …"`.
+4. Press **Refresh** on the app page and start a **new** chat so ChatGPT loads the new tools.
+
+To go back to read-only, revoke the client and authorize again with the box unticked.
 
 ## 4. Add it to claude.ai
 
@@ -182,18 +230,19 @@ Such clients may use `none` or `private_key_jwt` (verified against the document'
 
 ## Endpoints and protocol details
 
-| Endpoint                                                              | Notes                                                                                                |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `GET /.well-known/oauth-protected-resource[/mcp]`                     | `resource`, `authorization_servers`, `scopes_supported: [unicontext.read, offline_access]`           |
-| `GET /.well-known/oauth-authorization-server`, `openid-configuration` | S256 only, `authorization_response_iss_parameter_supported`, `client_id_metadata_document_supported` |
-| `POST /register`                                                      | RFC 7591; `none`, `client_secret_post`, `client_secret_basic`; at most 100 clients                   |
-| `GET/POST /authorize`                                                 | consent page with passphrase; responses carry `iss` (RFC 9207)                                       |
-| `POST /token`                                                         | `authorization_code` (PKCE S256, `resource` must match) and `refresh_token` (rotating)               |
-| `POST /revoke`                                                        | RFC 7009                                                                                             |
-| `POST /mcp`                                                           | Bearer token; 401 + `WWW-Authenticate: Bearer resource_metadata="…", scope="unicontext.read"`        |
+| Endpoint                                                              | Notes                                                                                                          |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `GET /.well-known/oauth-protected-resource[/mcp]`                     | `resource`, `authorization_servers`, `scopes_supported: [unicontext.read, unicontext.write, offline_access]`   |
+| `GET /.well-known/oauth-authorization-server`, `openid-configuration` | S256 only, `authorization_response_iss_parameter_supported`, `client_id_metadata_document_supported`           |
+| `POST /register`                                                      | RFC 7591; `none`, `client_secret_post`, `client_secret_basic`; at most 100 clients                             |
+| `GET/POST /authorize`                                                 | consent page with passphrase and the write checkbox; responses carry `iss` (RFC 9207)                          |
+| `POST /token`                                                         | `authorization_code` (PKCE S256, `resource` must match) and `refresh_token` (rotating)                         |
+| `POST /revoke`                                                        | RFC 7009                                                                                                       |
+| `POST /mcp`                                                           | Bearer token; 401 + `WWW-Authenticate: Bearer resource_metadata="…", scope="unicontext.read unicontext.write"` |
 
-Unknown requested scopes are ignored (the grant is always `unicontext.read`, plus `offline_access`
-if asked). Refresh tokens are issued even without `offline_access`, because ChatGPT's refresh
+Unknown requested scopes are ignored. The grant is always `unicontext.read`, plus
+`unicontext.write` only when the owner leaves the consent checkbox ticked (it starts ticked when the
+client asked for it, unticked otherwise), plus `offline_access` if asked. Refresh tokens are issued even without `offline_access`, because ChatGPT's refresh
 behaviour is undocumented.
 
 ## Troubleshooting

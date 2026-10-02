@@ -72,7 +72,10 @@ describe('authority rules (§12)', () => {
       'submission-system',
       'instructor-announcement',
       'syllabus',
+      'academic-system',
+      'transcript',
     ]);
+    expect(r.multiValued).toEqual(['todo']);
   });
   it('parses and merges overrides', () => {
     const r = mergeAuthorityRules(loadDefaultAuthorityRules(), {

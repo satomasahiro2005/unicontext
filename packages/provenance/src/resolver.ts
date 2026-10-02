@@ -211,7 +211,9 @@ export class ConflictResolver {
     const seen = new Set<string>();
     const opened: Conflict[] = [];
     const resolved: Conflict[] = [];
+    const multiValued = new Set(this.rules.multiValued);
     for (const { subject, predicate } of this.facts.activePairs()) {
+      if (multiValued.has(predicate)) continue;
       const canonical = this.canonical(subject);
       const key = `${canonical}\u0000${predicate}`;
       if (seen.has(key)) continue;

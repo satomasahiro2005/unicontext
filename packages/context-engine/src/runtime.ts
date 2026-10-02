@@ -34,6 +34,7 @@ import {
 import { type EmbeddingIndex, SearchService } from '@unicontext/search';
 import { type SyncEventBus, SyncEngine, SyncScheduler } from '@unicontext/sync-engine';
 import { TaskEngine } from '@unicontext/task-engine';
+import { AdditionsService } from './additions.js';
 import { ContextEngine } from './engine.js';
 
 export interface UniContextOptions {
@@ -75,6 +76,8 @@ export interface UniContext {
   tasks: TaskEngine;
   search: SearchService;
   context: ContextEngine;
+  /** What AI clients wrote through the MCP write tools (lectures, deadlines, notes, tasks). */
+  additions: AdditionsService;
   /** Identity resolution → conflict detection → task derivation. Runs automatically after each sync. */
   runPipeline(): Promise<PipelineReport>;
   close(): Promise<void>;
@@ -218,6 +221,17 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
     };
   };
 
+  const additions = new AdditionsService({
+    db: database,
+    clock,
+    timezone,
+    resolver,
+    identity,
+    tasks,
+    courseTitle: (id) => context.courseRef(id)?.title,
+    runPipeline,
+  });
+
   engine.addPostProcessor({
     name: 'pipeline',
     run: async () => {
@@ -248,6 +262,7 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
     tasks,
     search,
     context,
+    additions,
     runPipeline,
     async close() {
       scheduler.stop();

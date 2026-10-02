@@ -61,6 +61,21 @@ export interface ClassItem extends Cited {
   summary: string;
 }
 
+/**
+ * The item was only heard in a lecture recording (an AI client wrote it through an MCP write
+ * tool) and the owner has not confirmed it yet: show 「録音から」 with the evidence.
+ */
+export interface RecordedMarker {
+  label: '録音から';
+  additionId: string | undefined;
+  /** e.g. "ChatGPT Record" */
+  source: string;
+  /** "HH:MM:SS" in the recording */
+  timestamp: string | undefined;
+  evidence: string | undefined;
+  confirmed: false;
+}
+
 export interface DeadlineItem extends Cited {
   taskId: string;
   kind: 'assignment' | 'exam_preparation' | 'extracted' | 'manual' | 'weekly_pace';
@@ -73,6 +88,8 @@ export interface DeadlineItem extends Cited {
   hoursLeft: number;
   evidence: string | undefined;
   summary: string;
+  /** Present when the deadline comes only from a lecture recording and is not confirmed yet. */
+  recorded?: RecordedMarker | undefined;
 }
 
 export interface TaskItem extends Cited {
@@ -84,6 +101,7 @@ export interface TaskItem extends Cited {
   taskKind: string;
   origin: FactOrigin;
   createdBy: string;
+  recorded?: RecordedMarker | undefined;
 }
 
 export interface ChangeItem extends Cited {
@@ -179,6 +197,17 @@ export interface LectureBundle extends Cited {
   announcements: AnnouncementItem[];
   questions: QuestionItem[];
   facts: FactItem[];
+  /** Summaries and notes an AI client wrote from the recording (origin extracted, unconfirmed until the owner confirms). */
+  notes: LectureNoteItem[];
+}
+
+export interface LectureNoteItem extends Cited {
+  id: string;
+  kind: 'summary' | 'note';
+  title: string;
+  text: string;
+  keyPoints: string[];
+  origin: 'extracted';
 }
 
 export interface BundleBase<V extends string> {

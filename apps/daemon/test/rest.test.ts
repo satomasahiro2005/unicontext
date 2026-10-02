@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
+  AdditionResponse,
+  AdditionsResponse,
   AssignmentsResponse,
   ConflictsResponse,
   CoursesResponse,
@@ -446,6 +448,40 @@ describe('write endpoints', () => {
     expect(json<{ proposal: { status: string } }>(rej).proposal.status).toBe('rejected');
     const again = await post(`/api/v1/proposals/${p.id}/confirm`, {}, bearer);
     expect(again.statusCode).toBeGreaterThanOrEqual(400);
+  });
+
+  it('additions: recorded items are listed, and only the user confirms or rejects them', async () => {
+    const uc = s.runtime.uc;
+    const course = json<CoursesResponse>(await get('/api/v1/courses')).courses.find((c) =>
+      c.title.includes('データベース'),
+    );
+    const chatgpt = { id: 'oauth-chatgpt', name: 'ChatGPT' };
+    const added = await uc.additions.addTask(chatgpt, {
+      courseOfferingId: course?.id ?? '',
+      title: 'ER図を見直す',
+      dueAt: '2026-10-07T17:00:00+09:00',
+      evidence: '来週までにER図を見直してください',
+    });
+    const other = await uc.additions.addNote(chatgpt, {
+      courseOfferingId: course?.id ?? '',
+      text: '中間試験は持ち込み不可',
+    });
+    const list = json<AdditionsResponse>(await get('/api/v1/additions'));
+    expect(list.additions.map((a) => a.id)).toEqual(
+      expect.arrayContaining([added.addition.id, other.addition.id]),
+    );
+    expect((await get('/api/v1/additions?status=bogus')).statusCode).toBe(400);
+    expect((await post(`/api/v1/additions/${added.addition.id}/confirm`, {})).statusCode).toBe(401);
+    const ok = await post(`/api/v1/additions/${added.addition.id}/confirm`, {}, bearer);
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(json<AdditionResponse>(ok).addition.status).toBe('confirmed');
+    const rej = await post(`/api/v1/additions/${other.addition.id}/reject`, {}, bearer);
+    expect(json<AdditionResponse>(rej).addition.status).toBe('rejected');
+    const pending = json<AdditionsResponse>(await get('/api/v1/additions'));
+    expect(pending.additions.map((a) => a.id)).not.toContain(other.addition.id);
+    const all = json<AdditionsResponse>(await get('/api/v1/additions?status=all'));
+    expect(all.additions.length).toBeGreaterThanOrEqual(2);
+    expect((await post('/api/v1/additions/addition:nope/reject', {}, bearer)).statusCode).toBe(404);
   });
 
   it('rejects oversized bodies', async () => {

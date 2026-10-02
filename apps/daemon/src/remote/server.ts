@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import type { Runtime } from '../runtime.js';
 import { bearerToken, parseHostHeader } from '../security.js';
 import { createAuditLog, remoteAuditFile, type AuditRecord } from './audit.js';
-import { OAuthServer, type AuditEvent } from './oauth.js';
+import { hasScope, OAuthServer, WRITE_SCOPE, type AuditEvent } from './oauth.js';
 import { consentPage, messagePage } from './pages.js';
 import { WindowRateLimiter } from './ratelimit.js';
 import { RemoteStateStore } from './state.js';
@@ -237,9 +237,8 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
         clientName,
         clientId: req.clientId,
         redirectHost: redirect.host,
-        scope: req.scope.split(' ').includes('unicontext.read')
-          ? '読み取りのみ（unicontext.read）'
-          : req.scope,
+        scope: '読み取り（unicontext.read）',
+        writeRequested: hasScope(req.scope, WRITE_SCOPE),
         sealed,
         message,
         canUnlock: store.hasPassphrase(),
@@ -300,7 +299,11 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       );
     const passphrase = typeof body.passphrase === 'string' ? body.passphrase : '';
     const result = await oauth.unlock(passphrase, ip);
-    if (result.ok) return reply.redirect(oauth.approve(req, client, ip), 303);
+    if (result.ok)
+      return reply.redirect(
+        oauth.approve(req, client, ip, { write: body.write === '1' || body.write === 'on' }),
+        303,
+      );
     if (result.reason === 'no_passphrase')
       return renderConsent(reply, sealed, req, client.name, undefined, 403);
     if (result.reason === 'locked' || result.lockedUntil) {
@@ -375,6 +378,8 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
             logger: runtime.logger,
             version: options.version,
             surface: 'remote',
+            allowWrite: hasScope(check.scope, WRITE_SCOPE),
+            client: { id: check.clientId, name: check.clientName },
             onToolCall: (e) =>
               audit({
                 event: 'tool',
@@ -384,6 +389,15 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
                 ok: e.ok,
                 ms: e.ms,
                 ip: info.ip,
+                // Writes: what was stored (ids only, never the text).
+                ...(e.write
+                  ? {
+                      write: e.write.status,
+                      additionId: e.write.additionId,
+                      entityIds: e.write.entityIds.join(' ').slice(0, 4000),
+                      factIds: e.write.factIds.join(' ').slice(0, 2000),
+                    }
+                  : {}),
               }),
           },
           request.raw,

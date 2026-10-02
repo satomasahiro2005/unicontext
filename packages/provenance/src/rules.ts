@@ -10,6 +10,8 @@ export const AuthorityRulesSchema = z.object({
   minConfidence: z.number().min(0).max(1).default(0.5),
   predicates: z.record(z.string(), z.array(z.string())).default({}),
   default: z.array(z.string()).default([]),
+  /** Predicates holding several independent items per subject: never a Conflict. */
+  multiValued: z.array(z.string()).default([]),
 });
 export type AuthorityRules = z.infer<typeof AuthorityRulesSchema>;
 

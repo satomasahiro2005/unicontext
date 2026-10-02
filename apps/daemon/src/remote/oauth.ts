@@ -24,8 +24,17 @@ import {
  */
 
 export const READ_SCOPE = 'unicontext.read';
+/**
+ * Adds the record tools (record_lecture, add_deadline, add_note, add_task …): writes into
+ * UniContext's own database only. Granted only when the owner ticks it on the consent page.
+ */
+export const WRITE_SCOPE = 'unicontext.write';
 export const OFFLINE_SCOPE = 'offline_access';
-export const SUPPORTED_SCOPES = [READ_SCOPE, OFFLINE_SCOPE];
+export const SUPPORTED_SCOPES = [READ_SCOPE, WRITE_SCOPE, OFFLINE_SCOPE];
+
+export function hasScope(scope: string, wanted: string): boolean {
+  return scope.split(/\s+/).includes(wanted);
+}
 
 const CHATGPT_STABLE_REDIRECT = 'https://chatgpt.com/connector_platform_oauth_redirect';
 const CHATGPT_CALLBACK_REDIRECT =
@@ -272,7 +281,12 @@ export class OAuthServer {
 
   /** `WWW-Authenticate` value for a 401/403 from the MCP endpoint (RFC 6750 + RFC 9728). */
   wwwAuthenticate(error?: { error: string; description: string }): string {
-    const parts = [`resource_metadata="${this.resourceMetadataUrl}"`, `scope="${READ_SCOPE}"`];
+    // Clients ask for what this lists; the owner still decides on the consent page whether the
+    // write scope is granted (unticking it gives a read-only connection).
+    const parts = [
+      `resource_metadata="${this.resourceMetadataUrl}"`,
+      `scope="${READ_SCOPE} ${WRITE_SCOPE}"`,
+    ];
     if (error)
       parts.push(
         `error="${error.error}"`,
@@ -493,10 +507,18 @@ export class OAuthServer {
     return trimSlash(raw) === this.resource ? this.resource : undefined;
   }
 
+  /**
+   * What the request asks for, reduced to what we know: read always, write and offline_access
+   * only when asked. Write is granted later only if the owner ticks it on the consent page.
+   */
   private grantedScope(requested: string | undefined): string {
     // Unknown scopes are dropped (the AS may issue less than asked, RFC 6749 §3.3).
     const want = new Set((requested ?? '').split(/\s+/).filter(Boolean));
-    return [READ_SCOPE, ...(want.has(OFFLINE_SCOPE) ? [OFFLINE_SCOPE] : [])].join(' ');
+    return [
+      READ_SCOPE,
+      ...(want.has(WRITE_SCOPE) ? [WRITE_SCOPE] : []),
+      ...(want.has(OFFLINE_SCOPE) ? [OFFLINE_SCOPE] : []),
+    ].join(' ');
   }
 
   async validateAuthorize(params: Record<string, unknown>): Promise<AuthorizeValidation> {
@@ -627,15 +649,28 @@ export class OAuthServer {
     return result;
   }
 
-  /** Approve: mint a one-time code and build the redirect back to the client. */
-  approve(request: AuthorizeRequest, client: ResolvedClient, ip: string | undefined): string {
+  /**
+   * Approve: mint a one-time code and build the redirect back to the client. `write` is the
+   * owner's consent-page checkbox: the write scope is in the grant only when it is ticked.
+   */
+  approve(
+    request: AuthorizeRequest,
+    client: ResolvedClient,
+    ip: string | undefined,
+    options: { write?: boolean } = {},
+  ): string {
     const code = randomToken('ucd_');
     this.sweepCodes();
+    const scope = [
+      READ_SCOPE,
+      ...(options.write === true ? [WRITE_SCOPE] : []),
+      ...(hasScope(request.scope, OFFLINE_SCOPE) ? [OFFLINE_SCOPE] : []),
+    ].join(' ');
     this.codes.set(sha256Hex(code), {
       clientId: request.clientId,
       redirectUri: request.redirectUri,
       codeChallenge: request.codeChallenge,
-      scope: request.scope,
+      scope,
       resource: request.resource,
       expiresAt: this.now().getTime() + AUTH_CODE_TTL_MS,
       used: false,
@@ -651,7 +686,13 @@ export class OAuthServer {
           createdAt: this.now().toISOString(),
         };
       });
-    this.audit({ event: 'authorize', clientId: request.clientId, clientName: client.name, ip });
+    this.audit({
+      event: 'authorize',
+      clientId: request.clientId,
+      clientName: client.name,
+      scope,
+      ip,
+    });
     const u = new URL(request.redirectUri);
     u.searchParams.set('code', code);
     if (request.state !== undefined) u.searchParams.set('state', request.state);

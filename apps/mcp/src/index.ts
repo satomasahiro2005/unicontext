@@ -6,6 +6,7 @@ export {
   HOW_TO_CONFIRM,
   MCP_SERVER_NAME,
   REMOTE_SERVER_INSTRUCTIONS,
+  REMOTE_WRITE_SERVER_INSTRUCTIONS,
   SERVER_INSTRUCTIONS,
   type McpDeps,
   type McpSurface,
@@ -35,3 +36,4 @@ export {
   SYLLABUS_CONNECTOR,
   type SyllabusToolOutput,
 } from './syllabus.js';
+export { WRITE_TOOLS, compactAddition, writeOutput } from './additions.js';

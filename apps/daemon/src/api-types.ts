@@ -7,6 +7,7 @@
  * citations, §49) so the REST shapes equal the MCP shapes.
  */
 import type {
+  AdditionView,
   AdminContext,
   ChangesContext,
   ClassItem,
@@ -267,6 +268,21 @@ export interface ProposalView {
 }
 export interface ProposalsResponse {
   proposals: ProposalView[];
+}
+
+/**
+ * What AI clients wrote through the MCP record tools (lectures, deadlines, notes, tasks heard in a
+ * lecture recording). Stored in UniContext only; unconfirmed until the user confirms (→ user
+ * facts) or rejects them.
+ */
+export type { AdditionView };
+/** GET /api/v1/additions[?status=unconfirmed|confirmed|rejected|retracted|all] */
+export interface AdditionsResponse {
+  additions: AdditionView[];
+}
+/** POST /api/v1/additions/:id/confirm | /reject */
+export interface AdditionResponse {
+  addition: AdditionView;
 }
 
 /** GET /api/v1/settings (read-only; secrets are never included) */

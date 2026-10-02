@@ -219,7 +219,7 @@ describe('discovery metadata', () => {
       expect(body(res)).toMatchObject({
         resource: RESOURCE,
         authorization_servers: [PUBLIC],
-        scopes_supported: ['unicontext.read', 'offline_access'],
+        scopes_supported: ['unicontext.read', 'unicontext.write', 'offline_access'],
       });
     }
   });
@@ -247,7 +247,7 @@ describe('discovery metadata', () => {
     const res = await mcp(s, undefined, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
     expect(res.statusCode).toBe(401);
     expect(res.headers['www-authenticate']).toBe(
-      `Bearer resource_metadata="${PUBLIC}/.well-known/oauth-protected-resource/mcp", scope="unicontext.read"`,
+      `Bearer resource_metadata="${PUBLIC}/.well-known/oauth-protected-resource/mcp", scope="unicontext.read unicontext.write"`,
     );
     const bad = await mcp(s, 'uca_nope', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
     expect(bad.statusCode).toBe(401);
@@ -460,6 +460,125 @@ describe('authorization code + PKCE + resource binding', () => {
     const out = body<{ result?: { isError?: boolean }; error?: unknown }>(res);
     expect(out.error ?? out.result?.isError).toBeTruthy();
     expect(runtime.proposals.list({ status: 'pending' })).toHaveLength(0);
+  });
+
+  it('write scope: the owner grants it with the consent checkbox; read-only clients keep working', async () => {
+    type ToolList = {
+      result: { tools: { name: string; annotations?: Record<string, unknown> }[] };
+    };
+    const writeQuery = { scope: 'unicontext.read unicontext.write offline_access' };
+    const approveWith = async (
+      clientId: string,
+      query: Record<string, string>,
+      form: Record<string, string>,
+    ) => {
+      const { page, sealed } = await consent(s, clientId, query);
+      const res = await inject(s, 'POST', '/authorize', {
+        form: { request: sealed, passphrase: PASS, action: 'approve', ...form },
+        // its own address: the per-address unlock limiter is shared with the other flow tests
+        ip: '198.51.100.88',
+      });
+      expect(res.statusCode, res.body).toBe(303);
+      const code = new URL(res.headers.location as string).searchParams.get('code') as string;
+      const tok = await exchange(s, clientId, code);
+      expect(tok.statusCode, tok.body).toBe(200);
+      return {
+        page,
+        token: body<{ access_token: string; refresh_token: string; scope: string }>(tok),
+      };
+    };
+    const toolNames = async (token: string) =>
+      body<ToolList>(await mcp(s, token, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).result
+        .tools;
+
+    // Asked for write, owner leaves the box ticked: write granted.
+    const { client: rw } = await register(s);
+    const granted = await approveWith(rw.client_id, writeQuery, { write: '1' });
+    expect(granted.page.body).toMatch(/name="write" value="1" checked/);
+    expect(granted.token.scope).toBe('unicontext.read unicontext.write offline_access');
+    const tools = await toolNames(granted.token.access_token);
+    const names = tools.map((t) => t.name);
+    expect(names).toEqual(
+      expect.arrayContaining(['record_lecture', 'add_deadline', 'add_note', 'add_task']),
+    );
+    expect(names).toEqual(expect.arrayContaining(['list_my_additions', 'retract_addition']));
+    expect(names).not.toContain('correct_fact');
+    expect(names).not.toContain('propose_pace_slot');
+    const isWrite = (n: string): boolean =>
+      /^(record_lecture|add_deadline|add_note|add_task|list_my_additions|retract_addition)$/.test(
+        n,
+      );
+    for (const t of tools) expect(t.annotations?.readOnlyHint, t.name).toBe(!isWrite(t.name));
+
+    audit.length = 0;
+    const call = await mcp(s, granted.token.access_token, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'add_task',
+        arguments: {
+          course: 'データベースシステム論',
+          title: 'ER図の復習',
+          evidence: '秘密のメモ: 次回までにER図を見直すこと',
+          recordingTimestamp: '00:10:00',
+        },
+      },
+    });
+    const result = body<{
+      result: {
+        structuredContent: { status: string; addition: { id: string } };
+        isError?: boolean;
+      };
+    }>(call).result;
+    expect(result.isError, JSON.stringify(result)).not.toBe(true);
+    expect(result.structuredContent.status).toBe('created');
+    const ev = audit.find((e) => e.event === 'tool' && e.tool === 'add_task');
+    expect(ev).toMatchObject({
+      ok: true,
+      clientId: rw.client_id,
+      write: 'created',
+      additionId: result.structuredContent.addition.id,
+    });
+    expect(String(ev?.factIds)).toMatch(/^fact:/);
+    expect(JSON.stringify(audit)).not.toContain('秘密のメモ');
+    expect(JSON.stringify(audit)).not.toContain('ER図の復習');
+    expect(runtime.uc.additions.get(result.structuredContent.addition.id)?.client.id).toBe(
+      rw.client_id,
+    );
+
+    // Refreshing keeps the grant's scope.
+    const refreshed = await inject(s, 'POST', '/token', {
+      form: {
+        grant_type: 'refresh_token',
+        client_id: rw.client_id,
+        refresh_token: granted.token.refresh_token,
+      },
+    });
+    expect(body<{ scope: string }>(refreshed).scope).toBe(
+      'unicontext.read unicontext.write offline_access',
+    );
+
+    // Asked for write, owner unticks the box: read-only grant, no write tools.
+    const { client: ro } = await register(s);
+    const denied = await approveWith(ro.client_id, writeQuery, {});
+    expect(denied.token.scope).toBe('unicontext.read offline_access');
+    const roNames = (await toolNames(denied.token.access_token)).map((t) => t.name);
+    expect(roNames).toContain('get_today');
+    expect(roNames).not.toContain('add_deadline');
+    const refused = await mcp(s, denied.token.access_token, {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { name: 'add_task', arguments: { course: 'データベース', title: 'x' } },
+    });
+    const out = body<{ result?: { isError?: boolean }; error?: unknown }>(refused);
+    expect(out.error ?? out.result?.isError).toBeTruthy();
+
+    // A client that never asked: the box starts unticked.
+    const { client: legacy } = await register(s);
+    const { page } = await consent(s, legacy.client_id);
+    expect(page.body).toMatch(/name="write" value="1">/);
   });
 
   it('requires PKCE S256 and rejects plain or missing challenges (redirected with iss)', async () => {

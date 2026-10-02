@@ -3,6 +3,9 @@
  * browser bundle at runtime. Every file in src imports types through here.
  */
 export type {
+  AdditionResponse,
+  AdditionsResponse,
+  AdditionView,
   AdminContext,
   AssignmentItem,
   AssignmentsResponse,

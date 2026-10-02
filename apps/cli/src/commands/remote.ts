@@ -43,6 +43,7 @@ interface ClientRow {
   createdAt: string;
   lastUsedAt: string;
   activeGrants: number;
+  scopes: string[];
 }
 
 function shortTime(iso: string | undefined): string {
@@ -166,6 +167,10 @@ export function registerRemote(program: Command, h: Harness): void {
             createdAt: c?.createdAt ?? '',
             lastUsedAt: lastUsed ?? '',
             activeGrants: grants.length,
+            // What the active grants allow: read only, or read + write (record tools).
+            scopes: [...new Set(grants.flatMap((g) => g.scope.split(' ')))]
+              .filter((x) => x.startsWith('unicontext.'))
+              .sort(),
           };
         });
         if (ctx.json) {
@@ -189,6 +194,15 @@ export function registerRemote(program: Command, h: Harness): void {
             { header: '登録', value: (r) => shortTime(r.createdAt) },
             { header: '最終利用', value: (r) => shortTime(r.lastUsedAt) },
             { header: '有効な許可', value: (r) => String(r.activeGrants), align: 'right' },
+            {
+              header: '範囲',
+              value: (r) =>
+                r.scopes.length === 0
+                  ? '-'
+                  : r.scopes.includes('unicontext.write')
+                    ? '読み取り＋追加'
+                    : '読み取り',
+            },
           ],
           rows,
         );

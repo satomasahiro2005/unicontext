@@ -2,6 +2,7 @@ import { createReadStream, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import {
+  ADDITIONS_SOURCE_ID,
   type CanonicalEntity,
   ChangeEventSchema,
   ConflictSchema,
@@ -29,6 +30,7 @@ import {
 import { currentSchemaVersion } from './migrate.js';
 import { ENTITY_TABLES, sourceReferences } from './schema/entities.js';
 import { conflicts, facts, identityLinks, tasks } from './schema/records.js';
+import { AdditionStore } from './stores/addition-store.js';
 import { ChangeEventStore } from './stores/change-event-store.js';
 import { EntityStore } from './stores/entity-store.js';
 import { RawStore } from './stores/raw-store.js';
@@ -394,6 +396,8 @@ export function purgeSource(db: UniContextDatabase, sourceId: string): PurgeRepo
     new SchemaDriftStore(db).deleteBySource(sourceId);
     new ProductVersionStore(db).deleteBySource(sourceId);
     del('DELETE FROM raw_sources WHERE id = ?', sourceId);
+    // The ledger of AI additions goes with the facts and entities they produced.
+    if (sourceId === ADDITIONS_SOURCE_ID) new AdditionStore(db).deleteAll();
   });
   for (const f of blobFiles) rmSync(f, { force: true });
   return report;
