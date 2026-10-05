@@ -23,6 +23,17 @@ Specification: [docs/SPEC.md](docs/SPEC.md). Architecture and APIs: [docs/ARCHIT
 
 ## Quickstart
 
+### Before you start
+
+**Your university may not be supported yet.** UniContext ships with one deployment profile, Shizuoka University (`profiles/shizuoka-university`: LiveCampusU, its syllabus and public cancellations, the university WordPress portal, Microsoft 365 / Teams, EdStem through a community MCP server). The generic sources work anywhere: local files, ChatGPT Record transcripts, and any LMS that already has an MCP server, a CLI or a REST API you can point [adapter-mcp](docs/connectors/adapter-mcp.md), [adapter-cli](docs/connectors/adapter-cli.md) or [adapter-rest](docs/connectors/adapter-rest.md) at with a YAML mapping. If your university's academic system (学務システム) or LMS is not in [docs/connectors](docs/connectors/README.md), you have to add it yourself:
+
+- a profile in `profiles/<your-university>/profile.yaml` (terms and their halves, periods, academic calendar, products), and
+- a connector for each system that has no MCP / CLI / REST tool to wrap ("Writing a connector" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), the rules in [CONNECTOR_POLICY.md](CONNECTOR_POLICY.md)).
+
+Pull requests for new profiles and connectors are welcome ([CONTRIBUTING.md](CONTRIBUTING.md)).
+
+**You run the server yourself.** There is no hosted UniContext. The daemon runs on your own computer (or a home server such as a Raspberry Pi) and only syncs while it is running. Local AI clients (Claude Code, Claude Desktop, Codex CLI) talk to it directly. ChatGPT and claude.ai need to reach it from the internet, so you also publish its remote endpoint over HTTPS with your own domain and a tunnel such as Cloudflare Tunnel ([docs/remote.md](docs/remote.md)).
+
 Requirements: Node.js 22.12 or newer and pnpm 11.
 
 ```sh
