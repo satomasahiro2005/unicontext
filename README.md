@@ -1,4 +1,9 @@
-# UniContext
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
+    <img src="assets/brand/wordmark.svg" alt="UniContext" height="56">
+  </picture>
+</h1>
 
 > UniContext is a local-first context layer for university life. It connects student portals, LMSs, Microsoft 365, discussion platforms, lecture transcripts, and local files, then exposes one unified academic context to AI agents.
 
