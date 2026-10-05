@@ -60,6 +60,7 @@
     "@unicontext/adapter-rest": "workspace:*",
     "@unicontext/adapter-browser": "workspace:*",
     "@unicontext/wordpress-portal": "workspace:*",
-    "@unicontext/teams-web": "workspace:*"
+    "@unicontext/teams-web": "workspace:*",
+    "@unicontext/shizuoka-vpn-files": "workspace:*"
   }
 }

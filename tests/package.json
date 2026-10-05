@@ -10,6 +10,7 @@
     "@unicontext/connector-sdk": "workspace:*",
     "@unicontext/context-engine": "workspace:*",
     "@unicontext/core": "workspace:*",
-    "@unicontext/database": "workspace:*"
+    "@unicontext/database": "workspace:*",
+    "@unicontext/shizuoka-vpn-files": "workspace:*"
   }
 }

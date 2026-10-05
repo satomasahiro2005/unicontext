@@ -1,0 +1,11 @@
+export * from './adapter.js';
+export * from './client.js';
+export * from './config.js';
+export * from './connector.js';
+export * from './courses.js';
+export * from './deployment.js';
+export * from './metadata.js';
+export * from './normalizer.js';
+export * from './parse.js';
+export * from './schemas.js';
+export { shizuokaVpnFilesConnector as default, shizuokaVpnFilesConnector as connector } from './connector.js';

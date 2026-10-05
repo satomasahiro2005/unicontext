@@ -1,0 +1,30 @@
+{
+  "name": "@unicontext/shizuoka-vpn-files",
+  "version": "1.0.0",
+  "description": "Shizuoka Faculty of Informatics SSL-VPN portal (Ivanti Connect Secure) Windows file share, read-only through the UniContext browser profile",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@unicontext/adapter-browser": "workspace:*",
+    "@unicontext/canonical-model": "workspace:*",
+    "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/core": "workspace:*",
+    "@unicontext/identity": "workspace:*",
+    "@unicontext/local-files": "workspace:*",
+    "zod": "^4.6.5"
+  }
+}

@@ -25,6 +25,7 @@ describe('effectiveSources', () => {
       'livecampusu',
       'local-files',
       'microsoft365',
+      'shizuoka-vpn-files',
       'syllabus',
       'teams-web',
       'wordpress-portal',

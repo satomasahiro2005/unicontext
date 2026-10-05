@@ -81,6 +81,9 @@
     },
     {
       "path": "./connectors/teams-web"
+    },
+    {
+      "path": "./connectors/shizuoka-vpn-files"
     }
   ]
 }
