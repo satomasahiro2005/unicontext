@@ -62,7 +62,17 @@ import {
   weekStartOf,
   weekStartOfDue,
 } from '@unicontext/task-engine';
+import { additionViaOfAuthority } from './additions.js';
 import { readAnnouncementExtra } from './announcements.js';
+import {
+  CHANGE_LIMITS,
+  changeRank,
+  collapseByEntity,
+  compactChangeValues,
+  compactSummary,
+  isHiddenChange,
+  pickChanges,
+} from './change-digest.js';
 import {
   compareFiles,
   extraString,
@@ -141,6 +151,10 @@ export interface EnrollmentScope {
 const OPEN_STATUSES: Task['status'][] = ['pending', 'in_progress', 'unknown'];
 const DAY = 86_400_000;
 const COURSE_FILES_LIMIT = 200;
+/** Newest materials listed per class preparation (the rest: get_course / list_course_files). */
+const PREPARATION_MATERIALS = 8;
+/** Newest course notices listed per class preparation. */
+const PREPARATION_ANNOUNCEMENTS = 5;
 
 function hms(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -412,8 +426,8 @@ export class ContextEngine {
   }
 
   /**
-   * 「録音から」: the task rests only on what an AI client wrote from a lecture recording
-   * (unconfirmed, no system or user fact behind it).
+   * 「録音から」/「チャットで登録」: the task rests only on what an AI client wrote — heard in a
+   * lecture recording or told in a chat (unconfirmed, no system or user fact behind it).
    */
   recordedMarker(t: Task): RecordedMarker | undefined {
     if (t.origin === 'authoritative' || t.origin === 'user' || t.sourceFactIds.length === 0)
@@ -427,8 +441,10 @@ export class ContextEngine {
     if (!rec?.source) return undefined;
     const item = rec.source.sourceItemId;
     const hash = item.lastIndexOf('#');
+    const via = additionViaOfAuthority(rec.source.authority);
     return {
-      label: '録音から',
+      label: via === 'chat' ? 'チャットで登録' : '録音から',
+      via,
       additionId: hash >= 0 ? item.slice(hash + 1) : undefined,
       source: rec.source.sourceLabel ?? rec.source.sourceSystem,
       timestamp: rec.source.location?.timestamp,
@@ -445,7 +461,9 @@ export class ContextEngine {
     const citations = this.taskCitations(t);
     const recorded = this.recordedMarker(t);
     const origin = recorded
-      ? '（録音から・未確認）'
+      ? recorded.via === 'chat'
+        ? '（チャットで登録）'
+        : '（録音から・未確認）'
       : t.origin === 'extracted'
         ? '（文章から抽出）'
         : t.origin === 'inferred'
@@ -462,7 +480,7 @@ export class ContextEngine {
       overdue: hoursLeft < 0,
       hoursLeft,
       evidence: t.evidence ?? recorded?.evidence,
-      summary: `${recorded ? '【録音から】' : ''}${course ? `${course.title}: ` : ''}${t.title} 締切 ${formatShortJa(due, this.timezone)}${origin}${citations[0] ? `（根拠: ${citations[0].label}）` : ''}`,
+      summary: `${recorded ? `【${recorded.label}】` : ''}${course ? `${course.title}: ` : ''}${t.title} 締切 ${formatShortJa(due, this.timezone)}${origin}${citations[0] ? `（根拠: ${citations[0].label}）` : ''}`,
       citations,
       ...(recorded ? { recorded } : {}),
     };
@@ -504,20 +522,84 @@ export class ContextEngine {
       .filter((d): d is DeadlineItem => d !== undefined);
   }
 
-  changeItem(c: ChangeEvent): ChangeItem {
+  /** One change, compact: changed fields only, values and summary cut short, ≤ 2 citations. */
+  changeItem(c: ChangeEvent, eventCount = 1): ChangeItem {
+    const { before, after } = compactChangeValues(c);
     return {
       id: c.id,
       entityId: c.entityId,
       entityKind: c.entityKind,
       type: c.type,
-      summary: c.summary ?? `${c.entityKind} ${c.type}`,
+      summary: compactSummary(c.summary ?? `${c.entityKind} ${c.type}`),
       changedFields: c.changedFields,
-      before: c.before,
-      after: c.after,
+      before,
+      after,
       occurredAt: c.occurredAt,
       observedAt: c.observedAt,
       course: this.courseRef(c.courseOfferingId),
-      citations: this.citationsFor([c.entityId]),
+      citations: this.citationsFor([c.entityId]).slice(0, 2),
+      ...(eventCount > 1 ? { eventCount } : {}),
+    };
+  }
+
+  /**
+   * The changes a view shows (change-digest.ts): visible, one item per entity, the decisive ones
+   * first, at most `limit`. `mine` keeps course changes only for the current term's courses
+   * (grades: any enrolled course) and, without a course, important or university-wide notices,
+   * calendar events and conflicts.
+   */
+  private changeDigest(
+    events: ChangeEvent[],
+    options: { limit: number; mine: boolean },
+  ): { changes: ChangeItem[]; changesTotal: number; changesOmitted: number } {
+    const newestFirst = this.visibleChanges(events)
+      .filter((c) => !isHiddenChange(c))
+      .reverse();
+    const notices = new Map<string, Announcement | undefined>();
+    const notice = (c: ChangeEvent): Announcement | undefined => {
+      if (c.entityKind !== 'announcement') return undefined;
+      if (!notices.has(c.entityId))
+        notices.set(
+          c.entityId,
+          this.entities.get(c.entityId, { includeDeleted: true }) as Announcement | undefined,
+        );
+      return notices.get(c.entityId);
+    };
+    const important = (c: ChangeEvent): boolean => {
+      const a = notice(c);
+      return (
+        a?.importance === 'critical' ||
+        a?.importance === 'high' ||
+        /休講|補講|教室変更/.test(a?.title ?? c.summary ?? '')
+      );
+    };
+    let kept = newestFirst;
+    if (options.mine) {
+      const enrolled = this.enrolledIdSet();
+      const termIds = new Set(this.currentTermOfferings().flatMap((e) => e.ids));
+      const current = termIds.size > 0 ? termIds : enrolled;
+      // Without any enrolment data there is nothing to scope by.
+      const takes = (course: string, set: ReadonlySet<string>): boolean =>
+        set.size === 0 || this.linkedIdsOf(course).some((id) => set.has(id));
+      kept = newestFirst.filter((c) => {
+        // The view lists the open conflicts themselves.
+        if (c.type.startsWith('conflict')) return false;
+        const course =
+          c.courseOfferingId ?? (c.entityKind === 'courseOffering' ? c.entityId : undefined);
+        if (course) return takes(course, c.entityKind === 'grade' ? enrolled : current);
+        if (c.entityKind !== 'announcement') return true;
+        if (important(c)) return true;
+        // A university-wide notice is news when it appears, not when its body is fetched later.
+        const a = notice(c);
+        return c.type === 'created' && a?.scope === 'university' && a.importance !== 'low';
+      });
+    }
+    const collapsed = collapseByEntity(kept);
+    const picked = pickChanges(collapsed, (c) => changeRank(c, important(c)), options.limit);
+    return {
+      changes: picked.map((p) => this.changeItem(p.event, p.count)),
+      changesTotal: collapsed.length,
+      changesOmitted: collapsed.length - picked.length,
     };
   }
 
@@ -666,6 +748,36 @@ export class ContextEngine {
       note: `「${label}」の${c.predicate}について情報源の間で食い違いがあります: ${candidates.map((x) => `${String(x.value)}（${x.citation?.label ?? x.source}）`).join(' / ')}`,
       citations: uniqueCitations(candidates.flatMap((x) => (x.citation ? [x.citation] : []))),
     };
+  }
+
+  /**
+   * Open conflicts that matter now (today / tomorrow / week): about a course of the current term,
+   * or about no course. Conflicts of ended terms stay in get_conflicts and the course view.
+   */
+  private currentConflicts(): ConflictItem[] {
+    const termIds = new Set(this.currentTermOfferings().flatMap((e) => e.ids));
+    const current = termIds.size > 0 ? termIds : this.enrolledIdSet();
+    const dayAgo = this.now().getTime() - DAY;
+    const past = (v: JsonValue): boolean => {
+      const t = typeof v === 'string' ? Date.parse(v) : Number.NaN;
+      return !Number.isNaN(t) && t < dayAgo;
+    };
+    return this.resolver
+      .listConflicts({ status: 'open' })
+      .filter((c) => {
+        // Disagreeing dates that are all in the past no longer change what to do.
+        if (c.candidates.length > 0 && c.candidates.every((x) => past(x.value))) return false;
+        const e = this.entities.get(c.subject, { includeDeleted: true }) as
+          (CanonicalEntity & { courseOfferingId?: string }) | undefined;
+        const course =
+          e?.kind === 'courseOffering' || c.subject.startsWith('courseOffering:')
+            ? c.subject
+            : e?.courseOfferingId;
+        return (
+          !course || current.size === 0 || this.linkedIdsOf(course).some((id) => current.has(id))
+        );
+      })
+      .map((c) => this.conflictItem(c));
   }
 
   private openConflicts(courseIds?: readonly string[]): ConflictItem[] {
@@ -874,7 +986,7 @@ export class ContextEngine {
       .list('lecture', { where: { courseOfferingId: ids } })
       .filter((l) => l.date === item.date);
     const lectureIds = new Set(lectures.map((l) => l.id));
-    const materials = this.entities
+    const relevant = this.entities
       .list('material', { where: { courseOfferingId: ids } })
       .filter(
         (m) =>
@@ -883,7 +995,8 @@ export class ContextEngine {
             start.getTime() - new Date(m.publishedAt).getTime() < 7 * DAY &&
             new Date(m.publishedAt) <= start),
       )
-      .map((m) => this.materialItem(m));
+      .sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''));
+    const materials = relevant.slice(0, PREPARATION_MATERIALS).map((m) => this.materialItem(m));
     const dueBeforeClass = this.deadlines(this.now(), new Date(start.getTime() + 60_000), {
       courseOfferingId: item.course.id,
     });
@@ -891,12 +1004,13 @@ export class ContextEngine {
       new Date(start.getTime() - 7 * DAY),
       start,
       (a) => a.courseOfferingId !== undefined && ids.includes(a.courseOfferingId),
-    );
+    ).slice(0, PREPARATION_ANNOUNCEMENTS);
     return {
       sessionId: item.sessionId,
       course: item.course,
       startsAt: item.startsAt,
       materials,
+      ...(relevant.length > materials.length ? { materialsTotal: relevant.length } : {}),
       dueBeforeClass,
       announcements,
       citations: uniqueCitations([
@@ -915,9 +1029,10 @@ export class ContextEngine {
     const date = zonedDateString(dayStart, this.timezone);
     const classes = this.sessionsOn(date).map((s) => this.classItem(s));
     const since = addZonedDays(startOfZonedDay(now, this.timezone), -1, this.timezone);
-    const changes = this.visibleChanges(this.changes.list({ since: since.toISOString() }))
-      .reverse()
-      .map((c) => this.changeItem(c));
+    const changes = this.changeDigest(this.changes.list({ since: since.toISOString() }), {
+      limit: CHANGE_LIMITS.day,
+      mine: true,
+    });
     const horizon = addZonedDays(dayStart, 15, this.timezone);
     const deadlines = this.deadlines(new Date(now.getTime() - 7 * DAY), horizon);
     const tasks = this.tasks
@@ -934,7 +1049,12 @@ export class ContextEngine {
         a.importance === 'high' ||
         (a.scope === 'university' && a.importance !== 'low'),
     );
-    const preparation = classes.filter((c) => !c.cancelled).map((c) => this.preparationFor(c));
+    // One preparation per course and day (consecutive periods of a 実験 are one class).
+    const prepared = new Set<string>();
+    const preparation = classes
+      .filter((c) => !c.cancelled)
+      .filter((c) => !prepared.has(c.course.id) && Boolean(prepared.add(c.course.id)))
+      .map((c) => this.preparationFor(c));
     const term = this.tasks.schedule.currentTerm(date);
     const reason = classes.length === 0 ? this.tasks.schedule.noClassesReason(date) : undefined;
     return {
@@ -943,12 +1063,12 @@ export class ContextEngine {
       ...(term ? { term: { id: term.id, name: term.name } } : {}),
       ...(reason ? { noClassesReason: reason } : {}),
       classes,
-      changes,
+      ...changes,
       deadlines,
       tasks,
       importantAnnouncements,
       preparation,
-      conflicts: this.openConflicts(),
+      conflicts: this.currentConflicts(),
     };
   }
 
@@ -1091,12 +1211,11 @@ export class ContextEngine {
       days,
       deadlines: all.filter((d) => d.kind !== 'exam_preparation'),
       exams: all.filter((d) => d.kind === 'exam_preparation'),
-      changes: this.visibleChanges(
+      ...this.changeDigest(
         this.changes.list({ since: new Date(now.getTime() - 7 * DAY).toISOString() }),
-      )
-        .reverse()
-        .map((c) => this.changeItem(c)),
-      conflicts: this.openConflicts(),
+        { limit: CHANGE_LIMITS.week, mine: true },
+      ),
+      conflicts: this.currentConflicts(),
     };
   }
 
@@ -1170,10 +1289,13 @@ export class ContextEngine {
       files: this.cited(files.slice(0, COURSE_FILES_LIMIT)),
       filesTotal: files.length,
       assignments: this.assignmentsFor(ids),
-      changes: this.changes
-        .list({ since: new Date(now.getTime() - 14 * DAY).toISOString(), courseOfferingIds: ids })
-        .reverse()
-        .map((x) => this.changeItem(x)),
+      ...this.changeDigest(
+        this.changes.list({
+          since: new Date(now.getTime() - 14 * DAY).toISOString(),
+          courseOfferingIds: ids,
+        }),
+        { limit: CHANGE_LIMITS.course, mine: false },
+      ),
       conflicts: this.openConflicts(ids),
       pendingLinks: ids.flatMap((id) =>
         this.identity.listLinks({ entityId: id, status: 'suggested' }),
@@ -1196,7 +1318,9 @@ export class ContextEngine {
   }
 
   /** What changed since `since` (default: start of yesterday) — "昨日から何が変わった？" (§13, §45). */
-  changesSince(options: { since?: string; courseOfferingId?: string } = {}): ChangesContext {
+  changesSince(
+    options: { since?: string; courseOfferingId?: string; limit?: number } = {},
+  ): ChangesContext {
     const since =
       options.since ??
       addZonedDays(startOfZonedDay(this.now(), this.timezone), -1, this.timezone).toISOString();
@@ -1206,11 +1330,13 @@ export class ContextEngine {
     return {
       ...this.base('changes'),
       since,
-      changes: this.visibleChanges(
+      ...this.changeDigest(
         this.changes.list({ since, ...(ids ? { courseOfferingIds: ids } : {}) }),
-      )
-        .reverse()
-        .map((c) => this.changeItem(c)),
+        {
+          limit: Math.min(options.limit ?? CHANGE_LIMITS.changes, CHANGE_LIMITS.changesMax),
+          mine: false,
+        },
+      ),
       conflicts: this.openConflicts(ids),
     };
   }

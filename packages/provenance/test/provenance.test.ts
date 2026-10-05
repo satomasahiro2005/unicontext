@@ -74,6 +74,7 @@ describe('authority rules (§12)', () => {
       'syllabus',
       'academic-system',
       'transcript',
+      'student-statement',
     ]);
     expect(r.multiValued).toEqual(['todo']);
   });

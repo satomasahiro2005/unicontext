@@ -42,6 +42,8 @@ import {
   addTaskShape,
   compactAddition,
   courseIdForWrite,
+  GET_NOTES_TOOL,
+  getNotesShape,
   LIST_RESULT_SHAPE,
   listAdditionsShape,
   OPEN_ANNOUNCEMENT_RESULT_SHAPE,
@@ -60,8 +62,10 @@ import {
   type AssignmentFilter,
 } from './assignments.js';
 import { listCourses, resolveCourse } from './courses.js';
+import { trimCourseForAi } from './trim.js';
 import {
   buildEnvelope,
+  compactEnvelope,
   predicateLabel,
   type EnvelopeOptions,
   type McpEnvelope,
@@ -155,8 +159,8 @@ export const SERVER_INSTRUCTIONS = [
   'conflicts が空でないときは、情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典をユーザーに伝えてください。',
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
   '書き込みは propose-only です。correct_fact は提案を作るだけで、ユーザー本人が確認するまで何も変更されません。課題の提出・履修登録や削除・成績に関わる操作はできません（提出済み status は提出システムからのみ反映されます）。',
-  '講義の録音で聞いたこと（講義の要約・締切・試験・準備・メモ）は record_lecture / add_deadline / add_note / add_task でUniContextに保存できます（大学のシステムには送られず、本人が確認するまで「録音から」の未確認情報）。',
-  'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only; recorded additions stay unconfirmed until the owner confirms them.',
+  'ユーザーが会話の中で言った締切・試験の日程・やること・覚えておきたいこと（例「レポートの締切10/20って登録しといて」）や、ユーザーと一緒に決めた勉強のTODOは add_deadline / add_task / add_note で、講義の録音で聞いたことは record_lecture などで、UniContextに登録できます。登録した内容は他の会話・クライアントからも get_today・get_week・get_deadlines・get_tasks・get_notes で見えます（大学のシステムには送られず、「チャットで登録」「録音から」と表示され、大学側の値は上書きしません）。',
+  'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only. Deadlines, to-dos and notes the student mentions in any chat can be registered with add_deadline / add_task / add_note so every other session sees them; they never override a university system.',
 ].join('\n');
 
 /** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */
@@ -175,10 +179,11 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   '回答するときは、各結果のcitations・answerHintに従い「根拠: 学務情報システム 10/1 09:42取得」のように出典を添えてください。',
   'conflictsが空でないときは情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典を伝えてください。',
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
-  '講義の録音で聞いたことは record_lecture（要約・要点）・add_deadline（課題・レポート・小テスト・試験・準備の締切）・add_note・add_task で保存できます。保存先はUniContext自身のデータベースだけで、大学のシステムには何も送りません。',
-  '保存するときは evidence に発言をそのまま引用し、recordingTimestamp に録音の位置を入れてください。締切は聞いたままの表現（来週の金曜・次回など）でよく、解決した日時が返るのでユーザーに伝えてください。',
-  '保存した内容は本人が確認するまで「録音から」の未確認情報です。学務情報システムなどの値は変えられず、課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
-  'Writes go to UniContext only (never to a university system), stay unconfirmed until the owner confirms them, and cannot change authoritative data, task status or grades.',
+  'どの会話でも、ユーザーが締切・試験の日程（例「レポートの締切10/20って登録しといて」「来週の金曜に小テスト」）、やること、覚えておきたいことを言ったら、add_deadline・add_task・add_note で登録してください。ユーザーと一緒に立てた勉強計画のTODOも add_task で登録できます。科目に関係ないものは course を省略します。',
+  '登録した内容は、ChatGPTの他の会話やClaudeなど、UniContextにつながる全てのセッションから get_today・get_week・get_deadlines・get_tasks・get_course・get_notes で見えます。登録の前に get_deadlines などで既にあるか確かめると二重登録を避けられます（同じ科目・題名・近い締切は自動で1件にまとまります）。',
+  'evidence にはユーザーの言葉をそのまま引用してください。締切は言われたままの表現（10月20日17時・来週の金曜など）でよく、解決した日時が返るのでユーザーに伝えてください。講義の録音で聞いたことは via=recording とし、recordingTimestamp に録音の位置を入れます（record_lecture は講義の要約・要点）。',
+  '保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
+  'Register deadlines, to-dos and notes the student mentions or plans in any chat (add_deadline / add_task / add_note) so every other session and client sees them. Writes go to UniContext only (never to a university system) and cannot change authoritative data, task status or grades.',
 ].join('\n');
 
 // ---------- shared plumbing ----------
@@ -323,7 +328,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         const out = await run(args as z.infer<z.ZodObject<S>>);
         logger.debug('mcp tool', { tool: name, ms: Date.now() - started });
         audit(true, started);
-        return envelopeResult(buildEnvelope(out.data, out.options), remote);
+        return envelopeResult(compactEnvelope(buildEnvelope(out.data, out.options)), remote);
       } catch (e) {
         logger.debug('mcp tool error', { tool: name, ms: Date.now() - started });
         audit(false, started);
@@ -471,7 +476,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
         '1科目の全体像（担当・教室・今後の授業・直近の講義・締切・お知らせ・資料・Teamsの投稿・フォルダごとのファイル・課題と提出状況・変更・食い違い）を全ソース統合で返す。courseOfferingId には id のほか「データベース」のような科目名や科目コードも使える。 / One course across all sources, including Teams posts (discussion), files with folders, and assignments with submission status. Accepts an id or a fuzzy title / course code.',
     },
     { courseOfferingId: courseIdField },
-    (a) => view('course', { courseOfferingId: courseId(a.courseOfferingId) }),
+    (a) => {
+      const t = trimCourseForAi(
+        getView(uc.context, 'course', { courseOfferingId: courseId(a.courseOfferingId) }),
+      );
+      return { data: t.data, ...(t.hint ? { options: { hint: t.hint } } : {}) };
+    },
   );
 
   tool(
@@ -926,7 +936,19 @@ export function createMcpServer(deps: McpDeps): McpServer {
     (a) => proposePaceSlot(a),
   );
 
-  // ----- record tools: what the client heard in a lecture, stored in UniContext only -----
+  tool('get_notes', GET_NOTES_TOOL, getNotesShape, (a): ToolOutput => ({
+    data: uc.additions.notes(
+      opt({
+        courseOfferingId: courseId(a.course),
+        personal: a.personal,
+        query: a.query,
+        id: a.id?.trim(),
+        limit: a.limit,
+      }),
+    ),
+  }));
+
+  // ----- record tools: deadlines, to-dos and notes from any chat or a recording, UniContext only -----
 
   writeTool('record_lecture', { outputShape: WRITE_RESULT_SHAPE }, recordLectureShape, async (a) =>
     written(
@@ -940,6 +962,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         transcriptExcerpt: a.transcriptExcerpt,
         segments: a.segments,
         recordingTimestamp: a.recordingTimestamp,
+        via: a.via,
         source: a.source,
         idempotencyKey: a.idempotencyKey,
       }),
@@ -954,6 +977,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         dueAt: a.dueAt,
         kind: a.kind,
         evidence: a.evidence,
+        via: a.via,
         recordingTimestamp: a.recordingTimestamp,
         lectureDate: a.lectureDate,
         notes: a.notes,
@@ -970,6 +994,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         title: a.title,
         text: a.text,
         evidence: a.evidence,
+        via: a.via,
         lectureDate: a.lectureDate,
         recordingTimestamp: a.recordingTimestamp,
         source: a.source,
@@ -986,6 +1011,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         dueAt: a.dueAt,
         notes: a.notes,
         evidence: a.evidence,
+        via: a.via,
         lectureDate: a.lectureDate,
         recordingTimestamp: a.recordingTimestamp,
         source: a.source,

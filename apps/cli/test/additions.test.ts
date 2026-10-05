@@ -3,7 +3,7 @@ import { resolveCourse } from '@unicontext/mcp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { exec, json, sharedDevRuntime, type SharedRuntime } from './helpers.js';
 
-/* `unicontext additions`: the owner reviews what AI clients added from lecture recordings. */
+/* `unicontext additions`: the owner reviews what AI clients added from chats and recordings. */
 
 describe('additions', () => {
   let shared: SharedRuntime;
@@ -32,6 +32,7 @@ describe('additions', () => {
         dueAt: '2026-10-09T17:00:00+09:00',
         kind: 'assignment',
         evidence: '課題3は9日の17時までです',
+        via: 'recording',
       })
     ).addition.id;
   }, 60_000);
@@ -43,7 +44,7 @@ describe('additions', () => {
   it('lists unconfirmed additions with the conflict marked', async () => {
     const r = await dev(['additions']);
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toContain('AIが録音から追加した内容');
+    expect(r.stdout).toContain('AIが追加した内容（チャットで登録・録音から）');
     expect(r.stdout).toContain('課題1: ER図の作成');
     expect(r.stdout).toContain('大学側と食い違い');
     expect(r.stdout).toContain('unicontext additions confirm');

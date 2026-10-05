@@ -4,8 +4,8 @@ UniContext normally answers only on `127.0.0.1`. ChatGPT on the web and claude.a
 that, so the daemon can run a second listener that a Cloudflare named tunnel publishes at a public
 https hostname (for example `https://uc.nemut.ai`). It is read-only unless you grant a client the
 `unicontext.write` scope, which adds only the record tools that write into UniContext's own
-database (see [Letting ChatGPT write what it heard](#letting-chatgpt-write-what-it-heard-unicontextwrite)). Research behind the
-design: [research/chatgpt-connector.md](research/chatgpt-connector.md).
+database (see [Registering deadlines, to-dos and notes from ChatGPT](#registering-deadlines-to-dos-and-notes-from-chatgpt-unicontextwrite)).
+Research behind the design: [research/chatgpt-connector.md](research/chatgpt-connector.md).
 
 ```
 ChatGPT / claude.ai ──https──▶ Cloudflare ──tunnel──▶ cloudflared (this PC)
@@ -24,9 +24,11 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
 ## What is exposed, and what is not
 
 - **Tools**: the read tools (`get_today`, `get_week`, `get_course`, `get_deadlines`,
-  `get_assignments`, `get_tasks`, `search`, `get_source`, `get_conflicts`, `prepare_for_class`,
-  `review_class`, `get_recent_changes`, `get_announcements`, `get_announcement`, `search_syllabus`,
-  `get_syllabus`, `get_credit_summary`, …), each with `readOnlyHint: true` and an output schema.
+  `get_assignments`, `get_tasks`, `get_notes`, `search`, `get_source`, `get_conflicts`,
+  `prepare_for_class`, `review_class`, `get_recent_changes`, `get_announcements`,
+  `get_announcement`, `search_syllabus`, `get_syllabus`, `get_credit_summary`, …), each with
+  `readOnlyHint: true` and an output schema. Results are kept small for ChatGPT (see
+  [Result size](#result-size)).
   With the `unicontext.write` scope only, also the record tools `record_lecture`, `add_deadline`,
   `add_note`, `add_task`, `list_my_additions` and `retract_addition` (`readOnlyHint: false`,
   `destructiveHint` only on `retract_addition`), and `open_announcement` (fetches the body of
@@ -158,34 +160,57 @@ developer mode).
 3. URL: `https://uc.nemut.ai/mcp`. Authentication: **OAuth**. Leave client ID/secret empty —
    ChatGPT registers itself (Client ID Metadata Document or Dynamic Client Registration).
 4. ChatGPT opens `uc.nemut.ai/authorize`: check the client name. Leave
-   「講義の記録・締切・メモをUniContextに追加することも許可する」 ticked if ChatGPT should be able to
-   save what it hears in lectures (next section), untick it for a read-only connection. Type your
-   passphrase, press **許可**.
+   「締切・やること・メモ・講義の記録をUniContextに登録することも許可する」 ticked if ChatGPT should be
+   able to register deadlines, to-dos and notes (next section), untick it for a read-only
+   connection. Type your passphrase, press **許可**.
 5. The app appears under Drafts. Start a **new** chat and enable it there. Read tools need no
    confirmation; ChatGPT may ask before calling a record tool.
 
 After a UniContext update that changes tools, press **Refresh** on the app page and start a new
 chat (ChatGPT caches tool metadata).
 
-## Letting ChatGPT write what it heard (`unicontext.write`)
+## Registering deadlines, to-dos and notes from ChatGPT (`unicontext.write`)
 
-With ChatGPT Record, ChatGPT listens to a lecture. With the write scope it can save what it heard
-into UniContext: `record_lecture` (summary, key points, timestamped excerpt), `add_deadline`
-(assignment / report / quiz / exam / preparation, with the quoted sentence and the recording
-position), `add_note` and `add_task`. Ask it for example 「今の講義の要点と、言われた締切をUniContextに保存して」.
+With the write scope, **every** ChatGPT conversation can register what you tell it, so all your
+other ChatGPT chats, claude.ai and the local clients see the same deadlines and to-dos:
+
+- `add_deadline`: a report / assignment deadline, a quiz or exam date, or something to prepare for
+  a class. Say for example 「レポートの締切10/20って登録しといて」 or 「来週の金曜に小テストがある」. The
+  course is optional (奨学金の手続き or 就活 deadlines have none).
+- `add_task`: something to do, with or without a due date — what you say you have to do, or the
+  study plan you work out with ChatGPT (「毎日TOEICの単語を30分」).
+- `add_note`: a memo, about a course or personal (「覚えておいて: ESは12月に3社」).
+- `record_lecture`: the summary and key points of a lecture (ChatGPT Record, or told in the chat).
+
+Where an item came from is kept: told or planned **in a chat** (`via: chat`, the default) is shown
+as 「チャットで登録」 with source 「ChatGPTとの会話」; **heard in a lecture recording** (`via:
+recording`, or whenever a `recordingTimestamp` is given) is shown as 「録音から」 with source
+"ChatGPT Record" and the position in the recording. The quoted words are kept as evidence.
+
+Every client then reads them through the normal read tools, whichever client wrote them:
+`get_today` / `get_tomorrow` / `get_week` (deadlines, tasks), `get_deadlines`, `get_tasks`,
+`get_course` (that course's deadlines), `get_notes` (notes and lecture summaries; `course`,
+`personal`, `query`, or `id` for the full text) and `search`. A read-only client such as claude.ai
+sees them too.
 
 - It is stored **only in UniContext's database on this PC**. Nothing is sent to LiveCampusU or any
   other university system.
-- Everything is marked 「録音から」 (origin `extracted`, source "ChatGPT Record" with the
-  timestamp) until you confirm it. It never changes what LiveCampusU, the LMS or the syllabus say:
-  if the recording gives a different date, UniContext shows a conflict. Relative dates (来週の金曜,
-  次回) are resolved with the lecture date, your timetable and the academic calendar, and ChatGPT
-  is told the resolved date.
-- Review: `unicontext additions` (list), `unicontext additions confirm <id>` (it becomes your own
-  fact and wins), `unicontext additions reject <id>` (removed), or Web UI → Settings → 録音からの追加.
-  ChatGPT can list and withdraw only its own unconfirmed additions.
+- Items are `origin: extracted` until you confirm them, but they are shown, shared and notified at
+  once; you do not have to confirm anything for other chats to see them. A chat item is your own
+  statement, so it carries the authority `student-statement`; it still **never changes what
+  LiveCampusU, the LMS or the syllabus say**: if a registered date differs from theirs (same
+  course and title), UniContext shows a conflict with both values. Confirming
+  (`unicontext additions confirm <id>`) turns it into your own fact, which then wins.
+- Relative dates (来週の金曜, 10月20日17時, 次回) are resolved with the day it was said, your timetable
+  and the academic calendar, and ChatGPT is told the resolved date. 次回 needs a course.
+- Review: `unicontext additions` (list), `unicontext additions confirm <id>`,
+  `unicontext additions reject <id>` (removed), or Web UI → Settings → AIが追加した内容. ChatGPT
+  can list and withdraw only its own unconfirmed additions (`list_my_additions`,
+  `retract_addition`).
+- The same deadline told twice (same course, title, due date within 36 h) is one item; a retried
+  call with the same `idempotencyKey` is not stored again. Each client may write at most 30 items
+  per 10 minutes and 300 per day. Every write is in the audit log (ids only, never text).
 - The tools cannot submit anything, mark tasks submitted/completed, or touch grades or enrolment.
-  Each client may write at most 30 items per 10 minutes and 300 per day.
 
 ### Re-authorizing an existing ChatGPT connection to get the write scope
 
@@ -198,13 +223,31 @@ again:
 2. In ChatGPT open https://chatgpt.com/plugins → your UniContext app → **Disconnect** (or remove
    the app and create it again with the same URL `https://uc.nemut.ai/mcp`), then **Connect**.
    ChatGPT asks for `unicontext.read unicontext.write` because the server advertises both.
-3. On `uc.nemut.ai/authorize` keep 「講義の記録・締切・メモをUniContextに追加することも許可する」 ticked,
+3. On `uc.nemut.ai/authorize` keep 「締切・やること・メモ・講義の記録をUniContextに登録することも許可する」 ticked,
    type the passphrase, **許可**. `unicontext remote clients` then shows 範囲 「読み取り＋追加」
    (`--json`: `scopes`), and the `authorize` line in `logs/remote-audit.jsonl` has
    `"scope":"unicontext.read unicontext.write …"`.
 4. Press **Refresh** on the app page and start a **new** chat so ChatGPT loads the new tools.
 
 To go back to read-only, revoke the client and authorize again with the box unticked.
+
+## Result size
+
+ChatGPT cannot use multi-megabyte tool results, so what the tools return is compact (measured on a
+real database after the first sync of a term: `get_week` went from about 2.9 MB to about 43 KB):
+
+- Changes (`get_today`, `get_tomorrow`, `get_week`, `get_course`, `get_recent_changes`): one item
+  per entity, decisive ones first (conflicts, class / assignment / exam changes, 休講), at most 30 for
+  a day, 25 for the week, 20 for a course and 50 (up to `limit` 200) for `get_recent_changes`;
+  `changesTotal` / `changesOmitted` say how many there were. Summaries are cut to 200 characters,
+  `before` / `after` keep only short values (dates, rooms, states), and index entries, catalogue
+  courses and notice bodies fetched later are not listed. Today and the week only list changes and
+  conflicts of the current term's courses (and university-wide notices); `get_recent_changes` with
+  `since` / `courseOfferingId` gives the rest.
+- Citations: `{sourceReferenceId, label, url}` (the url only where a source first appears;
+  `get_source` has the details), at most 20 at the top level.
+- `get_course` lists the newest 10 materials, 20 files and 10 posts (`materialsTotal`,
+  `filesTotal`, `discussionTotal`); `list_course_files` and `get_teams_activity` have the rest.
 
 ## 4. Add it to claude.ai
 

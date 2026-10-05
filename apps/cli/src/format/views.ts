@@ -143,7 +143,7 @@ function deadlineColumns(ctx: CliContext, tz: string): TableColumn<DeadlineItem>
     { header: '状態', value: (d) => TASK_STATUS_LABELS[d.status] },
     {
       header: '由来',
-      value: (d) => (d.recorded ? '録音から（未確認）' : ORIGIN_LABELS[d.origin]),
+      value: (d) => (d.recorded ? recordedLabel(d.recorded) : ORIGIN_LABELS[d.origin]),
     },
     {
       header: '根拠',
@@ -165,6 +165,11 @@ export function printDeadlines(
 ): void {
   if (deadlines.length === 0) return none(ctx);
   printTable(ctx, deadlineColumns(ctx, tz), deadlines);
+}
+
+/** 「録音から（未確認）」 / 「チャットで登録」 */
+function recordedLabel(r: { label: string; via: string }): string {
+  return r.via === 'chat' ? r.label : `${r.label}（未確認）`;
 }
 
 function printChanges(ctx: CliContext, changes: readonly ChangeItem[], tz: string): void {
@@ -191,7 +196,7 @@ function printTasks(ctx: CliContext, tasks: readonly TaskItem[], tz: string): vo
       { header: '状態', value: (t) => TASK_STATUS_LABELS[t.status] },
       {
         header: '由来',
-        value: (t) => (t.recorded ? '録音から（未確認）' : ORIGIN_LABELS[t.origin]),
+        value: (t) => (t.recorded ? recordedLabel(t.recorded) : ORIGIN_LABELS[t.origin]),
       },
       { header: '根拠', value: (t) => ctx.text(citationText(t.citations, 1)) },
     ],

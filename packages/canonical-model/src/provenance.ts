@@ -28,6 +28,8 @@ export const KNOWN_AUTHORITIES = [
   'collaboration',
   'discussion',
   'transcript',
+  /** The student told an AI client in a chat (MCP write tools); never outranks a system. */
+  'student-statement',
   'local-file',
   'unknown',
 ] as const;
@@ -35,8 +37,10 @@ export type KnownAuthority = (typeof KNOWN_AUTHORITIES)[number];
 
 /**
  * Source id under which everything an AI client writes through the MCP write tools
- * (record_lecture, add_deadline, add_note, add_task) is stored. Never an authoritative source:
- * every fact it carries is origin=extracted until the owner confirms it (§11, §48).
+ * (record_lecture, add_deadline, add_note, add_task) is stored — heard in a lecture recording
+ * (authority `transcript`) or told/created in a chat (authority `student-statement`). Never an
+ * authoritative source: every fact it carries is origin=extracted until the owner confirms it
+ * (§11, §48).
  */
 export const ADDITIONS_SOURCE_ID = 'mcp-additions';
 

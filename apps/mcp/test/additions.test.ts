@@ -274,7 +274,17 @@ describe('record tools: calls', () => {
     const res = await call(client, 'add_task', { course: 'ソフトウェア工学', title: '復習する' });
     expect((res.structuredContent as Structured).addition).toMatchObject({
       client: { id: 'local:Claude Desktop', name: 'Claude Desktop' },
+      source: 'Claudeとの会話',
+      via: 'chat',
+    });
+    const heard = await call(client, 'add_task', {
+      course: 'ソフトウェア工学',
+      title: '教科書3章を読む',
+      via: 'recording',
+    });
+    expect((heard.structuredContent as Structured).addition).toMatchObject({
       source: 'Claude Desktop',
+      via: 'recording',
     });
   });
 
@@ -285,5 +295,128 @@ describe('record tools: calls', () => {
       text: 'あ'.repeat(20_001),
     });
     expect(res.isError).toBe(true);
+  });
+});
+
+describe('registrations from any chat are shared with every client and session', () => {
+  type Env = { data: Record<string, unknown>; citations: { label: string }[] };
+  type Marked = {
+    title: string;
+    summary?: string;
+    course?: { title: string };
+    recorded?: { label: string; via: string; source: string };
+  };
+
+  it('a deadline, a to-do and a note told in one ChatGPT chat are seen by another client', async () => {
+    const writer = await connect({
+      surface: 'remote',
+      allowWrite: true,
+      client: { id: 'oauth-chatgpt-shared', name: 'ChatGPT' },
+    });
+    const course = await call(writer, 'add_deadline', {
+      course: 'ソフトウェア工学',
+      title: '中間レポート',
+      dueAt: '2026-11-20T17:00:00+09:00',
+      kind: 'report',
+      evidence: '中間レポートの締切11/20の17時って登録しといて',
+    });
+    expect(course.isError, JSON.stringify(course.content)).toBeFalsy();
+    const added = (course.structuredContent as Structured).addition;
+    expect(added).toMatchObject({
+      via: 'chat',
+      label: 'チャットで登録',
+      source: 'ChatGPTとの会話',
+    });
+    expect((course.structuredContent as Structured).answerHint).toContain('他の会話');
+    expect((course.structuredContent as Structured).answerHint).not.toContain('録音');
+    const personal = await call(writer, 'add_deadline', {
+      title: '奨学金の継続手続き',
+      dueAt: '11月19日17時',
+      kind: 'assignment',
+      evidence: '奨学金の継続手続きが19日の17時まで',
+    });
+    expect(personal.isError, JSON.stringify(personal.content)).toBeFalsy();
+    expect((personal.structuredContent as Structured).addition).not.toHaveProperty('course');
+    const todo = await call(writer, 'add_task', {
+      title: 'TOEICの単語を30分',
+      evidence: '毎日TOEICの単語をやることにする',
+    });
+    expect(todo.isError, JSON.stringify(todo.content)).toBeFalsy();
+    const note = await call(writer, 'add_note', {
+      title: '就活メモ',
+      text: 'ESは12月に3社出す。締切は各社のマイページで確認。',
+    });
+    expect(note.isError, JSON.stringify(note.content)).toBeFalsy();
+
+    // A different client (claude.ai, read-only grant) in another session.
+    const reader = await connect({
+      surface: 'remote',
+      client: { id: 'claude-ro', name: 'claude.ai' },
+    });
+    const read = async (name: string, args: Record<string, unknown> = {}): Promise<Env> => {
+      const r = await call(reader, name, args);
+      expect(r.isError, `${name}: ${JSON.stringify(r.content)}`).toBeFalsy();
+      return r.structuredContent as unknown as Env;
+    };
+    const titles = (list: unknown): string[] => (list as Marked[]).map((x) => x.title);
+    const find = (list: unknown, title: string): Marked | undefined =>
+      (list as Marked[]).find((x) => x.title === title);
+
+    const week = await read('get_week');
+    expect(titles(week.data.deadlines)).toEqual(
+      expect.arrayContaining(['中間レポート', '奨学金の継続手続き']),
+    );
+    const report = find(week.data.deadlines, '中間レポート');
+    expect(report?.recorded).toMatchObject({ label: 'チャットで登録', via: 'chat' });
+    expect(report?.summary).toMatch(/^【チャットで登録】ソフトウェア工学: 中間レポート/);
+    expect(report?.summary).not.toContain('録音');
+    expect(find(week.data.deadlines, '奨学金の継続手続き')?.course).toBeUndefined();
+
+    const today = await read('get_today');
+    expect(titles(today.data.deadlines)).toEqual(
+      expect.arrayContaining(['中間レポート', '奨学金の継続手続き']),
+    );
+    expect(titles(today.data.tasks)).toContain('TOEICの単語を30分');
+
+    const deadlines = await read('get_deadlines');
+    expect(titles(deadlines.data.upcoming)).toEqual(
+      expect.arrayContaining(['中間レポート', '奨学金の継続手続き']),
+    );
+    expect(deadlines.citations.map((c) => c.label).join(' ')).toContain('ChatGPTとの会話');
+
+    const tasks = await read('get_tasks');
+    const toeic = find(tasks.data.tasks, 'TOEICの単語を30分');
+    expect(toeic?.course).toBeUndefined();
+    expect(toeic?.recorded).toMatchObject({
+      label: 'チャットで登録',
+      source: 'ChatGPTとの会話',
+    });
+
+    const courseView = await read('get_course', { courseOfferingId: 'ソフトウェア工学' });
+    expect(titles(courseView.data.deadlines)).toContain('中間レポート');
+    expect(titles(courseView.data.deadlines)).not.toContain('奨学金の継続手続き');
+
+    const notes = await read('get_notes');
+    const memo = find(notes.data.notes, '就活メモ') as
+      (Marked & { via: string; label: string; id: string }) | undefined;
+    expect(memo).toMatchObject({ via: 'chat', label: 'チャットで登録' });
+    expect(memo?.course).toBeUndefined();
+    expect(titles((await read('get_notes', { personal: true })).data.notes)).toContain('就活メモ');
+    expect(titles((await read('get_notes', { query: 'マイページ' })).data.notes)).toEqual([
+      '就活メモ',
+    ]);
+    expect(
+      titles((await read('get_notes', { course: 'ソフトウェア工学' })).data.notes),
+    ).not.toContain('就活メモ');
+    const one = await read('get_notes', { id: memo?.id });
+    expect((one.data.notes as { text: string }[])[0]?.text).toContain('マイページ');
+    const hits = await read('search', { query: 'マイページ' });
+    expect(JSON.stringify(hits.data)).toContain('就活メモ');
+  });
+
+  it('get_notes is a read tool on every surface', async () => {
+    const reader = await connect({ surface: 'remote', client: { id: 'ro-notes' } });
+    const t = (await reader.listTools()).tools.find((x) => x.name === 'get_notes');
+    expect(t?.annotations?.readOnlyHint).toBe(true);
   });
 });

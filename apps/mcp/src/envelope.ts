@@ -178,6 +178,81 @@ function scrubCitationUrls(node: unknown, depth = 0): void {
   for (const child of Object.values(o)) scrubCitationUrls(child, depth + 1);
 }
 
+/** A citation as tool results carry it: what to quote, the id for get_source, and the link. */
+export interface CitationRef {
+  sourceReferenceId: string;
+  label: string;
+  url?: string;
+}
+
+/** Most citations listed at the top level of a tool result (every item keeps its own). */
+export const TOP_CITATIONS = 20;
+
+function citationRef(c: Citation, withUrl = true): CitationRef {
+  return {
+    sourceReferenceId: c.sourceReferenceId,
+    label: c.label,
+    ...(withUrl && typeof c.url === 'string' && c.url ? { url: c.url } : {}),
+  };
+}
+
+/** ResolvedValue without disagreement: its candidates only repeat the item's citations. */
+function isSettledValue(o: Obj): boolean {
+  return (
+    (o.status === 'resolved' || o.status === 'none') &&
+    'value' in o &&
+    'method' in o &&
+    Array.isArray(o.candidates) &&
+    o.predicate === undefined
+  );
+}
+
+/** `seen`: citations already emitted with their url (a repeat carries only id and label). */
+function slim(node: unknown, seen: Set<string>, depth = 0): unknown {
+  if (depth > 60 || node === null || typeof node !== 'object') return node;
+  if (Array.isArray(node)) return node.map((x) => slim(x, seen, depth + 1));
+  const o = node as Obj;
+  if (isCitation(o)) {
+    const first = !seen.has(o.sourceReferenceId);
+    seen.add(o.sourceReferenceId);
+    return citationRef(o, first);
+  }
+  const conflictItem = typeof o.subjectLabel === 'string' && Array.isArray(o.candidates);
+  const out: Obj = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (k === 'candidates' && isSettledValue(o)) continue;
+    // A conflict's candidates carry its citations already.
+    if (k === 'citations' && conflictItem) continue;
+    // Identity links of every nested course reference; the result's own course keeps them.
+    if (k === 'linkedIds' && depth > 1) continue;
+    out[k] = slim(v, seen, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * What AI clients receive (§75, kept small enough for ChatGPT): every citation reduced to
+ * {sourceReferenceId, label, url} (the url only where it first appears; get_source has the rest),
+ * settled values without their candidate list, conflicts without a second copy of their
+ * citations, nested course references without identity links, and at most {@link TOP_CITATIONS}
+ * top-level citations. Conflict notices and the hint are computed on the full envelope first, so
+ * nothing about disagreements is lost.
+ */
+export function compactEnvelope<T>(envelope: McpEnvelope<T>): McpEnvelope<T> {
+  const total = envelope.citations.length;
+  const kept = envelope.citations.slice(0, TOP_CITATIONS);
+  const hint =
+    total > kept.length
+      ? `${envelope.answerHint} citations は全${total}件のうち先頭${kept.length}件です。各項目の citations も根拠に使えます。`
+      : envelope.answerHint;
+  return {
+    data: slim(envelope.data, new Set()) as T,
+    citations: kept.map((c) => citationRef(c)) as unknown as Citation[],
+    conflicts: envelope.conflicts,
+    answerHint: hint,
+  };
+}
+
 export function buildEnvelope<T>(data: T, options: EnvelopeOptions = {}): McpEnvelope<T> {
   const safe = toJsonSafe(data);
   scrubCitationUrls(safe);

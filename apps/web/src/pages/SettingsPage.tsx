@@ -170,7 +170,7 @@ function AdditionsSection() {
   }
 
   return (
-    <Section title="録音からの追加">
+    <Section title="AIが追加した内容（チャットで登録・録音から）">
       <Async state={state}>
         {({ additions }) =>
           additions.length === 0 ? (
@@ -182,7 +182,7 @@ function AdditionsSection() {
                   <header className="card-head">
                     <h3 className="card-title">{a.title}</h3>
                     <Badge>{ADDITION_KIND[a.kind]}</Badge>
-                    <Badge tone="warn">録音から</Badge>
+                    <Badge tone="warn">{a.label}</Badge>
                     {a.conflicts.length > 0 ? <Badge tone="bad">大学側と食い違い</Badge> : null}
                   </header>
                   <p className="meta">

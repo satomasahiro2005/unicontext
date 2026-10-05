@@ -50,6 +50,8 @@ export function describeChange(item: ChangeLike, timeZone: string = DEFAULT_TIME
   const diffs: ChangeDiff[] = [];
   if (item.type === 'updated') {
     for (const field of item.changedFields) {
+      // Views leave long values (bodies, extra) out; the summary describes those.
+      if (!(field in (item.before ?? {})) && !(field in (item.after ?? {}))) continue;
       const before = formatValue(item.before?.[field], timeZone);
       const after = formatValue(item.after?.[field], timeZone);
       const label = fieldLabel(field);

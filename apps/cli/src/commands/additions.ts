@@ -59,7 +59,7 @@ export function registerAdditions(program: Command, h: Harness): void {
   const additions = program
     .command('additions')
     .description(
-      'AIが録音から追加した講義の記録・締切・メモを確認する / Review what AI clients added from lecture recordings',
+      'AIが追加した締切・やること・メモ・講義の記録（チャットで登録・録音から）を確認する / Review what AI clients added from chats and lecture recordings',
     )
     .option('--all', 'すべての状態を表示する / every status')
     .option(
@@ -80,7 +80,7 @@ export function registerAdditions(program: Command, h: Harness): void {
           ctx.printJson({ additions: list });
           return 0;
         }
-        printSection(ctx, 'AIが録音から追加した内容', list.length);
+        printSection(ctx, 'AIが追加した内容（チャットで登録・録音から）', list.length);
         if (list.length === 0) {
           ctx.out(`  ${ctx.style.dim('なし')}`);
           return 0;
@@ -90,6 +90,7 @@ export function registerAdditions(program: Command, h: Harness): void {
           [
             { header: 'ID', value: (a) => a.id },
             { header: '種類', value: (a) => KIND_LABELS[a.kind] },
+            { header: '由来', value: (a) => a.label },
             { header: '科目', value: (a) => ctx.text(a.course?.title ?? ''), max: 20 },
             { header: '内容', value: (a) => ctx.text(a.title), max: 36 },
             { header: '日時', value: (a) => a.dueText ?? '' },
@@ -143,7 +144,7 @@ export function registerAdditions(program: Command, h: Harness): void {
           throw new CliError(`「${id}」は${STATUS_LABELS[a.status]}のため確認できません`, 1);
         const ok = await ctx.confirmAction(
           a.conflicts.length > 0
-            ? '大学側の情報と食い違っています。録音の内容を正しいとして本人入力で記録しますか？'
+            ? `大学側の情報と食い違っています。${a.via === 'chat' ? 'チャットで登録した' : '録音の'}内容を正しいとして本人入力で記録しますか？`
             : 'この内容を本人入力として記録しますか？',
           opts.yes,
         );
