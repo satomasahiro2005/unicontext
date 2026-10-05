@@ -812,6 +812,7 @@ chat said the deadline was unknown.
   student's own progress on the old to-do task carries over and that task row is removed. Due
   date and status come from the source; `recordedMarker` does not mark a task that also rests on
   a system's facts. The addition shows `attachedTo` and `stored.taskId` of the assignment task.
+  Deadline items and `get_assignments` items carry those blocks as `details`.
 - `candidate` (≥ 0.5): both stay; the addition shows `possibleSameAs` and the estimator uses the
   candidate's due date (above).
 - `add_task.assignmentId` links explicitly. `add_deadline` (assignment / report) also attaches to

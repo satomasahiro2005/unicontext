@@ -83,6 +83,16 @@ export interface TodoValue {
 const linkedTodoBlock = (authority: string | undefined, title: string, notes: string): string =>
   `〔${authority === 'student-statement' ? 'チャットで登録' : '録音から'}「${title}」〕${notes.replace(/\n{2,}/gu, '\n')}`;
 const LINKED_TODO_BLOCK = /^〔(?:チャットで登録|録音から)「/u;
+
+/**
+ * What the student told / a recording said about an assignment a to-do was linked to: the
+ * 「〔チャットで登録「…」〕…」 blocks of its task's notes (undefined when there are none).
+ */
+export function linkedTodoDetails(notes: string | undefined): string | undefined {
+  const blocks = (notes ?? '').split(/\n{2,}/u).filter((b) => LINKED_TODO_BLOCK.test(b));
+  return blocks.length > 0 ? blocks.join('\n\n') : undefined;
+}
+
 export const EXTRACTOR_ID = 'ja-deadline-rules';
 
 /** Who is asking to change a task status. AI may never mark work as submitted/completed (§19). */

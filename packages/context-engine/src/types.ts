@@ -182,6 +182,11 @@ export interface DeadlineItem extends Cited {
   summary: string;
   /** Present when the deadline comes only from an AI client (recording or chat), unconfirmed. */
   recorded?: RecordedMarker | undefined;
+  /**
+   * What the student told in a chat / a recording said about this assignment (a to-do linked to
+   * it: 「〔チャットで登録「レポート1：…」〕…」). Its due date and status are the source's.
+   */
+  details?: string | undefined;
 }
 
 /**

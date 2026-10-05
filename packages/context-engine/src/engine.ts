@@ -66,6 +66,7 @@ import { PersonalSchedule, type PersonalSession } from './personal-schedule.js';
 import {
   type EnrolledOffering,
   formatPaceSlot,
+  linkedTodoDetails,
   type OfferingTermParts,
   slotHalves,
   PACE_PREDICATE,
@@ -800,6 +801,10 @@ export class ContextEngine {
       summary: `${recorded ? `【${recorded.label}】` : ''}${course ? `${course.title}: ` : ''}${t.title} 締切 ${formatShortJa(due, this.timezone)}${origin}${citations[0] ? `（根拠: ${citations[0].label}）` : ''}`,
       citations,
       ...(recorded ? { recorded } : {}),
+      ...(() => {
+        const details = linkedTodoDetails(t.notes);
+        return details ? { details } : {};
+      })(),
     };
   }
 

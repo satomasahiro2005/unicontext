@@ -7,6 +7,7 @@ import type {
   UniContext,
 } from '@unicontext/context-engine';
 import { toCitation, uniqueCitations } from '@unicontext/provenance';
+import { linkedTodoDetails } from '@unicontext/task-engine';
 
 /** One task/assignment as shown to AI clients and the REST twin (apps/daemon `AssignmentItem`). */
 export interface AssignmentItem {
@@ -26,6 +27,8 @@ export interface AssignmentItem {
    */
   estimatedDue?: EstimatedDue | undefined;
   evidence: string | undefined;
+  /** What the student told / a recording said about it (a to-do linked to this assignment). */
+  details?: string | undefined;
   citations: Citation[];
   /** Registered by an AI client (「チャットで登録」 / 「録音から」) and not confirmed by the owner. */
   recorded?: RecordedMarker | undefined;
@@ -106,6 +109,10 @@ export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}):
         hoursLeft,
         ...(estimatedDue ? { estimatedDue } : {}),
         evidence: t.evidence ?? recorded?.evidence,
+        ...(() => {
+          const details = linkedTodoDetails(t.notes);
+          return details ? { details } : {};
+        })(),
         citations: taskCitations(uc, t),
         ...(recorded ? { recorded } : {}),
       };

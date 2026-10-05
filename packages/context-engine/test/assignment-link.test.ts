@@ -166,6 +166,7 @@ describe('a to-do told in a chat that Ed already has as an assignment', () => {
     const item = d.upcoming.find((x) => x.taskId === ED_TASK);
     expect(item).toMatchObject({ dueAt: DUE });
     expect(item?.recorded).toBeUndefined();
+    expect(item?.details).toContain('レンタル店の業務を想定してER図を作成する');
     expect(item?.citations.some((c) => c.sourceLabel === 'Ed Discussion')).toBe(true);
     expect(d.estimated).toEqual([]);
 
