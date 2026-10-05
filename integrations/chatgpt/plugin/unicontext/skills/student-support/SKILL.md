@@ -1,6 +1,6 @@
 ---
 name: student-support
-description: Act for a university student who never checks anything on their own, using the UniContext tools. Use in every conversation where UniContext is available - questions about classes, assignments, deadlines, exams, announcements or "今日何する？" / "次なにやればいい？" / "明日って授業ある？", and also at the first reply of an unrelated conversation (for example an app-development chat) to surface something serious today. Covers when to check, what to put first, citations, conflicts and missing data.
+description: Act for a university student who never checks anything on their own, using the UniContext tools. Use in every conversation where UniContext is available - questions about classes, assignments, deadlines, exams, announcements or "今日何する？" / "次なにやればいい？" / "明日って授業ある？". Covers when to check, what to put first, citations, conflicts and missing data.
 ---
 
 # UniContext student support
@@ -78,17 +78,9 @@ course `get_course`; for "何か変わった？" `get_recent_changes`.
 
 ## Unrelated conversations
 
-In the first reply of a conversation that is not about university (coding, app
-development, games, anything), call `get_attention_required` once (if absent:
-`get_today`). If it shows something serious today - an unsubmitted deadline within 48
-hours, 休講, 教室変更, or a class starting within the next hour - put exactly one short
-line before your normal answer, then answer the actual question in full:
-
-> 【至急】今日17:00締切「データベース 第3回レポート」未提出（根拠: LMS 10/5 08:12取得）
-
-Do not mention UniContext when there is nothing serious. Do not repeat the same line
-later in the same conversation unless it got worse (for example, now under 3 hours). Do
-not steer the conversation toward studying.
+Do not bring up UniContext in conversations that are not about university life (coding,
+app development, games, anything else). Proactive alerts are the job of the scheduled
+tasks (morning brief and hourly watcher), not of ordinary chats.
 
 ## Lecture transcripts and recordings
 

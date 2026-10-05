@@ -82,7 +82,8 @@ once (OAuth with your passphrase).
 3. **Custom instructions** (do this regardless of route): Settings → Personalization →
    Custom instructions → paste `integrations/chatgpt/custom-instructions.ja.txt`. Skills are
    loaded only when a request matches them, and personal skills in Chat are not documented for
-   Plus, so this is what makes the 「関係ない会話でも重大なことを1行」 rule reliable.
+   Plus, so this is what makes the behaviour rules reliable. Ordinary chats use UniContext only when
+   the student talks about university life; proactive alerts come from the scheduled tasks.
 
 After a UniContext update that changes tools: Plugins → UniContext → **Refresh**, then a new
 chat. After changing skills: rebuild the ZIP and upload it again, or ask Plugin Creator via
@@ -186,8 +187,8 @@ relies on). The watcher uses:
 
 1. In a new chat: 「今日何する？」 → UniContext tools are called without a question, the answer
    is an ordered action list with sources.
-2. In an unrelated chat (e.g. 「Swiftで配列をソートするには？」) on a day with an unsubmitted
-   deadline within 48 hours → one 【至急】 line first, then the normal answer.
+2. In an unrelated chat (e.g. 「Swiftで配列をソートするには？」) → no UniContext call and no
+   university line, even on a day with an urgent deadline (the watcher task handles that).
 3. Paste a short lecture transcript → `ingest_lecture` (or `record_lecture` + `add_*`) is
    called without 「保存しますか？」; ChatGPT's own confirmation dialog may appear. If no write
    tool is offered at all, the account has read-only MCP (see the research notes, §4).
@@ -220,6 +221,6 @@ paragraph, so the rules hold even when no skill is loaded:
 
 > UniContext is the student's university data. The student never checks anything themselves:
 > call the tools without asking 「確認しますか？」. For 「今日何する？」 call get_next_action /
-> get_student_state. In unrelated chats, call get_attention_required once and, if something is
-> serious today, put one line first. On a lecture transcript call ingest_lecture unasked. Cite
+> get_student_state. Do not bring up UniContext in unrelated
+> chats; the scheduled tasks handle alerts. On a lecture transcript call ingest_lecture unasked. Cite
 > sources, show both values on conflicts, never infer deadlines, report coverage gaps.

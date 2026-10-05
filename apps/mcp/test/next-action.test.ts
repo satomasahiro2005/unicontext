@@ -62,7 +62,7 @@ afterEach(async () => {
 type Action = { what: string; why: string; title: string; link?: { url: string } };
 
 describe('next-action MCP tools', () => {
-  it('are read-only on both surfaces, and the instructions say to lead with the top action', async () => {
+  it('are read-only on both surfaces, and the instructions route 何すればいい to get_next_action without interrupting other chats', async () => {
     for (const surface of ['local', 'remote'] as const) {
       const c = await connect(surface);
       const tools = (await c.listTools()).tools.filter((t) => TOOLS.includes(t.name));
@@ -73,7 +73,8 @@ describe('next-action MCP tools', () => {
       }
       const instructions = c.getInstructions() ?? '';
       expect(instructions).toContain('get_next_action');
-      expect(instructions).toContain('urgent');
+      expect(instructions).not.toContain('first reply');
+      expect(instructions).not.toContain('会話の最初の返答');
       expect(instructions).toContain('nothingImportant');
     }
   });
