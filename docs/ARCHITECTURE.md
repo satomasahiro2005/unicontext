@@ -673,7 +673,7 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
   per course) and coverage gaps. Tasks of courses the student does not take (catalog-only, or only
   a `dropped` enrollment) are left out; overdue work of a 前半-only course is left out once 後半
   has started.
-- Effort: `classifyWork` by task kind and title (小テスト 20, 小レポート 60, レポート 180, 実験レポート 360,
+- Effort: `classifyWork` by task kind and title (a notice deadline asking to hand in work is 課題; 小テスト 20, 小レポート 60, レポート 180, 実験レポート 360,
   課題 60, 試験勉強 480, 小テスト対策 30, 今週分 90, 授業準備 15, やること 30 minutes;
   `DEFAULT_EFFORT_MINUTES`). Overrides: `options.effortMinutes[kind]`, else
   `assignment.extra.estimatedMinutes`. Each kind has fixed first steps (`stepsFor`); the largest
@@ -688,7 +688,7 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
     「課題ページを開いて締切と内容を確認する（5分）」 — never pushed down for being unknown;
   - overdue assignment: 「遅れて提出できるか確認する（5分）」, 180 decaying over 10 days (40 after 7
     days); an `extra.lateDueAt|lateDue|cutoffAt|closesAt` still ahead becomes the deadline;
-  - +50 unsubmitted assignment, +min(points, 50), +150 midterm/final, +30 quiz, +250 for 今週分
+  - +50 unsubmitted assignment, +min(points, 50), +150 midterm/final in its last week (+50 before), +30 quiz, +250 for 今週分
     while its self-study slot is on;
   - attend 700 (≤ 20 min) / 500 (≤ 45 min); prep `1000/(1+h/6) × 0.6`;
   - coverage gaps from `deadlineCoverage()` (coverage.ts; undated assignments are actions of their

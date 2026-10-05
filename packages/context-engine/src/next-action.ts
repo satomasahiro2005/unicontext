@@ -142,6 +142,8 @@ export function classifyWork(
     return 'short_report';
   if (/レポート|report|論述|エッセイ|essay/i.test(text)) return 'report';
   if (task.taskKind === 'assignment') return 'exercise';
+  // A deadline found in a notice or post that asks for work to be handed in.
+  if (task.taskKind === 'extracted' && /課題|宿題|提出/.test(text)) return 'exercise';
   return 'todo';
 }
 
@@ -485,8 +487,10 @@ export function computeNextActions(
     const left = steps.slice(t.status === 'in_progress' && steps.length > 1 ? 1 : 0);
     const remaining = left.reduce((s, x) => s + x.minutes, 0);
     const first = left[0] ?? { text: '', minutes: remaining };
+    // Titles of notice deadlines are sentences: drop the final 。 before 「: <step>」.
+    const name = t.title.replace(/[。．.]+$/, '');
     const stepText = (s: WorkStep): string =>
-      s.text ? `${t.title}: ${s.text}（${s.minutes}分）` : `${t.title}（${s.minutes}分）`;
+      s.text ? `${name}: ${s.text}（${s.minutes}分）` : `${name}（${s.minutes}分）`;
     const citations = host.citations(t);
     const recorded = host.recorded(t);
     const link =
@@ -526,7 +530,7 @@ export function computeNextActions(
         kind = 'check_deadline';
         reasons.push('unknown_due');
         why.push('締切不明（近いかもしれない）');
-        what = `${t.title}: 課題ページを開いて締切と内容を確認する（5分）`;
+        what = `${name}: 課題ページを開いて締切と内容を確認する（5分）`;
         stepMinutes = 5;
         score = deadlinePart(UNKNOWN_DUE_HOURS) + 20;
       } else {
@@ -544,7 +548,7 @@ export function computeNextActions(
       reasons.push('overdue');
       if (t.taskKind === 'assignment') {
         kind = 'check_late';
-        what = `${t.title}: 課題ページを開いて、遅れて提出できるか確認する（5分）`;
+        what = `${name}: 課題ページを開いて、遅れて提出できるか確認する（5分）`;
         stepMinutes = 5;
         why.push(`期限切れ（${leftText(hoursOver)}前）`, 'まだ受け付けている可能性');
         score = daysOver <= LATE_WINDOW_DAYS ? 180 * (1 - daysOver / (LATE_WINDOW_DAYS + 3)) : 40;
@@ -598,7 +602,8 @@ export function computeNextActions(
     }
     if (exam && (exam.examKind === 'final' || exam.examKind === 'midterm')) {
       reasons.push('major_exam');
-      score += 150;
+      // A midterm / final weighs most in its last week; further out it is one item among others.
+      score += Number.isFinite(dueMs) && dueMs - nowMs <= 7 * DAY ? 150 : 50;
     } else if (exam?.examKind === 'quiz') score += 30;
     const slot = course ? studyNow.get(course.id) : undefined;
     if (t.taskKind === 'weekly_pace' && slot) {
