@@ -10,6 +10,7 @@ import type {
 } from '@unicontext/canonical-model';
 import type { Citation } from '@unicontext/provenance';
 import type { DeadlineCoverage } from './coverage.js';
+import type { EstimatedDue } from './estimate.js';
 import type { NextActionSummary } from './next-action.js';
 
 export type { Citation } from '@unicontext/provenance';
@@ -183,11 +184,34 @@ export interface DeadlineItem extends Cited {
   recorded?: RecordedMarker | undefined;
 }
 
+/**
+ * Open work whose due date is unknown, with an estimate: 「推定」, the earliest plausible deadline
+ * with its basis and range (estimate.ts). Never a stated deadline: listed apart from DeadlineItem,
+ * and always said as 推定 with where to confirm.
+ */
+export interface EstimatedDeadlineItem extends Cited {
+  taskId: string;
+  kind: DeadlineItem['kind'];
+  title: string;
+  course: CourseRef | undefined;
+  status: TaskStatus;
+  origin: FactOrigin;
+  estimatedDue: EstimatedDue;
+  /** Hours until the estimate (negative: the estimate is past — confirm now). */
+  hoursLeft: number;
+  evidence: string | undefined;
+  /** 「【推定】データベース: レポート1 締切不明・推定 10/8 10:20〜…（根拠…）。要確認: …」 */
+  summary: string;
+  recorded?: RecordedMarker | undefined;
+}
+
 export interface TaskItem extends Cited {
   taskId: string;
   title: string;
   course: CourseRef | undefined;
   dueAt: string | undefined;
+  /** Unknown due date of work with a deadline: the estimate (「推定」). */
+  estimatedDue?: EstimatedDue | undefined;
   status: TaskStatus;
   taskKind: string;
   origin: FactOrigin;
@@ -613,6 +637,11 @@ export interface CourseFilesContext extends BundleBase<'course-files'> {
 export interface DeadlineContext extends BundleBase<'deadline'> {
   overdue: DeadlineItem[];
   upcoming: DeadlineItem[];
+  /**
+   * Open work with an unknown due date, by estimate (earliest first). Estimates, not deadlines:
+   * say 「推定」 with the basis and where to confirm.
+   */
+  estimated: EstimatedDeadlineItem[];
   coverage: DeadlineCoverage;
 }
 

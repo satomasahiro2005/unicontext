@@ -10,6 +10,7 @@ import type { Assignment, Exam, Submission, Task, TaskStatus } from '@unicontext
 import { formatShortJa, redact, zonedParts } from '@unicontext/core';
 import { uniqueCitations } from '@unicontext/provenance';
 import type { CoverageGap, DeadlineCoverage } from './coverage.js';
+import type { EstimatedDue } from './estimate.js';
 import type {
   Citation,
   ClassItem,
@@ -147,6 +148,27 @@ export function classifyWork(
   return 'todo';
 }
 
+/** Kinds of work that are handed in or sat: they have a deadline even when none is known. */
+const DEADLINED_WORK = new Set<WorkKind>([
+  'quiz',
+  'short_report',
+  'report',
+  'lab_report',
+  'exercise',
+  'exam_study',
+  'quiz_study',
+]);
+
+/**
+ * The item has a deadline somewhere, known or not (assignments, exams, work to hand in found in
+ * notices or chats): when its due date is unknown it gets an estimate (estimate.ts) instead of
+ * being treated as 「期限なし」. The student's own to-dos (manual) and 今週分 are not.
+ */
+export function hasDeadline(task: Pick<Task, 'taskKind'>, workKind: WorkKind): boolean {
+  if (task.taskKind === 'assignment' || task.taskKind === 'exam_preparation') return true;
+  return task.taskKind === 'extracted' && DEADLINED_WORK.has(workKind);
+}
+
 // ---------- result shapes ----------
 
 export type NextActionKind =
@@ -179,7 +201,7 @@ export interface NextAction {
   taskId: string | undefined;
   course: CourseRef | undefined;
   dueAt: string | undefined;
-  /** 「10/6 17:00」, 「締切不明」. */
+  /** 「10/6 17:00」, 「締切不明（推定10/8 10:20）」. */
   dueText: string;
   hoursLeft: number | undefined;
   overdue: boolean;
@@ -207,6 +229,11 @@ export interface NextAction {
   /** Machine-readable reasons: due_24h, unsubmitted, cannot_finish, unknown_due, coverage_stale … */
   reasons: string[];
   recorded?: RecordedMarker | undefined;
+  /**
+   * The due date is unknown: the earliest plausible one, 「推定」 with its basis (never a stated
+   * deadline). `dueAt` stays undefined; the ranking uses this.
+   */
+  estimatedDue?: EstimatedDue | undefined;
   citations: Citation[];
 }
 
@@ -215,12 +242,16 @@ export interface DueSoonItem {
   title: string;
   course: string | undefined;
   courseId: string | undefined;
+  /** The deadline, or for an unknown one the estimate (`estimated`). */
   dueAt: string;
+  /** 「10/6 17:00」; an estimate reads 「推定10/8 10:20」. */
   dueText: string;
   hoursLeft: number;
   /** An assignment the submission system does not report as submitted. */
   unsubmitted: boolean;
   link: NextActionLink | undefined;
+  /** The due date is unknown and `dueAt` is its estimate: always say 「推定」. */
+  estimated?: EstimatedDue | undefined;
   citations: Citation[];
 }
 
@@ -232,11 +263,14 @@ export interface NextActionsContext {
   top: NextAction | undefined;
   /** Then these (default 3). */
   next: NextAction[];
-  /** An unsubmitted assignment is due within 48 hours: open the conversation with `top`. */
+  /**
+   * An unsubmitted assignment is due — or, with an unknown due date, estimated due — within 48
+   * hours: open the conversation with `top`.
+   */
   urgent: boolean;
   /** One line to say first: 「今やること: …（…）」. */
   line: string;
-  /** Open deadlines within 72 hours, soonest first. */
+  /** Open deadlines within 72 hours (estimates of unknown ones included, marked), soonest first. */
   dueSoon: DueSoonItem[];
   /**
    * Whether the deadline sources can be trusted right now: the coverage gaps (coverage.ts) other
@@ -279,6 +313,8 @@ export interface NextActionHost {
   courseRef(id: string | undefined): CourseRef | undefined;
   citations(task: Task): Citation[];
   recorded(task: Task): RecordedMarker | undefined;
+  /** Estimated deadline of an item whose due date is unknown (estimate.ts), else undefined. */
+  estimate(task: Task): EstimatedDue | undefined;
   /** A course the student does not take (syllabus catalog only, or dropped). */
   notTaken(courseId: string): boolean;
   /** The course meets only in a half of the term (前半/後半) that is over on `date`. */
@@ -306,8 +342,12 @@ const AWAKE_FROM = 8;
 const AWAKE_TO = 24;
 /** Share of free awake time a student actually spends on one item (meals, commute, rest …). */
 const USABLE_SHARE = 0.5;
-/** An undated assignment / exam is ranked as if due this many hours from now. */
-export const UNKNOWN_DUE_HOURS = 48;
+/**
+ * An item with an unknown due date is ranked against its estimate (the earliest plausible time,
+ * estimate.ts), never pushed down for being unknown. An estimate already past counts as due in
+ * this many hours (confirming takes 5 minutes; a stated deadline in 3 hours still comes first).
+ */
+const PASSED_ESTIMATE_HOURS = 3;
 /** An undated personal to-do is ranked as if due this many hours from now. */
 const UNDATED_TODO_HOURS = 7 * 24;
 /** Overdue items within this many days may still be accepted late. */
@@ -496,7 +536,7 @@ export function computeNextActions(
     const link =
       safeLink(assignment?.url, t.assignmentId ? host.sourceLabelOf(t.assignmentId) : undefined) ??
       linkFromCitations(citations);
-    const isWork = t.taskKind === 'assignment' || t.taskKind === 'exam_preparation';
+    const isWork = hasDeadline(t, workKind);
     const unsubmitted = t.taskKind === 'assignment';
     const lateDue = dateField(assignment?.extra, LATE_DUE_KEYS);
 
@@ -523,16 +563,47 @@ export function computeNextActions(
       dueMs = Date.parse(lateDue);
     }
 
+    let estimated: EstimatedDue | undefined;
     if (!Number.isFinite(dueMs)) {
-      if (isWork) {
-        // Unknown deadline: possibly urgent, never pushed down for being unknown. The cheap first
-        // step is finding out.
+      estimated = isWork ? host.estimate(t) : undefined;
+      if (estimated) {
+        // Unknown deadline: plan against the earliest plausible one (推定), never as 「期限なし」.
+        // The cheap first step is finding the real one out.
+        const estMs = Date.parse(estimated.at);
+        const hoursLeft = (estMs - nowMs) / HOUR;
         kind = 'check_deadline';
-        reasons.push('unknown_due');
-        why.push('締切不明（近いかもしれない）');
-        what = `${name}: 課題ページを開いて締切と内容を確認する（5分）`;
+        reasons.push('unknown_due', 'estimated_due');
+        why.push(
+          estimated.passed
+            ? `締切不明・推定${formatShortJa(new Date(estMs), tz)}をもう過ぎている可能性`
+            : `締切不明・推定${formatShortJa(new Date(estMs), tz)}（あと${leftText(hoursLeft)}）`,
+        );
+        what = `${name}: ${estimated.checkWhere}で締切と内容を確認する（5分）`;
         stepMinutes = 5;
-        score = deadlinePart(UNKNOWN_DUE_HOURS) + 20;
+        // Past estimates: how much is left is not known either, so no effort pressure.
+        const pressure =
+          estMs > nowMs
+            ? remaining / Math.max(freeMinutes(now, new Date(estMs), busy, tz) * USABLE_SHARE, 1)
+            : 0;
+        score =
+          (deadlinePart(Math.max(hoursLeft, PASSED_ESTIMATE_HOURS)) + 300 * Math.min(pressure, 2)) *
+            KIND_FACTOR[workKind] +
+          20;
+        if (pressure >= 1) reasons.push('cannot_finish');
+        if (hoursLeft <= 72)
+          dueSoon.push({
+            taskId: t.id,
+            title: t.title,
+            course: course?.title,
+            courseId: course?.id,
+            dueAt: estimated.at,
+            dueText: `推定${formatShortJa(new Date(estMs), tz)}`,
+            hoursLeft: round1(hoursLeft),
+            unsubmitted,
+            link: link ?? safeLink(estimated.checkUrl, undefined),
+            estimated,
+            citations,
+          });
       } else {
         reasons.push('undated');
         why.push('期限なし');
@@ -622,7 +693,11 @@ export function computeNextActions(
       taskId: t.id,
       course,
       dueAt: Number.isFinite(dueMs) ? new Date(dueMs).toISOString() : undefined,
-      dueText: Number.isFinite(dueMs) ? formatShortJa(new Date(dueMs), tz) : '締切不明',
+      dueText: Number.isFinite(dueMs)
+        ? formatShortJa(new Date(dueMs), tz)
+        : estimated
+          ? `締切不明（推定${formatShortJa(new Date(estimated.at), tz)}）`
+          : '締切不明',
       hoursLeft: Number.isFinite(dueMs) ? round1((dueMs - nowMs) / HOUR) : undefined,
       overdue,
       workKind,
@@ -641,8 +716,13 @@ export function computeNextActions(
       score: Math.round(score),
       reasons,
       ...(recorded ? { recorded } : {}),
+      ...(estimated ? { estimatedDue: estimated } : {}),
       citations,
-      sortDue: Number.isFinite(dueMs) ? dueMs : Number.POSITIVE_INFINITY,
+      sortDue: Number.isFinite(dueMs)
+        ? dueMs
+        : estimated
+          ? Date.parse(estimated.at)
+          : Number.POSITIVE_INFINITY,
     });
   }
 

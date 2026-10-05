@@ -6,11 +6,15 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { DeadlineCoverage } from '@unicontext/context-engine';
 import { describe, expect, it } from 'vitest';
 import {
+  coverageHint,
   createMcpServer,
+  ESTIMATE_HINT_JA,
   ProposalStore,
   REMOTE_SERVER_INSTRUCTIONS,
   REMOTE_WRITE_SERVER_INSTRUCTIONS,
   SERVER_INSTRUCTIONS,
+  UNKNOWN_DEADLINE_POLICY_EN,
+  UNKNOWN_DEADLINE_POLICY_JA,
 } from '../src/index.js';
 import { createSeeded } from './seeded.js';
 
@@ -30,6 +34,26 @@ describe('deadline coverage in the AI views', () => {
       expect(text).toContain('「期限はない」「余裕がある」と言ってはいけません');
       expect(text).toContain('absence in UniContext does not mean there is none');
     }
+  });
+
+  it('every server variant says: estimate an unknown deadline early, never as a fact', () => {
+    for (const text of [
+      SERVER_INSTRUCTIONS,
+      REMOTE_SERVER_INSTRUCTIONS,
+      REMOTE_WRITE_SERVER_INSTRUCTIONS,
+    ]) {
+      expect(text).toContain(UNKNOWN_DEADLINE_POLICY_JA);
+      expect(text).toContain(UNKNOWN_DEADLINE_POLICY_EN);
+      expect(text).not.toContain('推測で補わず');
+      expect(text).not.toMatch(/推測で作らない|never infer|inferred deadlines/i);
+      expect(text).not.toContain('treat unknown deadlines as possibly imminent');
+    }
+    expect(UNKNOWN_DEADLINE_POLICY_JA).toContain('空欄にせず');
+    expect(UNKNOWN_DEADLINE_POLICY_JA).toContain('「推定」と明記');
+    expect(UNKNOWN_DEADLINE_POLICY_JA).toContain('確定した締切として登録・断定しない');
+    expect(coverageHint({ coverage: { complete: true, gaps: [] }, estimated: [{}] })).toContain(
+      ESTIMATE_HINT_JA,
+    );
   });
 
   it('get_deadlines / get_today / get_week / get_course carry coverage and flag a down source', async () => {

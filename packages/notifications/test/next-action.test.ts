@@ -33,7 +33,11 @@ describe('next-action notifications', () => {
       escalationLeadTimes: ['72h', '24h', '6h'],
     });
     const first = await svc.checkDeadlines();
-    expect(first.map((n) => n.kind).sort()).toEqual(['deadline_escalation', 'next_action_digest']);
+    expect(first.map((n) => n.kind).sort()).toEqual([
+      'deadline_escalation',
+      'deadline_escalation',
+      'next_action_digest',
+    ]);
     const digest = first.find((n) => n.kind === 'next_action_digest');
     expect(digest?.title).toBe('今日やること（10月5日(月)）');
     expect(digest?.body).toContain(
@@ -41,8 +45,15 @@ describe('next-action notifications', () => {
     );
     expect(digest?.body).toContain('72時間以内: Lesson 3: SQL演習（10/6 17:00・未提出）');
     expect(digest?.priority).toBe('high');
-    const esc = first.find((n) => n.kind === 'deadline_escalation');
+    const esc = first.find((n) => n.kind === 'deadline_escalation' && n.title.includes('Lesson'));
     expect(esc?.priority).toBe('normal');
+    // 小レポート2 has no due date: notified against its early estimate, said as 推定.
+    const est = first.find(
+      (n) => n.kind === 'deadline_escalation' && n.title.includes('小レポート2'),
+    );
+    expect(est?.title).toBe('締切不明・推定まであと約62時間: 小レポート2');
+    expect(est?.body).toContain('締切は分かりません。推定10/7 23:59');
+    expect(est?.body).toContain('EdStemの課題ページで確認してください');
     expect(esc?.body).toContain('まずこれ: Lesson 3: SQL演習: 課題を開いて問題を確認する（10分）');
 
     expect(await svc.checkDeadlines()).toEqual([]);
@@ -55,7 +66,7 @@ describe('next-action notifications', () => {
     clock.set('2026-10-06T03:30:00.000Z'); // 12:30, 4.5 hours left
     const third = await svc.checkDeadlines();
     expect(third.map((n) => [n.kind, n.priority])).toEqual([['deadline_escalation', 'critical']]);
-    expect(sink.sent).toHaveLength(4);
+    expect(sink.sent).toHaveLength(5);
   });
 
   it('builds the digest object without sending it', () => {

@@ -1,8 +1,10 @@
 export const PACKAGE_NAME = '@unicontext/mcp';
 
 export {
+  coverageHint,
   createMcpServer,
   DEFAULT_MCP_VERSION,
+  ESTIMATE_HINT_JA,
   HOW_TO_CONFIRM,
   MCP_SERVER_NAME,
   RECORDING_INSTRUCTION_EN,
@@ -10,6 +12,8 @@ export {
   REMOTE_SERVER_INSTRUCTIONS,
   REMOTE_WRITE_SERVER_INSTRUCTIONS,
   SERVER_INSTRUCTIONS,
+  UNKNOWN_DEADLINE_POLICY_EN,
+  UNKNOWN_DEADLINE_POLICY_JA,
   type McpDeps,
   type McpSurface,
   type ToolCallEvent,

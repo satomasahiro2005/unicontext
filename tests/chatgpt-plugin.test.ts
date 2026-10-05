@@ -104,6 +104,32 @@ describe('ChatGPT plugin package', () => {
     );
   });
 
+  it('says to estimate unknown deadlines early, never to state or register a guess', () => {
+    const files = [
+      'custom-instructions.ja.txt',
+      'tasks/watcher.ja.txt',
+      'tasks/morning.ja.txt',
+      'tasks/evening.ja.txt',
+      'tasks/weekly.ja.txt',
+      'plugin/unicontext/plugin.json',
+      'plugin/unicontext/skills/student-support/SKILL.md',
+      'plugin/unicontext/skills/student-briefing/SKILL.md',
+      'plugin/unicontext/skills/lecture-ingest/SKILL.md',
+    ];
+    for (const f of files) {
+      const text = readFileSync(join(BASE, f), 'utf8');
+      expect(text, f).not.toMatch(
+        /締切を推測で作らない|never infer|inferred deadlines|Never invent a deadline/i,
+      );
+      expect(text, f).toContain('推定');
+    }
+    const custom = readFileSync(join(BASE, 'custom-instructions.ja.txt'), 'utf8');
+    expect(custom).toContain('空欄にせず、早めの推定');
+    expect(custom).toContain('推定を確定した締切として登録・断定しない');
+    const docs = readFileSync(join(__dirname, '..', 'docs', 'chatgpt-plugin.md'), 'utf8');
+    expect(docs).not.toMatch(/never infer deadlines/i);
+  });
+
   it('keeps the scheduled task prompts silent by default and read-only', () => {
     for (const task of ['watcher.ja.txt', 'morning.ja.txt', 'evening.ja.txt', 'weekly.ja.txt']) {
       const text = readFileSync(join(BASE, 'tasks', task), 'utf8');

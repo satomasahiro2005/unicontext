@@ -76,8 +76,11 @@ import {
 } from '@unicontext/task-engine';
 import { additionViaOfAuthority } from './additions.js';
 import { readAnnouncementExtra } from './announcements.js';
+import { type EstimatedDue, estimateDue, type EstimateHost } from './estimate.js';
 import {
+  classifyWork,
   computeNextActions,
+  hasDeadline,
   type NextActionHost,
   type NextActionOptions,
   type NextActionsContext,
@@ -121,6 +124,7 @@ import type {
   DayContext,
   DeadlineContext,
   DeadlineItem,
+  EstimatedDeadlineItem,
   DiscussionItem,
   RecordedMarker,
   ExamPreparationContext,
@@ -796,12 +800,138 @@ export class ContextEngine {
     };
   }
 
-  private taskItem(t: Task): TaskItem {
+  /**
+   * Estimates for open work whose due date is unknown (estimate.ts): the earliest plausible
+   * deadline from the course's own pattern, a rule in the item's text, the student's next class,
+   * or a week. One estimator per request: meetings and the course's dated items are cached.
+   * Undefined for items with a due date and for the student's own to-dos.
+   */
+  dueEstimator(): (t: Task) => EstimatedDue | undefined {
+    const tz = this.timezone;
+    const now = this.now();
+    const enrolled = this.enrolledIdSet();
+    const personal = this.personalSchedule();
+    const schedule = this.tasks.schedule;
+    const days = new Map<string, { courseId: string | undefined; start: number }[]>();
+    const meetingsOn = (date: string): { courseId: string | undefined; start: number }[] => {
+      let list = days.get(date);
+      if (!list) {
+        list = personal
+          .apply(date, schedule.sessionsOn(date))
+          .filter(
+            (p) =>
+              p.effective.status !== 'not_attending' &&
+              p.session.status !== 'cancelled' &&
+              !this.isCatalogOnly(p.session.courseOfferingId, enrolled),
+          )
+          .map((p) => ({
+            courseId: p.session.courseOfferingId,
+            start: Date.parse(
+              p.session.startsAt ??
+                (p.session.period
+                  ? schedule.slotTimes(p.session.date, { period: p.session.period }).startsAt
+                  : undefined) ??
+                '',
+            ),
+          }))
+          .filter((m) => Number.isFinite(m.start));
+        days.set(date, list);
+      }
+      return list;
+    };
+    const linked = new Map<string, Set<string>>();
+    const linkedOf = (id: string): Set<string> => {
+      let set = linked.get(id);
+      if (!set) linked.set(id, (set = new Set(this.linkedIdsOf(id))));
+      return set;
+    };
+    const dated = new Map<string, { id: string; title: string; dueAt: string }[]>();
+    const host: EstimateHost = {
+      now,
+      timezone: tz,
+      meetings: (courseId, from, to) => {
+        const ids = linkedOf(courseId);
+        const out: number[] = [];
+        for (let d = from; d <= to; d = addLocalDays(d, 1)) {
+          const first = meetingsOn(d)
+            .filter((m) => m.courseId !== undefined && ids.has(m.courseId))
+            .map((m) => m.start)
+            .sort((a, b) => a - b)[0];
+          if (first !== undefined) out.push(first);
+        }
+        return out;
+      },
+      datedItems: (courseId) => {
+        let list = dated.get(courseId);
+        if (!list) {
+          const ids = [...linkedOf(courseId)];
+          const fromTasks = this.tasks
+            .list({ courseOfferingId: courseId, includeUndated: false })
+            .filter((t) => t.taskKind !== 'weekly_pace' && t.dueAt)
+            .map((t) => ({ id: t.assignmentId ?? t.id, title: t.title, dueAt: t.dueAt as string }));
+          const fromAssignments = this.entities
+            .list('assignment', { where: { courseOfferingId: ids } })
+            .filter((a) => a.dueAt)
+            .map((a) => ({ id: a.id, title: a.title, dueAt: a.dueAt as string }));
+          list = [...fromTasks, ...fromAssignments];
+          dated.set(courseId, list);
+        }
+        return list;
+      },
+    };
+    return (t) => {
+      if (t.dueAt) return undefined;
+      const assignment = t.assignmentId
+        ? this.entities.getOfKind('assignment', t.assignmentId)
+        : undefined;
+      const exam = t.examId ? this.entities.getOfKind('exam', t.examId) : undefined;
+      if (!hasDeadline(t, classifyWork(t, assignment, exam))) return undefined;
+      const appeared = [assignment?.availableFrom, t.createdAt]
+        .filter((x): x is string => x !== undefined && Number.isFinite(Date.parse(x)))
+        .sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+      const citations = this.taskCitations(t);
+      const url = [assignment?.url, ...citations.map((c) => c.url)].find(
+        (u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u),
+      );
+      const recorded = this.recordedMarker(t);
+      const label = t.assignmentId
+        ? this.citationsFor([t.assignmentId])[0]?.sourceLabel
+        : recorded
+          ? undefined
+          : citations[0]?.sourceLabel;
+      const course = this.courseRef(t.courseOfferingId)?.title;
+      const checkWhere = url
+        ? `${label ?? '提出先'}の${t.taskKind === 'exam_preparation' ? 'ページ' : '課題ページ'}`
+        : label
+          ? `${label}の元の連絡`
+          : course
+            ? `${course}の先生・LMS`
+            : '出した先生・LMS';
+      return estimateDue(
+        {
+          id: t.assignmentId ?? t.id,
+          title: assignment?.title ?? t.title,
+          courseId: t.courseOfferingId,
+          appearedAt: appeared ?? now.toISOString(),
+          texts: [t.title, t.evidence, recorded?.evidence, t.notes, assignment?.description].filter(
+            (x): x is string => typeof x === 'string' && x.length > 0,
+          ),
+          checkWhere,
+          ...(url ? { checkUrl: url } : {}),
+        },
+        host,
+      );
+    };
+  }
+
+  private taskItem(t: Task, estimate?: (t: Task) => EstimatedDue | undefined): TaskItem {
+    const estimatedDue = estimate?.(t);
     return {
       taskId: t.id,
       title: t.title,
       course: this.courseRef(t.courseOfferingId),
       dueAt: t.dueAt,
+      ...(estimatedDue ? { estimatedDue } : {}),
       status: t.status,
       taskKind: t.taskKind,
       origin: t.origin,
@@ -1370,8 +1500,9 @@ export class ContextEngine {
       .list({ statuses: OPEN_STATUSES })
       .filter(this.takenFilter())
       .filter((t) => !t.dueAt || new Date(t.dueAt) >= new Date(now.getTime() - 7 * DAY))
-      .slice(0, 30)
-      .map((t) => this.taskItem(t));
+      .slice(0, 30);
+    const estimate = tasks.some((t) => !t.dueAt) ? this.dueEstimator() : undefined;
+    const taskItems = tasks.map((t) => this.taskItem(t, estimate));
     const importantAnnouncements = this.announcementsBetween(
       new Date(now.getTime() - 3 * DAY),
       new Date(now.getTime() + 1),
@@ -1401,7 +1532,7 @@ export class ContextEngine {
       ...(notAttending.length ? { notAttending } : {}),
       ...changes,
       deadlines,
-      tasks,
+      tasks: taskItems,
       importantAnnouncements,
       preparation,
       conflicts: this.currentConflicts(),
@@ -1483,25 +1614,26 @@ export class ContextEngine {
         sourceIds: e.ids.map(sourceOf).filter((x): x is string => x !== undefined),
       }));
     }
+    const estimate = this.dueEstimator();
     const undated: CoverageUndated[] = this.tasks
       .list({ statuses: OPEN_STATUSES })
-      .filter(
-        (t) =>
-          !t.dueAt &&
-          t.taskKind === 'assignment' &&
-          t.courseOfferingId !== undefined &&
-          scope.has(t.courseOfferingId),
-      )
-      .map((t) => {
+      .filter((t) => !t.dueAt && t.courseOfferingId !== undefined && scope.has(t.courseOfferingId))
+      .flatMap((t) => {
+        // Work with a deadline somewhere (not the student's own to-dos).
+        const estimatedDue = estimate(t);
+        if (!estimatedDue) return [];
         const course = this.courseRef(t.courseOfferingId);
         const assignment = t.assignmentId
           ? this.entities.getOfKind('assignment', t.assignmentId)
           : undefined;
-        return {
-          course: course ? { id: course.id, title: course.title } : undefined,
-          title: t.title,
-          url: assignment?.url,
-        };
+        return [
+          {
+            course: course ? { id: course.id, title: course.title } : undefined,
+            title: t.title,
+            url: assignment?.url,
+            estimatedDue,
+          },
+        ];
       });
     const tz = this.timezone;
     return buildDeadlineCoverage({
@@ -1510,6 +1642,7 @@ export class ContextEngine {
       courses,
       undated,
       courseScoped: courseOfferingId !== undefined,
+      timezone: tz,
       formatTime: (iso) => {
         const p = zonedParts(new Date(iso), tz);
         return `${p.month}/${p.day} ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
@@ -1551,6 +1684,10 @@ export class ContextEngine {
       courseRef: (id) => this.courseRef(id),
       citations: (t) => this.taskCitations(t),
       recorded: (t) => this.recordedMarker(t),
+      estimate: (() => {
+        let estimate: ((t: Task) => EstimatedDue | undefined) | undefined;
+        return (t: Task) => (estimate ??= this.dueEstimator())(t);
+      })(),
       notTaken: (id) => {
         const linked = this.linkedIdsOf(id);
         if (linked.some((x) => enrolled.has(x))) return false;
@@ -1859,8 +1996,53 @@ export class ContextEngine {
       ...this.base('deadline'),
       overdue: all.filter((d) => d.overdue),
       upcoming: all.filter((d) => !d.overdue),
+      estimated: this.estimatedDeadlines(options.courseOfferingId),
       coverage: this.deadlineCoverage(options.courseOfferingId),
     };
+  }
+
+  /**
+   * Open work whose due date is unknown, with its estimate (earliest first). Courses the student
+   * does not take are left out, as for deadlines.
+   */
+  estimatedDeadlines(courseOfferingId?: string): EstimatedDeadlineItem[] {
+    const estimate = this.dueEstimator();
+    const nowMs = this.now().getTime();
+    const notTaken = this.nextActionHost().notTaken;
+    return this.tasks
+      .list({ statuses: OPEN_STATUSES, ...(courseOfferingId ? { courseOfferingId } : {}) })
+      .filter((t) => !t.dueAt)
+      .filter(this.takenFilter(courseOfferingId))
+      .filter((t) => courseOfferingId || !t.courseOfferingId || !notTaken(t.courseOfferingId))
+      .flatMap((t): EstimatedDeadlineItem[] => {
+        const estimatedDue = estimate(t);
+        if (!estimatedDue) return [];
+        const course = this.courseRef(t.courseOfferingId);
+        const citations = this.taskCitations(t);
+        const recorded = this.recordedMarker(t);
+        const hoursLeft = Math.round(((Date.parse(estimatedDue.at) - nowMs) / 3_600_000) * 10) / 10;
+        return [
+          {
+            taskId: t.id,
+            kind: t.taskKind,
+            title: t.title,
+            course,
+            status: t.status,
+            origin: t.origin,
+            estimatedDue,
+            hoursLeft,
+            evidence: t.evidence ?? recorded?.evidence,
+            summary: `【推定】${recorded ? `【${recorded.label}】` : ''}${course ? `${course.title}: ` : ''}${t.title} 締切不明・${estimatedDue.text}`,
+            citations,
+            ...(recorded ? { recorded } : {}),
+          },
+        ];
+      })
+      .sort(
+        (a, b) =>
+          Date.parse(a.estimatedDue.at) - Date.parse(b.estimatedDue.at) ||
+          a.title.localeCompare(b.title, 'ja'),
+      );
   }
 
   /** What changed since `since` (default: start of yesterday) — "昨日から何が変わった？" (§13, §45). */

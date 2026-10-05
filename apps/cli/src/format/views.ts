@@ -5,6 +5,8 @@ import type {
   ConflictItem,
   EnrollmentNote,
   DeadlineItem,
+  EstimatedDeadlineItem,
+  EstimatedDue,
   NextAction,
   NextActionsContext,
   PaceItem,
@@ -223,12 +225,20 @@ function printChanges(ctx: CliContext, changes: readonly ChangeItem[], tz: strin
   );
 }
 
+/** 「推定 10/8 10:20」 for an unknown due date with an estimate (never shown as the deadline). */
+function estimateCell(e: EstimatedDue | undefined, tz: string): string {
+  return e ? `推定 ${shortTime(e.at, tz)}` : '';
+}
+
 function printTasks(ctx: CliContext, tasks: readonly TaskItem[], tz: string): void {
   if (tasks.length === 0) return none(ctx);
   printTable(
     ctx,
     [
-      { header: '期限', value: (t) => shortTime(t.dueAt, tz) || '-' },
+      {
+        header: '期限',
+        value: (t) => shortTime(t.dueAt, tz) || estimateCell(t.estimatedDue, tz) || '-',
+      },
       { header: '内容', value: (t) => ctx.text(t.title), max: 40 },
       { header: '科目', value: (t) => ctx.text(t.course?.title), max: 22 },
       { header: '状態', value: (t) => TASK_STATUS_LABELS[t.status] },
@@ -446,7 +456,10 @@ export function printAssignments(
   printTable(
     ctx,
     [
-      { header: '期限', value: (a) => shortTime(a.dueAt, tz) || '-' },
+      {
+        header: '期限',
+        value: (a) => shortTime(a.dueAt, tz) || estimateCell(a.estimatedDue, tz) || '-',
+      },
       {
         header: '残り',
         value: (a) => remaining(a.hoursLeft),
@@ -460,6 +473,11 @@ export function printAssignments(
     ],
     items,
   );
+  for (const a of items)
+    if (a.estimatedDue)
+      ctx.out(
+        `  ${ctx.style.yellow('推定')} ${ctx.text(a.title)}: ${ctx.text(a.estimatedDue.text)}`,
+      );
 }
 
 export function printDeadlineContext(ctx: CliContext, b: DeadlineContext): void {
@@ -468,6 +486,42 @@ export function printDeadlineContext(ctx: CliContext, b: DeadlineContext): void 
   printDeadlines(ctx, b.overdue, tz);
   printSection(ctx, 'これからの締切', b.upcoming.length);
   printDeadlines(ctx, b.upcoming, tz);
+  printEstimated(ctx, b.estimated ?? [], tz);
+}
+
+/** Unknown due dates with their estimates, apart from the stated deadlines and marked 推定. */
+function printEstimated(
+  ctx: CliContext,
+  items: readonly EstimatedDeadlineItem[],
+  tz: string,
+): void {
+  if (items.length === 0) return;
+  printSection(ctx, '締切不明（推定・要確認）', items.length);
+  printTable(
+    ctx,
+    [
+      { header: '推定', value: (d) => shortTime(d.estimatedDue.at, tz) },
+      {
+        header: '範囲',
+        value: (d) => (d.estimatedDue.latest ? `〜${shortTime(d.estimatedDue.latest, tz)}` : '-'),
+      },
+      {
+        header: '残り',
+        value: (d) => remaining(d.hoursLeft),
+        style: (padded, d) => (d.hoursLeft < 0 ? ctx.style.red(padded) : padded),
+      },
+      { header: '内容', value: (d) => ctx.text(d.title), max: 40 },
+      { header: '科目', value: (d) => ctx.text(d.course?.title), max: 22 },
+      { header: '確度', value: (d) => (d.estimatedDue.confidence === 'medium' ? '中' : '低') },
+      { header: '確認先', value: (d) => ctx.text(d.estimatedDue.checkWhere), max: 30 },
+    ],
+    items,
+  );
+  for (const d of items)
+    ctx.out(`  ${ctx.style.dim(ctx.text(`${d.title}: 根拠 ${d.estimatedDue.basis}`))}`);
+  ctx.out(
+    `  ${ctx.style.yellow('推定は確定した締切ではありません。早めの推定に合わせて動き、確認先で本当の締切を確かめてください。')}`,
+  );
 }
 
 export function printChangesContext(ctx: CliContext, b: ChangesContext): void {
@@ -558,6 +612,8 @@ function printAction(ctx: CliContext, a: NextAction, lead: string): void {
   const due = a.dueText && a.dueText !== '—' ? `締切 ${a.dueText}` : '';
   const meta = [a.why, due, a.course?.title].filter(Boolean).map((x) => ctx.text(x));
   if (meta.length) ctx.out(`    ${ctx.style.dim(meta.join(' / '))}`);
+  if (a.estimatedDue)
+    ctx.out(`    ${ctx.style.dim(ctx.text(`推定の根拠: ${a.estimatedDue.basis}`))}`);
   if (a.link) ctx.out(`    ${ctx.style.dim(ctx.text(a.link.url))}`);
 }
 

@@ -2,8 +2,11 @@
  * Deadline coverage: which sources feed the student's deadlines, whether each is healthy, and what
  * is known to be missing. An empty deadline list only means "none found in these sources"; the AI
  * must not read it as "there is no deadline" (the student's words: 期限がわからない時にAIが楽観視して
- * しまうのも問題). Views carry this so an answer can say what was checked and what was not.
+ * しまうのも問題). Views carry this so an answer can say what was checked and what was not. Work
+ * whose due date is unknown carries its estimate (estimate.ts: earliest plausible, 「推定」).
  */
+import { formatShortJa } from '@unicontext/core';
+import type { EstimatedDue } from './estimate.js';
 
 /** What a source contributes to deadlines, by connector capability. */
 const COVERS: Record<string, string> = {
@@ -50,7 +53,8 @@ export type CoverageGap =
   | {
       kind: 'unknown_due';
       course: { id: string; title: string } | undefined;
-      items: { title: string; url?: string | undefined }[];
+      /** Earliest estimate first; each with its 「推定」 (never a stated deadline). */
+      items: { title: string; url?: string | undefined; estimatedDue?: EstimatedDue | undefined }[];
       detail: string;
     };
 
@@ -87,6 +91,8 @@ export interface CoverageUndated {
   course: { id: string; title: string } | undefined;
   title: string;
   url: string | undefined;
+  /** The earliest plausible deadline (estimate.ts). */
+  estimatedDue?: EstimatedDue | undefined;
 }
 
 const HEALTH_TEXT: Record<Exclude<CoverageHealth, 'ok'>, string> = {
@@ -122,6 +128,8 @@ export function buildDeadlineCoverage(input: {
   undated: CoverageUndated[];
   courseScoped: boolean;
   formatTime: (iso: string) => string;
+  /** Time zone of the estimates in the gap text (default Asia/Tokyo). */
+  timezone?: string;
 }): DeadlineCoverage {
   const courseSources = new Set(input.courses.flatMap((c) => c.sourceIds));
   const relevant = input.sources.filter(
@@ -177,13 +185,24 @@ export function buildDeadlineCoverage(input: {
     const key = u.course?.id ?? '';
     undated.set(key, [...(undated.get(key) ?? []), u]);
   }
-  for (const list of undated.values()) {
+  const estMs = (u: CoverageUndated): number =>
+    u.estimatedDue ? Date.parse(u.estimatedDue.at) : Number.POSITIVE_INFINITY;
+  for (const group of undated.values()) {
+    const list = [...group].sort((a, b) => estMs(a) - estMs(b));
     const course = list[0]?.course;
+    const first = list[0]?.estimatedDue;
+    const estimate = first
+      ? `最も早い推定は${formatShortJa(new Date(first.at), input.timezone)}（${first.basis}）。推定は確定した締切ではありません。`
+      : '';
     gaps.push({
       kind: 'unknown_due',
       course,
-      items: list.slice(0, 5).map((u) => ({ title: u.title, ...(u.url ? { url: u.url } : {}) })),
-      detail: `${course ? `「${course.title}」の` : ''}課題${list.length}件は締切が分かりません（期限不明）。すぐ締切が来る可能性があるものとして、提出先で期限を確認してください。`,
+      items: list.slice(0, 5).map((u) => ({
+        title: u.title,
+        ...(u.url ? { url: u.url } : {}),
+        ...(u.estimatedDue ? { estimatedDue: u.estimatedDue } : {}),
+      })),
+      detail: `${course ? `「${course.title}」の` : ''}課題${list.length}件は締切が分かりません（期限不明）。${estimate}すぐ締切が来る可能性があるものとして推定に合わせて扱い、提出先で期限を確認してください。`,
     });
   }
 
@@ -194,6 +213,6 @@ export function buildDeadlineCoverage(input: {
     gaps,
     note: complete
       ? '締切は上の情報源から取得したものです。ここに無いことは締切が無いことを意味しません（口頭・紙・同期していない場所の課題もありえます）。'
-      : '締切の取得に欠けがあります（gaps）。ここに無い締切や期限不明の課題は、すぐ締切が来る可能性があるものとして扱い、gaps の確認先を学生に伝えてください。「締切はない」「余裕がある」とは言わないでください。',
+      : '締切の取得に欠けがあります（gaps）。ここに無い締切や期限不明の課題は、すぐ締切が来る可能性があるものとして扱い、gaps の確認先を学生に伝えてください。期限不明の課題は estimatedDue（早めの推定・根拠つき）に合わせて動き、「推定」と明記して確定した締切のように言わないでください。「締切はない」「余裕がある」とは言わないでください。',
   };
 }

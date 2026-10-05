@@ -269,7 +269,7 @@ export function buildEnvelope<T>(data: T, options: EnvelopeOptions = {}): McpEnv
     );
   } else {
     sentences.push(
-      '根拠となる情報源が見つかりませんでした。推測で補わず、情報が見つからないことを伝えてください。',
+      '根拠となる情報源が見つかりませんでした。推測を事実のように言わず、情報が見つからないことを伝えてください。',
     );
   }
   if (conflicts.length > 0)

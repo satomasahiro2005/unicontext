@@ -127,4 +127,4 @@ under 「時間が決まっている今日の予定」 together with the classes
 with no class, appointment or urgent matter: the single line `通知なし`. No greeting,
 encouragement, advice or emoji.
 
-Never invent a deadline or a time. If two sources disagree, show both values.
+Never state a guess as a deadline or a time. An unknown deadline is not left out: use its early estimate (`estimatedDue`), write 「推定」 with the basis and where to confirm, and treat it as due then. If two sources disagree, show both values.

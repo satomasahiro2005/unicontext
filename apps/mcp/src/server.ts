@@ -182,15 +182,32 @@ export const HOW_TO_CONFIRM =
  * must not read an empty list as "no deadline"); a complete one gets a one-line reminder.
  */
 export function coverageHint(data: unknown): string | undefined {
-  const cov = (data as { coverage?: DeadlineCoverage } | undefined)?.coverage;
+  const d = data as { coverage?: DeadlineCoverage; estimated?: unknown[] } | undefined;
+  const cov = d?.coverage;
   if (!cov) return undefined;
-  if (cov.complete) return '締切の一覧に無いことは、締切が無いことを意味しません。';
+  const estimated =
+    (d?.estimated?.length ?? 0) > 0 || cov.gaps.some((g) => g.kind === 'unknown_due')
+      ? ` ${ESTIMATE_HINT_JA}`
+      : '';
+  if (cov.complete) return `締切の一覧に無いことは、締切が無いことを意味しません。${estimated}`;
   const more = cov.gaps.length > 3 ? ` ほか${cov.gaps.length - 3}件（coverage.gaps）。` : '';
   return `締切の取得に欠けがあります: ${cov.gaps
     .slice(0, 3)
     .map((g) => g.detail)
-    .join(' ')}${more} 「締切はない」「余裕がある」とは言わないでください。`;
+    .join(' ')}${more} 「締切はない」「余裕がある」とは言わないでください。${estimated}`;
 }
+
+/**
+ * Unknown deadlines (the student: 「推測しなきゃわからない場合は？」「期限がわからない時にAIが楽観視
+ * するのも問題」): never blank, never a fact — the early estimate, labelled, with where to confirm.
+ */
+export const UNKNOWN_DEADLINE_POLICY_JA =
+  '締切が分からないときは空欄にせず、早めの推定（estimatedDue: 最も早くありうる日時・根拠つき・「推定」と明記）で予定を立てて知らせ、確認先を伝えてください。推定を確定した締切として登録・断定しないでください（add_deadline は誰かが言った日付だけ。大学のデータは上書きしない）。';
+export const UNKNOWN_DEADLINE_POLICY_EN =
+  'Unknown deadline: never leave it blank. Plan and alert against the early estimate (estimatedDue: the earliest plausible time with its basis, always labelled 推定 / estimated) and say where to confirm. Never state or register an estimate as a confirmed deadline (add_deadline takes stated dates only; university data is never overridden).';
+/** Answer hint when a result carries estimates. */
+export const ESTIMATE_HINT_JA =
+  '期限不明の課題は estimatedDue（早めの推定）で扱い、「推定」と根拠・確認先を添えて伝えてください。確定した締切のように言わないでください。';
 
 /** Lecture recordings are stored without being asked (local and remote write surfaces). */
 export const RECORDING_INSTRUCTION_JA =
@@ -202,13 +219,15 @@ export const SERVER_INSTRUCTIONS = [
   'UniContext は学生本人の大学情報（時間割・課題・お知らせ・講義録など）を、情報源つきで返します。',
   '回答するときは、各結果の citations / answerHint に従い「根拠: 学務情報システム 10/1 09:42取得」のように必ず出典を添えてください。',
   'conflicts が空でないときは、情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典をユーザーに伝えてください。',
-  '情報がない・見つからないときは推測で補わず、そう伝えてください。',
-  '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、分からない締切はすぐ来るかもしれないものとして扱い、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
+  '情報がない・見つからないときは推測を事実のように言わず、そう伝えてください。',
+  '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
+  UNKNOWN_DEADLINE_POLICY_JA,
   '書き込みは propose-only です。correct_fact は提案を作るだけで、ユーザー本人が確認するまで何も変更されません。課題の提出・履修登録や削除・成績に関わる操作はできません（提出済み status は提出システムからのみ反映されます）。',
   'ユーザーが会話の中で言った締切・試験の日程・やること・覚えておきたいこと（例「レポートの締切10/20って登録しといて」）や、ユーザーと一緒に決めた勉強のTODOは add_deadline / add_task / add_note で、UniContextに登録できます。登録した内容は他の会話・クライアントからも get_today・get_week・get_deadlines・get_tasks・get_notes で見えます（大学のシステムには送られず、「チャットで登録」「録音から」と表示され、大学側の値は上書きしません）。',
   RECORDING_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
-  'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
+  'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
+  UNKNOWN_DEADLINE_POLICY_EN,
   'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only. Deadlines, to-dos and notes the student mentions in any chat can be registered with add_deadline / add_task / add_note so every other session sees them; they never override a university system.',
   RECORDING_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
@@ -219,12 +238,14 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   'UniContextは学生本人の大学の予定・課題・お知らせ・講義録・シラバスを、情報源つきで返す読み取り専用のサーバーです。',
   '回答するときは、各結果のcitations・answerHintに従い「根拠: 学務情報システム 10/1 09:42取得」のように出典を添えてください。',
   'conflictsが空でないときは情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典を伝えてください。',
-  '情報がない・見つからないときは推測で補わず、そう伝えてください。',
-  '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、分からない締切はすぐ来るかもしれないものとして扱い、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
+  '情報がない・見つからないときは推測を事実のように言わず、そう伝えてください。',
+  '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
+  UNKNOWN_DEADLINE_POLICY_JA,
   'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Read-only: answers must cite sources and report conflicting sources instead of picking one.',
-  'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
+  'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
+  UNKNOWN_DEADLINE_POLICY_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
 
@@ -233,8 +254,9 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   'UniContextは学生本人の大学の予定・課題・お知らせ・講義録・シラバスを、情報源つきで返すサーバーです。',
   '回答するときは、各結果のcitations・answerHintに従い「根拠: 学務情報システム 10/1 09:42取得」のように出典を添えてください。',
   'conflictsが空でないときは情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典を伝えてください。',
-  '情報がない・見つからないときは推測で補わず、そう伝えてください。',
-  '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、分からない締切はすぐ来るかもしれないものとして扱い、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
+  '情報がない・見つからないときは推測を事実のように言わず、そう伝えてください。',
+  '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
+  UNKNOWN_DEADLINE_POLICY_JA,
   'どの会話でも、ユーザーが締切・試験の日程（例「レポートの締切10/20って登録しといて」「来週の金曜に小テスト」）、やること、覚えておきたいことを言ったら、add_deadline・add_task・add_note で登録してください。ユーザーと一緒に立てた勉強計画のTODOも add_task で登録できます。科目に関係ないものは course を省略します。',
   '登録した内容は、ChatGPTの他の会話やClaudeなど、UniContextにつながる全てのセッションから get_today・get_week・get_deadlines・get_tasks・get_course・get_notes で見えます。登録の前に get_deadlines などで既にあるか確かめると二重登録を避けられます（同じ科目・題名・近い締切は自動で1件にまとまります）。',
   'evidence にはユーザーの言葉をそのまま引用してください。締切は言われたままの表現（10月20日17時・来週の金曜など）でよく、解決した日時が返るのでユーザーに伝えてください。',
@@ -242,7 +264,8 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   '保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Register deadlines, to-dos and notes the student mentions or plans in any chat (add_deadline / add_task / add_note) so every other session and client sees them. Writes go to UniContext only (never to a university system) and cannot change authoritative data, task status or grades.',
-  'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
+  'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
+  UNKNOWN_DEADLINE_POLICY_EN,
   RECORDING_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
@@ -610,7 +633,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '締切一覧',
       description:
-        '期限切れと今後の締切を返す（days 日先まで、既定15日）。「今週の締切は？」「レポートはいつまで？」に使う。 / Overdue and upcoming deadlines. 締切の coverage（情報源・状態・欠け gaps）も返す: 欠けがあれば伝え、載っていないことを締切なしと扱わない。 / Includes deadline coverage (sources, health, gaps): an empty list is not "no deadline".',
+        '期限切れと今後の締切を返す（days 日先まで、既定15日）。「今週の締切は？」「レポートはいつまで？」に使う。締切が分からない課題は estimated に別に並ぶ（早めの推定 estimatedDue・根拠・範囲・確認先つき、推定の早い順）。推定は「推定」と明記して伝え、確定した締切として扱わない。 / Overdue and upcoming deadlines; work with an unknown deadline is listed apart in `estimated` with its early estimate (basis, range, where to confirm) — say 推定, never as the deadline. 締切の coverage（情報源・状態・欠け gaps）も返す: 欠けがあれば伝え、載っていないことを締切なしと扱わない。 / Includes deadline coverage (sources, health, gaps): an empty list is not "no deadline".',
     },
     {
       days: z

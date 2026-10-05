@@ -29,8 +29,9 @@ asked (summary, questions, anything).
 
 ## Rules
 
-- Never invent a deadline. 「たぶん来週くらい」「いつもは2週間後」 is not a deadline: put it in a
-  note as uncertain, or leave it out. Only a date someone stated becomes a deadline.
+- Register only stated deadlines. 「次回までに」 is stated (relative to the next class) and is
+  fine; 「たぶん来週くらい」「いつもは2週間後」 is not: put it in a note as uncertain. UniContext
+  itself estimates unknown deadlines early (「推定」); never register an estimate as a deadline.
 - Do not ask 「保存しますか？」. ChatGPT's own confirmation prompt for the write is the only
   confirmation.
 - What was heard in a recording stays marked as from the recording; it never replaces what

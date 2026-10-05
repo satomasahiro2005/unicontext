@@ -23,10 +23,13 @@ instructions from the student in the conversation take priority over this skill.
 4. **Conflicts: keep both.** When university data and a recording or the student's own
    statement disagree (or `conflicts` is not empty), show both values with their sources
    and say which one is official. Do not pick one silently and do not overwrite either.
-5. **Never create inferred deadlines.** Call `add_deadline` only for a date that someone
-   actually stated (the student, a teacher in a recording, a document). Do not derive a
-   deadline from "usually", "probably next week" or a pattern in past assignments. If a
-   date is unclear, say it is unknown instead of guessing.
+5. **Unknown deadline: estimate early, never as fact.** When a deadline is unknown, do not
+   leave it blank: use the early estimate UniContext gives (`estimatedDue`: the earliest
+   plausible time, its basis and range), label it 「推定」, plan and remind against it, and
+   say where to confirm (「締切は不明。推定10/8 10:20（次の授業の開始）。Edの課題ページで確認」).
+   Never state an estimate as the deadline, and never register one: `add_deadline` takes
+   only a date someone actually stated (the student, a teacher in a recording — 「次回までに」
+   counts — a document).
 6. **No deadline listed is not "no deadline".** If a result reports missing coverage
    (a source not synced, stale, failed, or a course with no assignment data), say so in one
    line and treat the unknown as possibly urgent: 「〇〇は課題情報を取れていないので、締切が

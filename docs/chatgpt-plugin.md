@@ -238,4 +238,5 @@ paragraph, so the rules hold even when no skill is loaded:
 > call the tools without asking 「確認しますか？」. For 「今日何する？」 call get_next_action /
 > get_student_state. Do not bring up UniContext in unrelated
 > chats; the scheduled tasks handle alerts. On a lecture transcript call ingest_lecture unasked. Cite
-> sources, show both values on conflicts, never infer deadlines, report coverage gaps.
+> sources, show both values on conflicts, report coverage gaps. Unknown deadline: plan with the
+> early estimate labelled 推定 (basis, where to confirm); never state or register it as a deadline.

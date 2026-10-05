@@ -48,9 +48,21 @@ describe('nextActions', () => {
     const ids = r.next.map((a) => a.kind);
     expect(ids.slice(0, 3)).toEqual(['check_deadline', 'prep', 'assignment']);
     const [unknown, prep, far] = r.next;
-    expect(unknown?.what).toBe('小レポート2: 課題ページを開いて締切と内容を確認する（5分）');
-    expect(unknown?.dueText).toBe('締切不明');
-    expect(unknown?.reasons).toContain('unknown_due');
+    expect(unknown?.what).toBe('小レポート2: EdStemの課題ページで締切と内容を確認する（5分）');
+    // Unknown, so estimated early from 小レポート1 (due 10/7 23:59, given in the 10/2 class).
+    expect(unknown?.dueText).toBe('締切不明（推定10/7 23:59）');
+    expect(unknown?.dueAt).toBeUndefined();
+    expect(unknown?.why).toContain('締切不明・推定10/7 23:59（あと2日）');
+    expect(unknown?.reasons).toEqual(expect.arrayContaining(['unknown_due', 'estimated_due']));
+    expect(unknown?.estimatedDue).toMatchObject({
+      label: '推定',
+      method: 'series',
+      confidence: 'medium',
+      at: '2026-10-07T14:59:00.000Z',
+      latest: '2026-10-14T14:59:00.000Z',
+      checkWhere: 'EdStemの課題ページ',
+    });
+    expect(unknown?.estimatedDue?.basis).toContain('小レポート1');
     expect(prep?.what).toBe('明日のネットワーク: 資料「第2回スライド」を開いて目を通す（15分）');
     expect(prep?.why).toBe('明日10:20の授業の準備');
     expect(prep?.link?.url).toBe('https://edstem.org/au/courses/2/resources/2');
@@ -67,7 +79,11 @@ describe('nextActions', () => {
     const titles = [r.top, ...r.next].map((a) => a?.title);
     expect(titles).not.toContain('小レポート1');
     expect(titles).not.toContain('古い課題');
-    expect(r.dueSoon.map((d) => d.title)).toEqual(['Lesson 3: SQL演習']);
+    expect(r.dueSoon.map((d) => d.title)).toEqual(['Lesson 3: SQL演習', '小レポート2']);
+    // The unknown one is there by its estimate, marked as such.
+    expect(r.dueSoon[0]?.estimated).toBeUndefined();
+    expect(r.dueSoon[1]).toMatchObject({ dueText: '推定10/7 23:59', unsubmitted: true });
+    expect(r.dueSoon[1]?.estimated?.label).toBe('推定');
   });
 
   it('is deterministic and embedded compactly in today / week', () => {
@@ -162,11 +178,17 @@ describe('student state, attention and briefing', () => {
     expect(s.today.classes.map((c) => c.course)).toEqual(['データベース']);
     expect(s.tomorrow.classes.map((c) => c.course)).toEqual(['ネットワーク']);
     expect(s.nextClass?.course).toBe('データベース');
+    // The unknown due date sorts by its estimate (10/7), not last.
     expect(s.assignments.map((a) => a.title)).toEqual([
       'Lesson 3: SQL演習',
-      '実験レポート: 回路設計',
       '小レポート2',
+      '実験レポート: 回路設計',
     ]);
+    expect(s.assignments[1]).toMatchObject({
+      dueAt: undefined,
+      dueText: '締切不明（推定10/7 23:59）',
+      estimatedDue: { label: '推定', at: '2026-10-07T14:59:00.000Z' },
+    });
     expect(s.assignments[0]).toMatchObject({ submission: 'not_submitted', effortMinutes: 60 });
     expect(s.suggestion.top?.title).toBe('Lesson 3: SQL演習');
   });
@@ -235,6 +257,58 @@ describe('student state, attention and briefing', () => {
     expect(b.text).toContain('今日の授業: 4限 データベース（データベース教室）');
     expect(b.text).toContain('まずこれ: Lesson 3: SQL演習: 課題を開いて問題を確認する（10分）');
     expect(b.text).toContain('72時間以内の未提出: Lesson 3: SQL演習（10/6 17:00）');
+    expect(b.text.length).toBeLessThanOrEqual(300);
+  });
+});
+
+describe('unknown deadlines: early estimates (推定)', () => {
+  it('ranks an item by its estimate: an estimate a few hours away comes first', () => {
+    clock.set('2026-10-07T12:00:00.000Z'); // Wed 21:00, 小レポート2 estimated 10/7 23:59
+    const r = uc.context.nextActions();
+    expect(r.top?.kind).toBe('check_deadline');
+    expect(r.top?.title).toBe('小レポート2');
+    expect(r.top?.why).toContain('締切不明・推定10/7 23:59（あと2時間）');
+    expect(r.urgent).toBe(true);
+  });
+
+  it('alerts on the estimate with 推定 wording and escalates like a deadline', () => {
+    clock.set('2026-10-07T01:00:00.000Z'); // Wed 10:00, 14 hours before the estimate
+    const first = attentionRequired(uc, 'watcher').items.filter((i) => i.kind === 'deadline');
+    expect(first.map((i) => i.severity)).toEqual(['warning']);
+    expect(first[0]?.line).toBe(
+      '【締切不明・推定】情報倫理「小レポート2」は締切が分かりません。推定10/7 23:59（あと14時間・これまでの例から）。EdStemの課題ページで確認',
+    );
+    expect(first[0]?.recommendedAction).toContain('推定10/7 23:59');
+    expect(first[0]?.nextEscalationAt).toBe('2026-10-07T08:59:00.000Z');
+
+    clock.set('2026-10-07T10:00:00.000Z'); // 19:00, 5 hours before
+    const second = attentionRequired(uc, 'watcher').items.filter((i) => i.kind === 'deadline');
+    expect(second.map((i) => i.severity)).toEqual(['critical']);
+    expect(second[0]?.line).toContain('【締切不明・推定間近】');
+  });
+
+  it('lists estimates apart from stated deadlines, in deadlines, coverage and tasks', () => {
+    const d = uc.context.deadline();
+    expect(d.upcoming.map((x) => x.title)).not.toContain('小レポート2');
+    expect(d.estimated.map((x) => x.title)).toEqual(['小レポート2']);
+    expect(d.estimated[0]?.summary).toMatch(
+      /^【推定】情報倫理: 小レポート2 締切不明・推定 10\/7 23:59〜10\/14 23:59（/,
+    );
+    expect(d.estimated[0]?.hoursLeft).toBeCloseTo(62.5, 1);
+    const gap = uc.context.deadlineCoverage().gaps.find((g) => g.kind === 'unknown_due');
+    expect(gap?.kind === 'unknown_due' && gap.items[0]?.estimatedDue?.at).toBe(
+      '2026-10-07T14:59:00.000Z',
+    );
+    expect(gap?.detail).toContain('最も早い推定は10/7 23:59');
+    expect(gap?.detail).toContain('推定は確定した締切ではありません');
+    const task = uc.context.today().tasks.find((t) => t.title === '小レポート2');
+    expect(task?.dueAt).toBeUndefined();
+    expect(task?.estimatedDue?.label).toBe('推定');
+  });
+
+  it('puts estimates due within 72 hours in the briefing, marked 推定', () => {
+    const b = briefing(uc, 'chatgpt-a', { dryRun: true });
+    expect(b.text).toContain('締切不明（早めの推定）: 小レポート2（推定10/7 23:59）');
     expect(b.text.length).toBeLessThanOrEqual(300);
   });
 });

@@ -22,6 +22,8 @@ import type {
   CourseFolderItem,
   DeadlineContext,
   DeadlineItem,
+  EstimatedDeadlineItem,
+  EstimatedDue,
   DiscussionItem,
   DownloadedFileResult,
   DownloadFilesReport,
@@ -82,6 +84,8 @@ export type {
   DeadlineContext,
   DiscussionItem,
   DeadlineItem,
+  EstimatedDeadlineItem,
+  EstimatedDue,
   GradeAttempt,
   GradeCourse,
   GradeLabelCount,
@@ -179,6 +183,8 @@ export interface AssignmentItem {
   createdBy: string;
   overdue: boolean;
   hoursLeft: number | undefined;
+  /** Due date unknown: the earliest plausible deadline (「推定」, basis, range, where to confirm). */
+  estimatedDue?: EstimatedDue | undefined;
   evidence: string | undefined;
   citations: Citation[];
 }

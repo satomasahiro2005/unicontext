@@ -22,6 +22,7 @@ import {
 } from '@unicontext/core';
 import type { UniContextDatabase } from '@unicontext/database';
 import type { CoverageGap, CoverageHealth, CoverageSource } from './coverage.js';
+import type { EstimatedDue } from './estimate.js';
 import {
   classifyWork,
   coverageGapText,
@@ -159,9 +160,15 @@ export interface BriefWork {
   /** 小レポート, レポート, 試験勉強 … */
   workLabel: string;
   dueAt: string | undefined;
+  /** 「10/6 17:00」; unknown: 「締切不明（推定10/8 10:20）」. */
   dueText: string;
   hoursLeft: number | undefined;
   overdue: boolean;
+  /**
+   * Unknown due date of work with a deadline: the earliest plausible one (「推定」, basis, range,
+   * where to confirm). Plan against it; never present it as the deadline.
+   */
+  estimatedDue?: EstimatedDue | undefined;
   status: Task['status'];
   /** From the submission system; undefined when it reports nothing. */
   submission: string | undefined;
@@ -213,7 +220,7 @@ export interface StudentStateContext {
     noClassesReason?: string | undefined;
     notAttending?: BriefNotAttending[] | undefined;
   };
-  /** Open assignments: undated, overdue up to 14 days, due within 45 days. */
+  /** Open assignments: undated (with estimatedDue), overdue up to 14 days, due within 45 days; by due date or estimate. */
   assignments: BriefWork[];
   /** Upcoming exams (preparation tasks) within 60 days. */
   exams: BriefWork[];
@@ -403,6 +410,7 @@ function workOf(uc: UniContext, host: NextActionHost, t: Task): BriefWork | unde
   const citations = host.citations(t);
   const recorded = host.recorded(t);
   const url = assignment?.url ?? citations.find((c) => c.url)?.url;
+  const estimatedDue = Number.isFinite(due) ? undefined : host.estimate(t);
   return {
     taskId: t.id,
     title: t.title,
@@ -410,9 +418,14 @@ function workOf(uc: UniContext, host: NextActionHost, t: Task): BriefWork | unde
     courseId: course?.id,
     workLabel: WORK_KIND_LABELS[kind],
     dueAt: t.dueAt,
-    dueText: Number.isFinite(due) ? formatShortJa(new Date(due), uc.timezone) : '締切不明',
+    dueText: Number.isFinite(due)
+      ? formatShortJa(new Date(due), uc.timezone)
+      : estimatedDue
+        ? `締切不明（推定${formatShortJa(new Date(estimatedDue.at), uc.timezone)}）`
+        : '締切不明',
     hoursLeft: Number.isFinite(due) ? Math.round(((due - nowMs) / HOUR) * 10) / 10 : undefined,
     overdue: Number.isFinite(due) && due < nowMs,
+    ...(estimatedDue ? { estimatedDue } : {}),
     status: t.status,
     submission: sub?.status,
     effortMinutes: DEFAULT_EFFORT_MINUTES[kind],
@@ -472,8 +485,14 @@ export function studentState(uc: UniContext): StudentStateContext {
       if (w) tasks.push(w);
     }
   }
-  const byDue = (a: BriefWork, b: BriefWork): number =>
-    (a.dueAt ? Date.parse(a.dueAt) : Infinity) - (b.dueAt ? Date.parse(b.dueAt) : Infinity);
+  // Unknown due dates sort by their estimate (earliest plausible), not last.
+  const dueOf = (w: BriefWork): number =>
+    w.dueAt
+      ? Date.parse(w.dueAt)
+      : w.estimatedDue
+        ? Date.parse(w.estimatedDue.at)
+        : Number.POSITIVE_INFINITY;
+  const byDue = (a: BriefWork, b: BriefWork): number => dueOf(a) - dueOf(b);
   assignments.sort(byDue);
 
   let notes: BriefNote[];
@@ -560,9 +579,33 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
   const next = uc.context.nextActions({ count: 0 });
   const out: Draft[] = [];
 
-  // Unsubmitted deadlines within 24 h / 6 h.
+  // Unsubmitted deadlines within 24 h / 6 h; unknown ones by their estimate (「推定」).
   for (const d of next.dueSoon) {
-    if (!d.unsubmitted || d.hoursLeft > 24) continue;
+    if (d.hoursLeft > 24) continue;
+    const est = d.estimated;
+    if (est) {
+      const passed = est.passed;
+      const critical = !passed && d.hoursLeft <= 6;
+      const estMs = Date.parse(est.at);
+      const name = d.course ? `${d.course}「${d.title}」` : `「${d.title}」`;
+      out.push({
+        subject: `task:${d.taskId}`,
+        key: `deadline-estimate:${d.taskId}:${est.at}`,
+        kind: 'deadline',
+        severity: critical ? 'critical' : 'warning',
+        line: passed
+          ? `【締切不明・推定を過ぎた可能性】${name}は締切が分かりません。推定${formatShortJa(new Date(estMs), tz)}をもう過ぎているかもしれません。${est.checkWhere}ですぐ確認`
+          : `【締切不明・推定${critical ? '間近' : ''}】${name}は締切が分かりません。推定${formatShortJa(new Date(estMs), tz)}（あと${leftText(d.hoursLeft)}・${est.confidence === 'medium' ? 'これまでの例から' : '早めに見積もり'}）。${est.checkWhere}で確認`,
+        course: d.course,
+        at: est.at,
+        link: d.link,
+        citations: d.citations.slice(0, 2),
+        nextEscalationAt: passed ? undefined : critical ? est.at : iso(estMs - 6 * HOUR),
+        recommendedAction: `${est.checkWhere}で「${d.title}」の締切を確かめる（推定${formatShortJa(new Date(estMs), tz)}・根拠: ${est.basis}）`,
+      });
+      continue;
+    }
+    if (!d.unsubmitted) continue;
     const critical = d.hoursLeft <= 6;
     const dueMs = Date.parse(d.dueAt);
     out.push({
@@ -922,6 +965,10 @@ export function briefing(
   const dueSoon = state.assignments.filter(
     (w) => w.hoursLeft !== undefined && w.hoursLeft >= 0 && w.hoursLeft <= 72,
   );
+  // Unknown due dates whose estimate (earliest plausible) is within 72 hours or already past.
+  const estimatedSoon = state.assignments
+    .concat(state.tasks)
+    .filter((w) => w.estimatedDue && Date.parse(w.estimatedDue.at) - now.getTime() <= 72 * HOUR);
   const top = state.suggestion.top;
   const lines: string[] = [];
   if (kind !== 'check') {
@@ -939,6 +986,15 @@ export function briefing(
           .map((w) => `${w.title}（${w.dueText}）`)
           .join('、')}${dueSoon.length > 3 ? ` ほか${dueSoon.length - 3}件` : ''}`,
       );
+    if (estimatedSoon.length)
+      lines.push(
+        `締切不明（早めの推定）: ${estimatedSoon
+          .slice(0, 3)
+          .map((w) => `${w.title}（${w.dueText.replace(/^締切不明（|）$/g, '')}）`)
+          .join(
+            '、',
+          )}${estimatedSoon.length > 3 ? ` ほか${estimatedSoon.length - 3}件` : ''}。提出先で確認`,
+      );
   }
   lines.push(...attention.items.map((a) => a.line));
   if (kind !== 'check' && !state.coverage.trusted)
@@ -950,6 +1006,7 @@ export function briefing(
       ? attention.nothingImportant
       : attention.nothingImportant &&
         dueSoon.length === 0 &&
+        estimatedSoon.length === 0 &&
         mustDo.length === 0 &&
         state.coverage.trusted &&
         day.classes.filter((c) => !c.selfStudy).length === 0;

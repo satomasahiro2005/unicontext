@@ -12,7 +12,7 @@
       "interface": {
         "displayName": "UniContext",
         "shortDescription": "Your university life, checked",
-        "longDescription": "UniContext connects ChatGPT to the student's own UniContext server (timetable, assignments and submission status, deadlines, announcements, class changes, syllabus and lecture recordings, each with its source). The plugin's skills make ChatGPT act for a student who never checks anything on their own: it looks things up without asking, puts urgent items (deadlines within 48 hours that are not submitted, cancelled classes, room changes) first, tells the student what to do next, and saves lecture transcripts. It cites the source of every fact, shows both values when sources disagree, never invents deadlines, and says when a source may be missing data. Writes go only to UniContext's own database; it cannot submit assignments or change registration or grades. Requires a running UniContext server with remote access (OAuth).",
+        "longDescription": "UniContext connects ChatGPT to the student's own UniContext server (timetable, assignments and submission status, deadlines, announcements, class changes, syllabus and lecture recordings, each with its source). The plugin's skills make ChatGPT act for a student who never checks anything on their own: it looks things up without asking, puts urgent items (deadlines within 48 hours that are not submitted, cancelled classes, room changes) first, tells the student what to do next, and saves lecture transcripts. It cites the source of every fact, shows both values when sources disagree, treats an unknown deadline by an early estimate labelled as estimated (with its basis and where to confirm) and never states or registers an estimate as a deadline, and says when a source may be missing data. Writes go only to UniContext's own database; it cannot submit assignments or change registration or grades. Requires a running UniContext server with remote access (OAuth).",
         "developerName": "nemut.ai",
         "category": "Productivity",
         "capabilities": ["Read", "Write"],
@@ -35,7 +35,7 @@
         "translations": {
           "ja-JP": {
             "subtitle": "大学生活を代わりに確認",
-            "description": "UniContext（時間割・課題と提出状況・締切・お知らせ・休講や教室変更・シラバス・講義の録音を、情報源つきでまとめる自分用のサーバー）に ChatGPT をつなぎます。自分からは何も確認しない学生を前提に、聞かれる前に調べ、48時間以内の未提出の締切・休講・教室変更を先に伝え、次にやることを示し、講義の文字起こしを保存します。必ず出典を示し、情報源が食い違うときは両方を示し、締切を推測で作らず、取り込めていない情報源があればそう伝えます。書き込みは UniContext のデータベースだけで、課題の提出や履修・成績の操作はできません。"
+            "description": "UniContext（時間割・課題と提出状況・締切・お知らせ・休講や教室変更・シラバス・講義の録音を、情報源つきでまとめる自分用のサーバー）に ChatGPT をつなぎます。自分からは何も確認しない学生を前提に、聞かれる前に調べ、48時間以内の未提出の締切・休講・教室変更を先に伝え、次にやることを示し、講義の文字起こしを保存します。必ず出典を示し、情報源が食い違うときは両方を示し、分からない締切は空欄にせず早めの推定（根拠つき・「推定」と明記）で扱って確認先を伝え（推定を確定した締切として登録・断定しない）、取り込めていない情報源があればそう伝えます。書き込みは UniContext のデータベースだけで、課題の提出や履修・成績の操作はできません。"
           }
         }
       }

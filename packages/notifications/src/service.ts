@@ -357,7 +357,7 @@ export class NotificationService {
     const drafts: Draft[] = [];
     const covered: string[] = [];
     for (const d of r.dueSoon) {
-      if (!d.unsubmitted) continue;
+      if (!d.unsubmitted && !d.estimated) continue;
       if (!this.inScope(d.courseId)) continue;
       covered.push(d.taskId);
       const hoursLeft = (Date.parse(d.dueAt) - nowMs) / HOUR_MS;
@@ -368,12 +368,19 @@ export class NotificationService {
         hoursLeft < 1
           ? `${Math.max(1, Math.round(hoursLeft * 60))}分`
           : `${Math.floor(hoursLeft)}時間`;
+      const name = d.course ? `${d.course}「${d.title}」` : `「${d.title}」`;
+      // An unknown deadline is notified against its estimate, always said as 推定.
+      const est = d.estimated;
       drafts.push({
         kind: 'deadline_escalation',
         priority: lead.hours <= 6 ? 'critical' : lead.hours <= 24 ? 'high' : 'normal',
-        title: `未提出・締切まであと約${left}: ${d.title}`,
+        title: est
+          ? `締切不明・推定まであと約${left}: ${d.title}`
+          : `未提出・締切まであと約${left}: ${d.title}`,
         body: safeText(
-          `${d.course ? `${d.course}「${d.title}」` : `「${d.title}」`}の締切は${formatShortJa(new Date(d.dueAt), tz)}です。${step ? `まずこれ: ${step}` : ''}`,
+          est
+            ? `${name}の締切は分かりません。推定${formatShortJa(new Date(d.dueAt), tz)}（${est.basis}）。${est.checkWhere}で確認してください。`
+            : `${name}の締切は${formatShortJa(new Date(d.dueAt), tz)}です。${step ? `まずこれ: ${step}` : ''}`,
           300,
         ),
         dedupeKey: `deadline_escalation:${d.taskId}:${d.dueAt}:${lead.label}`,

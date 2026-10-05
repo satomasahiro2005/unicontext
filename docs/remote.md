@@ -177,7 +177,10 @@ other ChatGPT chats, claude.ai and the local clients see the same deadlines and 
 
 - `add_deadline`: a report / assignment deadline, a quiz or exam date, or something to prepare for
   a class. Say for example 「レポートの締切10/20って登録しといて」 or 「来週の金曜に小テストがある」. The
-  course is optional (奨学金の手続き or 就活 deadlines have none).
+  course is optional (奨学金の手続き or 就活 deadlines have none). Only a stated date is registered
+  (「次回までに」 counts). When a deadline is unknown, UniContext gives an early estimate instead
+  (`estimatedDue`, labelled 「推定」 with its basis and where to confirm); clients plan with it but
+  never state or register it as the deadline.
 - `add_task`: something to do, with or without a due date — what you say you have to do, or the
   study plan you work out with ChatGPT (「毎日TOEICの単語を30分」).
 - `add_note`: a memo, about a course or personal (「覚えておいて: ESは12月に3社」).

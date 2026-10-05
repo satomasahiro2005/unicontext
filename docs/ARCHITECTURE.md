@@ -663,8 +663,8 @@ next, urgent, line, dueSoon, coverage: {trusted, gaps}, considered}` (view `next
   「小レポート1: 課題文を開いて設問を読む（10分）」), `why` (≤ 3 fragments: 締切まで27時間・未提出・配点10点),
   `dueAt`/`dueText`, `effort {stepMinutes, remainingMinutes, totalMinutes, basis}`, `steps`,
   `freeHoursBeforeDue`, `link {url, label}` (assignment URL, else the first citation URL;
-  redacted), `course`, `score`, `reasons`, citations. `urgent` = an unsubmitted assignment is due
-  within 48 h. `today()` / `week()` carry `next: NextActionSummary {line, urgent, top, then,
+  redacted), `course`, `score`, `reasons`, citations, and `estimatedDue` when the due date is
+  unknown (below). `urgent` = an unsubmitted assignment is due (or estimated due) within 48 h. `today()` / `week()` carry `next: NextActionSummary {line, urgent, top, then,
 coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and the views below.
 - Candidates: open tasks (`pending`/`in_progress`/`unknown`; submitted, completed, cancelled and
   `expired_past_term` never appear; an assignment whose latest Submission says
@@ -684,25 +684,32 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
 - Score (higher first; ties: earlier due, then id):
   - dated and ahead: `(1000 / (1 + h/6) + 300·min(remaining / usable, 2)) × kindFactor`
     (1; 小テスト対策 0.9; 今週分 and やること 0.8; 授業準備 0.6); `cannot_finish` when remaining ≥ usable;
-  - unknown due (assignment / exam): ranked as if due in 48 h (+20) with the step
-    「課題ページを開いて締切と内容を確認する（5分）」 — never pushed down for being unknown;
+  - unknown due (work with a deadline, `hasDeadline`: assignments, exams, notice / chat items
+    classified as 課題・レポート・小テスト…): ranked against its estimate (`estimatedDue.at`, the
+    earliest plausible time, below) with the same formula plus 20 — an estimate already past
+    counts as 3 h ahead with no effort pressure — kind `check_deadline`, the step
+    「<確認先>で締切と内容を確認する（5分）」, `dueText` 「締切不明（推定10/8 10:20）」, why
+    「締切不明・推定10/8 10:20（あと2日）」; estimates within 72 h join `dueSoon` with `estimated`
+    and dueText 「推定…」. Never pushed down for being unknown;
   - overdue assignment: 「遅れて提出できるか確認する（5分）」, 180 decaying over 10 days (40 after 7
     days); an `extra.lateDueAt|lateDue|cutoffAt|closesAt` still ahead becomes the deadline;
   - +50 unsubmitted assignment, +min(points, 50), +150 midterm/final in its last week (+50 before), +30 quiz, +250 for 今週分
     while its self-study slot is on;
   - attend 700 (≤ 20 min) / 500 (≤ 45 min); prep `1000/(1+h/6) × 0.6`;
-  - coverage gaps from `deadlineCoverage()` (coverage.ts; undated assignments are actions of their
-    own): a deadline source that needs login, fails or never synced 320, a stale one 230 —
+  - coverage gaps from `deadlineCoverage()` (coverage.ts; undated work is an action of its own;
+    its `unknown_due` gap lists the items with their estimates, earliest first): a deadline source that needs login, fails or never synced 320, a stale one 230 —
     「EdStemの課題一覧を開いて、締切が漏れていないか確認する（5分）」 with the platform origin as link;
     a course on a platform whose assignments are not synced 150 — 「EdStemで「…」の課題と締切を確認する（5分）」.
     `coverage.trusted` is false when such a gap exists.
 - `studentState(uc)` (MCP `get_student_state`): current / next class, today's and tomorrow's
-  classes (room, disagreeing rooms, 休講), open assignments (undated, overdue ≤ 14 d, due ≤ 45 d)
-  with effort, submission and link, exams ≤ 60 d, other tasks (≤ 20), changes, important notices,
+  classes (room, disagreeing rooms, 休講), open assignments (undated with `estimatedDue`, overdue
+  ≤ 14 d, due ≤ 45 d; sorted by due date or estimate) with effort, submission and link, exams ≤ 60 d, other tasks (≤ 20), changes, important notices,
   pacing, the student's notes (`additions.notes`, 10), conflicts, coverage and the ranked next
   actions as `suggestion` (the AI may re-rank).
 - `attentionRequired(uc, clientId, {dryRun?, scope?})` (MCP `get_attention_required`): alerts that
-  are true now — unsubmitted assignments due ≤ 24 h (warning) / ≤ 6 h (critical), a class within
+  are true now — unsubmitted assignments due ≤ 24 h (warning) / ≤ 6 h (critical), and work with an
+  unknown due date whose estimate is ≤ 24 h / ≤ 6 h away or already past (key
+  `deadline-estimate:<task>:<estimate>`, line 「【締切不明・推定】…推定10/8 10:20…で確認」), a class within
   60 min with its room (warning when sources disagree), 休講 today/tomorrow, room changes and
   high/critical notices in the change log since the client's last call (first call: 24 h back),
   pace behind, sources with an expired login or failing sync — each with a ready-to-send `line`.
@@ -719,7 +726,7 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
   on a group the student has not registered gives one `group_unknown` item per course.
 - `briefing(uc, clientId, {kind?, dryRun?})` (MCP `get_briefing`): thin wrapper over the two —
   morning (< 11:00) / evening (≥ 17:00) / check by local time; classes of the day, top action,
-  must-do, unsubmitted ≤ 72 h, news since the client's last briefing (its own `briefing` scope of
+  must-do, unsubmitted ≤ 72 h, unknown due dates estimated ≤ 72 h (「締切不明（早めの推定）: …」), news since the client's last briefing (its own `briefing` scope of
   the marks), coverage gaps, `text`, `nothingImportant`.
 - MCP `get_next_action {count?, course?}`, `get_student_state {}`, `get_attention_required
 {dryRun?}`, `get_briefing {kind?, dryRun?}` (apps/mcp `next-action.ts`) — all `readOnlyHint: true`
@@ -733,9 +740,51 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
   `morningDigestAt` ('HH:MM', once a day until noon, kind `next_action_digest`; `morningDigest()`
   builds the object without sending) and `escalationLeadTimes` (kind `deadline_escalation` for
   unsubmitted assignments per window, priority normal / high ≤ 24 h / critical ≤ 6 h, with the
-  first step; those assignments get no `deadline_approaching`). Both are off unless passed; the
+  first step; those assignments get no `deadline_approaching`; an estimated one is titled
+  「締切不明・推定まであと約…」 with the basis and where to confirm). Both are off unless passed; the
   daemon passes config `notifications.morningDigestAt` (default '08:00', '' = off) and
   `notifications.escalationLeadTimes` (default 72h / 24h / 6h).
+
+#### Estimated deadlines (`estimate.ts`)
+
+The student: 「推測しなきゃわからない場合は？」「期限がわからない時にAIが楽観視するのも問題」. Policy:
+never present a guess as a fact and never store one as a deadline (`add_deadline` still takes
+only a stated date — 「次回までに」 from a recording is stated; university data is never
+overridden), but never leave an unknown deadline blank either: it gets the **earliest plausible**
+time, labelled 「推定」 with its basis, a range and where to confirm, and plans and alerts run
+against it. Estimates are computed on read; nothing is stored.
+
+- `context.dueEstimator()` → `(task) => EstimatedDue | undefined` (one per request; meetings and
+  dated items cached). Undefined when the task has a due date or is not work with a deadline
+  (`hasDeadline`: the student's own `manual` to-dos and 今週分 are not estimated).
+  `EstimatedDue {label: '推定', at, earliest, latest?, method: series | relative_rule |
+next_class | default, basis, confidence: medium | low, text, checkWhere, checkUrl?, passed}`.
+- Appeared at: the earliest of `assignment.availableFrom` and the task's `createdAt`. Meetings:
+  the student's effective sessions of the course (personal schedule: groups; the academic
+  calendar: half-terms, holidays; cancelled ones and other groups' days left out), one per day.
+- Candidates (all must be at or after the appearance; the earliest wins, the latest is the range):
+  - (a) `series` (medium): items of the same course and series (same text before the first number,
+    or the same title with the number replaced: 小レポート1/2…, 第N回小テスト, Lesson N) with a
+    stated due date, from tasks of any status and assignments. Each sibling's offset = its due
+    minus the latest meeting before it (≤ 8 days back). Two or more numbered siblings: the
+    nearest sibling's due + the median interval per number × the number difference (interval
+    1–31 days). One: the meeting `n − k` meetings after the sibling's class + its offset. Also the
+    meeting before the item appeared (else the next) + the shortest offset.
+  - (b) `relative_rule` (medium) in the item's title / evidence / description / notes:
+    「次回(の授業)まで・次回の開始・次回に提出」 → the next meeting after it appeared; 「N週間以内 /
+    N日以内」 → appeared + N; 「今日中・本日中・当日中」 → 23:59 that day; 「今週中」 → Sunday 23:59.
+  - (c) `next_class` (low, only without (a)/(b)): the first meeting after it appeared; the range
+    ends at the meeting after that.
+  - (d) `default` (low): 7 days after it appeared, 23:59 (range 14 days).
+- `checkWhere`: 「<source>の課題ページ」 when there is a link, else the source's notice, else
+  「<course>の先生・LMS」.
+- Views: `DeadlineContext.estimated: EstimatedDeadlineItem[]` (MCP `get_deadlines`, CLI
+  `deadlines` section 「締切不明（推定・要確認）」) apart from stated deadlines, earliest estimate
+  first; `AssignmentItem.estimatedDue` (`get_assignments`, CLI `assignments`); `TaskItem
+.estimatedDue` in today / tomorrow; `BriefWork.estimatedDue` (student state, briefing);
+  `NextAction.estimatedDue`; coverage `unknown_due` items. MCP answer hints and server
+  instructions (local and remote) say: plan with the early estimate, say 「推定」 with the basis
+  and where to confirm, never state or register it as the deadline.
 
 #### Effective schedule and personal conditions (`personal-schedule.ts`, `group-schedule.ts`)
 

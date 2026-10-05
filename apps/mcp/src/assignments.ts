@@ -1,5 +1,11 @@
 import type { FactOrigin, Task, TaskStatus } from '@unicontext/canonical-model';
-import type { Citation, CourseRef, RecordedMarker, UniContext } from '@unicontext/context-engine';
+import type {
+  Citation,
+  CourseRef,
+  EstimatedDue,
+  RecordedMarker,
+  UniContext,
+} from '@unicontext/context-engine';
 import { toCitation, uniqueCitations } from '@unicontext/provenance';
 
 /** One task/assignment as shown to AI clients and the REST twin (apps/daemon `AssignmentItem`). */
@@ -14,6 +20,11 @@ export interface AssignmentItem {
   createdBy: string;
   overdue: boolean;
   hoursLeft: number | undefined;
+  /**
+   * Due date unknown (work with a deadline): the earliest plausible deadline, 「推定」 with its
+   * basis, range and where to confirm. Plan against it; never present it as the deadline.
+   */
+  estimatedDue?: EstimatedDue | undefined;
   evidence: string | undefined;
   citations: Citation[];
   /** Registered by an AI client (「チャットで登録」 / 「録音から」) and not confirmed by the owner. */
@@ -57,7 +68,7 @@ function taskCitations(uc: UniContext, t: Task): Citation[] {
   return uniqueCitations([...uc.context.citationsFor(entityIds), ...fromFacts]);
 }
 
-/** Tasks as AssignmentItems, due-date order (undated last). Shared with the daemon's REST twin. */
+/** Tasks as AssignmentItems, due-date order (undated last, with estimates). Shared with the daemon's REST twin. */
 export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}): AssignmentItem[] {
   const base =
     filter.statuses && filter.statuses.length > 0
@@ -68,6 +79,7 @@ export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}):
   const statuses =
     filter.includePast && !base.includes(PAST_TERM_STATUS) ? [...base, PAST_TERM_STATUS] : base;
   const now = uc.clock.now().getTime();
+  const estimate = uc.context.dueEstimator();
   return uc.tasks
     .list({
       statuses,
@@ -79,6 +91,8 @@ export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}):
         ? Math.round(((new Date(t.dueAt).getTime() - now) / 3_600_000) * 10) / 10
         : undefined;
       const recorded = uc.context.recordedMarker(t);
+      const estimatedDue =
+        t.dueAt || !OPEN_TASK_STATUSES.includes(t.status) ? undefined : estimate(t);
       return {
         taskId: t.id,
         title: t.title,
@@ -90,6 +104,7 @@ export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}):
         createdBy: t.createdBy,
         overdue: t.status !== PAST_TERM_STATUS && hoursLeft !== undefined && hoursLeft < 0,
         hoursLeft,
+        ...(estimatedDue ? { estimatedDue } : {}),
         evidence: t.evidence ?? recorded?.evidence,
         citations: taskCitations(uc, t),
         ...(recorded ? { recorded } : {}),
