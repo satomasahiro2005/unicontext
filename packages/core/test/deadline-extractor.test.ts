@@ -88,4 +88,17 @@ describe('Japanese deadline extraction (§20)', () => {
     const many = extractDeadlines('課題1は10月8日まで。課題2は金曜日中。', { reference });
     expect(many.map((m) => m.rule)).toEqual(['absolute_date', 'weekday']);
   });
+
+  it('labels before the date (Ed lesson text) and English am/pm suffixes', () => {
+    // The real Ed slide: 「提出期限: 10月6日 17:00PM」 — 17:00 in the university's time zone (JST),
+    // whatever the region of the server that stores the text.
+    const ed = one('提出期限: 10月6日 17:00PM', { reference: new Date('2026-09-24T03:21:00Z') });
+    expect(ed).toMatchObject({ dueAt: '2026-10-06T08:00:00.000Z', rule: 'labeled_date' });
+    expect(ed.timeAssumed).toBe(false);
+    expect(one('締切 10/9(金) 5:00 PM').dueAt).toBe('2026-10-09T08:00:00.000Z');
+    expect(one('Due: 10/9 12:30am').dueAt).toBe('2026-10-08T15:30:00.000Z');
+    expect(one('レポート提出期限は10月20日').dueAt).toBe('2026-10-20T14:59:00.000Z');
+    // the label and a trailing まで do not double count
+    expect(one('提出期限：10月20日まで').dueAt).toBe('2026-10-20T14:59:00.000Z');
+  });
 });

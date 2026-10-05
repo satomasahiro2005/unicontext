@@ -493,15 +493,12 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
       edSpec(),
       inMemoryFactory(() => createEdServer({ calls })),
     );
-    expect(adapter.mappedTools().sort()).toEqual(['get_thread', 'list_courses', 'list_threads']);
+    const readTools = ['get_lesson', 'get_thread', 'list_courses', 'list_lessons', 'list_threads'];
+    expect(adapter.mappedTools().sort()).toEqual(readTools);
     expect((await adapter.health()).state).toBe('healthy');
     const { items, pages } = await syncAll(adapter);
     // only read tools; the server's write tools are never touched
-    expect([...new Set(calls.map((c) => c.tool))].sort()).toEqual([
-      'get_thread',
-      'list_courses',
-      'list_threads',
-    ]);
+    expect([...new Set(calls.map((c) => c.tool))].sort()).toEqual(readTools);
     expect(calls.find((c) => c.tool === 'list_courses')?.args).toEqual({ includeArchived: false });
     expect(calls.find((c) => c.tool === 'list_threads')?.args).toEqual({
       courseId: 55,
@@ -518,6 +515,13 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
     const types = items.map((i) => `${i.sourceType}:${i.externalId}`).sort();
     expect(types).toEqual([
       'edstem.course:55',
+      'edstem.lesson:2001',
+      'edstem.lesson:2002',
+      'edstem.lesson:2003',
+      'edstem.lesson:2004',
+      // lesson text only for unfinished lessons that are work to hand in
+      'edstem.lesson_detail:2002',
+      'edstem.lesson_detail:2004',
       'edstem.thread:1001',
       'edstem.thread:1002',
       'edstem.thread:1003',
@@ -611,6 +615,66 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
       'Same question here.': 'discussion',
     });
     await adapter.dispose();
+  });
+
+  it('maps lessons to assignments with Ed or lesson-text due dates and progress', async () => {
+    const adapter = adapterFor(
+      edSpec(),
+      inMemoryFactory(() => createEdServer()),
+    );
+    const { items } = await syncAll(adapter);
+    await adapter.dispose();
+    const { entities, outputs } = await normalizeAll(edSpec(), items);
+    expect(outputs.flatMap(({ out }) => out.warnings ?? [])).toEqual([]);
+    const assignments = entities.filter((e) => e.kind === 'assignment') as unknown as {
+      id: string;
+      title: string;
+      dueAt?: string;
+      availableFrom?: string;
+      url: string;
+      courseOfferingId: string;
+    }[];
+    // lecture material is not an assignment; 期限不明 work is kept
+    expect(assignments.map((a) => a.title).sort()).toEqual([
+      'Quiz 2',
+      '当日課題 (小レポート1)',
+      '課題 (小レポート2)',
+    ]);
+    const course = entities.find((e) => e.kind === 'courseOffering');
+    const quiz = assignments.find((a) => a.title === 'Quiz 2');
+    // Ed's dueAt is an absolute timestamp (AU offset), kept as the same instant
+    expect(new Date(quiz?.dueAt ?? '').toISOString()).toBe('2026-10-14T12:59:00.000Z');
+    expect(new Date(quiz?.availableFrom ?? '').toISOString()).toBe('2026-10-06T22:00:00.000Z');
+    const report = assignments.find((a) => a.title === '当日課題 (小レポート1)');
+    expect(report).toMatchObject({
+      url: 'https://edstem.org/au/courses/55/lessons/2002',
+      courseOfferingId: course?.id,
+    });
+    expect(report?.dueAt).toBeUndefined();
+
+    // 「提出期限: 10月6日 17:00PM」 → 17:00 JST, an extracted fact with the sentence as evidence
+    const facts = outputs.flatMap(({ out }) => out.facts ?? []);
+    const due = facts.filter((f) => f.predicate === 'assignment_due');
+    expect(due).toHaveLength(1);
+    expect(due[0]).toMatchObject({
+      subject: report?.id,
+      value: '2026-10-06T08:00:00.000Z', // 17:00 JST
+      origin: 'extracted',
+      evidence: '提出期限: 10月6日 17:00PM',
+      ref: { authority: 'submission-system' },
+    });
+
+    // progress → submission state, Ed as the submission system
+    const subs = outputs.flatMap(({ out }) =>
+      out.entities.filter((e) => e.entity.kind === 'submission'),
+    );
+    expect(
+      subs.map((e) => [(e.entity as { status: string }).status, e.ref?.authority]).sort(),
+    ).toEqual([
+      ['not_submitted', 'submission-system'],
+      ['not_submitted', 'submission-system'],
+      ['submitted', 'submission-system'],
+    ]);
   });
 
   it('maps Ed sessions onto the profile terms and links into the account region', async () => {

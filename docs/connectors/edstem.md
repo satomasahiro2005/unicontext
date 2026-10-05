@@ -24,20 +24,22 @@ server reports its version in `unicontext sources` (column バージョン) so a
 
 ### What UniContext calls
 
-Only three tools, all `readOnlyHint: true` in the server (`src/mcp/server.ts`):
+Five tools, all `readOnlyHint: true` in the server (`src/mcp/server.ts`):
 
-| Tool           | Arguments                            | Returns (one JSON text block)                                                                                                                           |
-| -------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_courses` | `{includeArchived: false}`           | `[{id, code, name, year?, session?, status?, role?}]` from Ed's `/api/user` enrolments                                                                  |
-| `list_threads` | `{courseId, limit: 50, sort: "new"}` | `[{id, number, title, type, category, courseId, subcategory?, createdAt?, updatedAt?, metrics?, flags?}]`; no body, no author                           |
-| `get_thread`   | `{threadId}`                         | summary + `{userId, document, endorsement?, users: {"<id>": {id, name, courseRole?}}, answers?, comments?}`; replies nest under `comments` at any depth |
+| Tool           | Arguments                            | Returns (one JSON text block)                                                                                                                                            |
+| -------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list_courses` | `{includeArchived: false}`           | `[{id, code, name, year?, session?, status?, role?}]` from Ed's `/api/user` enrolments                                                                                   |
+| `list_threads` | `{courseId, limit: 50, sort: "new"}` | `[{id, number, title, type, category, courseId, subcategory?, createdAt?, updatedAt?, metrics?, flags?}]`; no body, no author                                            |
+| `get_thread`   | `{threadId}`                         | summary + `{userId, document, endorsement?, users: {"<id>": {id, name, courseRole?}}, answers?, comments?}`; replies nest under `comments` at any depth                  |
+| `list_lessons` | `{courseId}`                         | `[{id, courseId, moduleId, title, moduleName?, kind?, state?, status?, availableAt?, dueAt?}]`; `status` is the student's progress (unattempted / attempted / completed) |
+| `get_lesson`   | `{lessonId}`                         | summary + `{outline?, lockedAt?, createdAt?, slides: [{id, title?, type?, content? (Ed document XML)}]}`                                                                 |
 
 `get_thread` runs for announcements and for threads created or updated in the last 30 days (one
 call each, `minIntervalMs` apart). The server also exposes write tools (`create_thread`,
 `reply_thread`, `submit_slide`, `submit_slide_answer`, `mark_lessons_read`); the mapping never
 names them (adapter-mcp only calls tools the mapping names, §50) and the source config does not set
 `EDSTEM_ALLOW_POSTING`, so the two posting tools refuse even if something asked. The adapter test
-`EdStem through edstem-mcp` asserts that a full sync calls exactly the three read tools.
+`EdStem through edstem-mcp` asserts that a full sync calls exactly the five read tools.
 
 ## Install (once, outside the repo)
 
@@ -132,6 +134,27 @@ answers, and asks the running daemon to sync `edstem` at once.
 
 The token is checked lazily by the server: `login` succeeding only proves that the server starts.
 The first sync is what talks to Ed; a rejected token shows up there as `auth_required`.
+
+## Lessons and deadlines
+
+Ed lessons that are work to hand in (title with 課題 / レポート / 宿題 / 提出 / テスト / quiz /
+assignment / homework / report, or an Ed due date) become **assignments** whose submission system
+is Ed (authority `submission-system`): link `https://edstem.org/<region>/courses/<course>/lessons/<lesson>`.
+
+- Due date, in order: Ed's own `dueAt` (an absolute timestamp from the API; AU offsets such as
+  `+11:00` are kept as the same instant), else the deadline written in the lesson text, else the
+  lesson's `lockedAt` (hard close). Without any of them the assignment has no due date (期限不明)
+  and is kept, never dropped.
+- The Shizuoka DB course writes the deadline only into a slide: 「提出期限: 10月6日 17:00PM」. The
+  mapping fetches `get_lesson` for unfinished assignment lessons and `$extractDeadline` (the rule
+  based extractor of §20, now in `@unicontext/core`) turns the sentence into an `assignment_due`
+  fact, origin `extracted`, the sentence as evidence. Clock times in text are wall-clock times of
+  the university (JST), never of the AU server: `10月6日 17:00PM` = 2026-10-06 17:00 JST
+  (08:00Z). A redundant `PM` on a 24-hour time is ignored; `5:00 PM` is 17:00.
+- The lesson's progress is the submission state: `completed` → submitted, otherwise
+  not_submitted (authority `submission-system`, so the task engine treats it like a submission
+  system's status).
+- Lecture material lessons (「当日の講義資料」) are not assignments.
 
 ## Mapping summary
 

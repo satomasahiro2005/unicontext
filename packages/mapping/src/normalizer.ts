@@ -6,6 +6,7 @@ import {
 } from '@unicontext/canonical-model';
 import {
   contentHash,
+  extractDeadlines,
   parseExternalTermLabel,
   termForDate,
   termForExternalLabel,
@@ -56,6 +57,36 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 /** Term names a label can carry when there is no academic calendar to map it through. */
 const UNIVERSITY_TERM_WORD = /(前|後)学?期|通年|集中/;
 
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+/** Markup (Ed document XML, simple HTML) → text, one line per paragraph / break / list item. */
+function plainText(markup: unknown): string | undefined {
+  const parts = (Array.isArray(markup) ? markup : [markup])
+    .map((m) => toStringValue(m))
+    .filter((m): m is string => m !== undefined && m !== '');
+  if (parts.length === 0) return undefined;
+  const text = parts
+    .join('\n')
+    .replace(/<\/(?:paragraph|p|div|li|heading|h[1-6]|callout)>|<br\s*\/?>|<break\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&(#\d+|[a-z]+);/gi, (m, e: string) =>
+      e.startsWith('#')
+        ? String.fromCodePoint(Number(e.slice(1)))
+        : (ENTITIES[e.toLowerCase()] ?? m),
+    )
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return text || undefined;
+}
+
 /**
  * Functions the mapping expressions can call (bound per raw item):
  *  - `$profileTerm(label, year)` an external term label (Ed session "Semester 2", "S2", "Spring",
@@ -64,8 +95,13 @@ const UNIVERSITY_TERM_WORD = /(前|後)学?期|通年|集中/;
  *    fit the calendar. Without a calendar, a recognizable term label is kept as written.
  *  - `$profileTermAt(date)` → `{year, term}` of the profile term containing that date (local date
  *    in the source time zone), or undefined.
+ *  - `$plainText(markup)` → the text of Ed document XML / simple HTML (one line per paragraph).
+ *  - `$extractDeadline(text, reference)` → `{dueAt, phrase, evidence, confidence, timeAssumed}`: the
+ *    deadline stated in free text (「提出期限: 10月6日 17:00」, rule-based §20, no LLM). Wall-clock
+ *    times are read in the university's time zone; `reference` (when the text was written)
+ *    anchors the year and relative expressions. Undefined when the text states none.
  */
-function calendarFunctions(ctx: NormalizeContext): Bindings {
+function helperFunctions(ctx: NormalizeContext): Bindings {
   const cal = ctx.profile?.academicCalendar;
   const hasTerms = cal !== undefined && cal.terms.length > 0;
   return {
@@ -82,6 +118,42 @@ function calendarFunctions(ctx: NormalizeContext): Bindings {
       const local = toLocalDate(date, ctx.timezone);
       const t = local ? termForDate(cal, local) : undefined;
       return t ? { year: t.year, term: t.termCode ?? t.name } : undefined;
+    },
+    plainText: (markup: unknown): string | undefined => plainText(markup),
+    extractDeadline: (
+      text: unknown,
+      reference: unknown,
+    ):
+      | {
+          dueAt: string;
+          phrase: string;
+          evidence: string;
+          confidence: number;
+          timeAssumed: boolean;
+        }
+      | undefined => {
+      const body = toStringValue(text);
+      if (!body) return undefined;
+      const iso = toIsoDateTime(reference, ctx.timezone);
+      const found = extractDeadlines(body, {
+        reference: iso ? new Date(iso) : ctx.now,
+        timezone: ctx.timezone,
+      });
+      // A labelled date (「提出期限: …」) is the deadline; otherwise the most confident, first one.
+      const best = [...found].sort(
+        (a, b) =>
+          Number(b.rule === 'labeled_date') - Number(a.rule === 'labeled_date') ||
+          b.confidence - a.confidence,
+      )[0];
+      return best
+        ? {
+            dueAt: best.dueAt,
+            phrase: best.phrase,
+            evidence: best.evidence,
+            confidence: best.confidence,
+            timeAssumed: best.timeAssumed,
+          }
+        : undefined;
     },
   };
 }
@@ -106,7 +178,7 @@ class RuleRunner {
     private readonly payload: unknown,
     private readonly vars: MappingSpec['vars'] = {},
   ) {
-    this.functions = calendarFunctions(ctx);
+    this.functions = helperFunctions(ctx);
   }
 
   private warn(message: string): void {

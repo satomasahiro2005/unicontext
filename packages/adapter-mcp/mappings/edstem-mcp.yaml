@@ -15,6 +15,14 @@
 #                                         answers?: [Comment], comments?: [Comment]}
 #                                       Comment = {id, userId, document, createdAt?, endorsed?,
 #                                         anonymous?, byStaff?, comments?: [Comment]} (nested replies)
+#   list_lessons({courseId})         -> [{id, courseId, moduleId, title, moduleName?, type?, kind?,
+#                                         state?, status?, slideCount?, availableAt?, dueAt?}]
+#                                       status is the student's progress: "unattempted" |
+#                                       "attempted" | "completed"; dueAt / availableAt are absolute
+#                                       ISO timestamps from Ed's API (never local strings)
+#   get_lesson({lessonId})           -> the summary plus {outline?, lockedAt?, createdAt?,
+#                                         updatedAt?, slides?: [{id, index, title?, type?, status?,
+#                                         content? (Ed document XML)}]}
 # The server also offers write tools (create_thread, reply_thread, submit_slide, mark_lessons_read,
 # ...). They are never mapped here (§50); posting stays off unless EDSTEM_ALLOW_POSTING=1, which the
 # UniContext source config must not set.
@@ -36,6 +44,17 @@
 # `term`), never a wrong literal; the raw session is kept in extra.session. Ed's `year` is taken as
 # the academic year (a 後期 course running Oct 2025 – Feb 2026 is year 2025).
 #
+# Lessons as assignments: Ed lessons that are work to hand in (title says 課題 / レポート / 宿題 /
+# 提出 / テスト / quiz / assignment / homework / report, or Ed sets a due date) become assignments
+# with Ed as the submission system: Ed's own dueAt (absolute) is the due date, availableAt the
+# start. A lesson without any due date stays an assignment without one (期限不明), never dropped. Instructors at Shizuoka write the
+# deadline into the lesson text instead (「提出期限: 10月6日 17:00PM」): get_lesson is fetched for
+# unfinished assignment lessons and $extractDeadline turns that sentence into an assignment_due
+# fact (origin extracted, the sentence as evidence). Wall-clock times in the text are read in the
+# university's time zone (JST), not the AU server's. Without dueAt or such a sentence, the
+# lesson's lockedAt (the hard close, from get_lesson) is the due date. The lesson's progress status
+# is the submission state (completed → submitted, otherwise not_submitted).
+#
 # Authorities: discussion posts are `discussion`. Announcements and every post by course staff
 # (Ed course roles admin / staff / ta / tutor) are instructor statements, `instructor-announcement`
 # (§12). Student questions get isQuestion = true.
@@ -46,7 +65,7 @@ description: EdStem discussion boards via the edstem-mcp server (courses, thread
 version: '3'
 testedVersion: 0.7.2
 defaultAuthority: discussion
-capabilities: [courses, announcements, messages]
+capabilities: [courses, announcements, messages, assignments]
 vars:
   region: au
 
@@ -88,6 +107,36 @@ resources:
     updatedAt: 'updatedAt ? updatedAt : createdAt'
     optional: true
     capability: messages
+
+  # Lessons (Ed's lesson modules: slides, quizzes, 当日課題).
+  - name: lessons
+    forEach: { resource: courses, as: course }
+    call:
+      tool: list_lessons
+      args: { courseId: '{{course.id}}' }
+    select: '$'
+    sourceType: edstem.lesson
+    externalId: '$string(id)'
+    optional: true
+    capability: assignments
+
+  # Lesson text for unfinished assignment lessons (the deadline is often only written there).
+  - name: lesson_details
+    forEach:
+      resource: lessons
+      as: lesson
+      where: >-
+        $not(status = "completed") and
+        ($exists(dueAt) or
+        $contains(title, /課題|レポート|宿題|提出|テスト|クイズ|quiz|assignment|homework|report/i))
+    call:
+      tool: get_lesson
+      args: { lessonId: '{{lesson.id}}' }
+    select: '$'
+    sourceType: edstem.lesson_detail
+    externalId: '$string(id)'
+    optional: true
+    capability: assignments
 
 entities:
   edstem.course:
@@ -185,8 +234,74 @@ entities:
             or byStaff = true) ? "instructor-announcement" : "discussion"
         location: { messageId: '$string(id)' }
 
+  edstem.lesson:
+    - kind: assignment
+      when: >-
+        $exists(dueAt) or
+        $contains(title, /課題|レポート|宿題|提出|テスト|クイズ|quiz|assignment|homework|report/i)
+      key: '$string(id)'
+      fields:
+        title: title
+        dueAt: dueAt
+        availableFrom: availableAt
+        submissionType: { const: edstem-lesson }
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+        courseOfferingId: { ref: courseOffering, key: '$string(courseId)' }
+      extra: { module: moduleName, lessonStatus: status, state: state }
+      ref:
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+        authority: submission-system
+    - kind: submission
+      when: >-
+        $exists(status) and ($exists(dueAt) or
+        $contains(title, /課題|レポート|宿題|提出|テスト|クイズ|quiz|assignment|homework|report/i))
+      key: '"l" & $string(id)'
+      fields:
+        assignmentId: { ref: assignment, key: '$string(id)' }
+        status: 'status = "completed" ? "submitted" : "not_submitted"'
+      extra: { lessonStatus: status }
+      ref:
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+        authority: submission-system
+
+facts:
+  # 「提出期限: 10月6日 17:00PM」 in the lesson text, when Ed itself has no due date.
+  - sourceType: edstem.lesson_detail
+    when: >-
+      $not($exists(dueAt)) and
+      $contains(title, /課題|レポート|宿題|提出|テスト|クイズ|quiz|assignment|homework|report/i) and
+      $exists($extractDeadline($plainText($append(outline, slides.content)), availableAt ? availableAt : createdAt))
+    subject: { ref: assignment, key: '$string(id)' }
+    predicate: assignment_due
+    value:
+      expr: '$extractDeadline($plainText($append(outline, slides.content)), availableAt ? availableAt : createdAt).dueAt'
+      as: datetime
+    origin: extracted
+    confidence: 0.9
+    evidence: '$extractDeadline($plainText($append(outline, slides.content)), availableAt ? availableAt : createdAt).evidence'
+    observedAt: 'updatedAt ? updatedAt : createdAt'
+    ref:
+      url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+      authority: submission-system
+  # Ed's hard close (lockedAt: no submissions after it) is the due date when nothing else states one.
+  - sourceType: edstem.lesson_detail
+    when: >-
+      $not($exists(dueAt)) and $exists(lockedAt) and
+      $contains(title, /課題|レポート|宿題|提出|テスト|クイズ|quiz|assignment|homework|report/i) and
+      $not($exists($extractDeadline($plainText($append(outline, slides.content)), availableAt ? availableAt : createdAt)))
+    subject: { ref: assignment, key: '$string(id)' }
+    predicate: assignment_due
+    value: { expr: lockedAt, as: datetime }
+    evidence: '"Ed lesson locks at " & lockedAt'
+    ref:
+      url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+      authority: submission-system
+
 drift:
   edstem.course: { id: number, name: string, 'code?': 'string|null' }
   edstem.thread:
     { id: number, courseId: number, title: string, type: string, 'createdAt?': 'string|null' }
   edstem.thread_detail: { id: number, courseId: number, userId: number, document: string }
+  edstem.lesson:
+    { id: number, courseId: number, title: string, 'status?': string, 'dueAt?': string }
+  edstem.lesson_detail: { id: number, courseId: number, title: string }

@@ -226,6 +226,7 @@ function build(name: string, handlers: Record<string, Handler>, options: ServerO
           // edstem-mcp argument names
           courseId: anyId.optional(),
           threadId: z.number().optional(),
+          lessonId: z.number().optional(),
           includeArchived: z.boolean().optional(),
           limit: z.number().optional(),
           sort: z.string().optional(),
@@ -277,6 +278,78 @@ export function createCanvasServer(options: ServerOptions = {}): McpServer {
   );
 }
 
+/** Ed lessons, shaped like a Shizuoka course's real list_lessons / get_lesson results. */
+export const ED_LESSONS = [
+  {
+    id: 2001,
+    courseId: 55,
+    moduleId: 1,
+    title: '当日の講義資料',
+    moduleName: '第1回: ガイダンス・導入 (10/1)',
+    type: 'general',
+    kind: 'content',
+    state: 'active',
+    status: 'attempted',
+    slideCount: 3,
+  },
+  {
+    // the deadline is only in the slide text
+    id: 2002,
+    courseId: 55,
+    moduleId: 1,
+    title: '当日課題 (小レポート1)',
+    moduleName: '第1回: ガイダンス・導入 (10/1)',
+    type: 'general',
+    kind: 'content',
+    state: 'active',
+    status: 'unattempted',
+    slideCount: 1,
+  },
+  {
+    // Ed's own due date (absolute, AU offset)
+    id: 2003,
+    courseId: 55,
+    moduleId: 2,
+    title: 'Quiz 2',
+    state: 'active',
+    status: 'completed',
+    availableAt: '2026-10-07T09:00:00+11:00',
+    dueAt: '2026-10-14T23:59:00+11:00',
+  },
+  {
+    // work to hand in with no date anywhere: kept as 期限不明
+    id: 2004,
+    courseId: 55,
+    moduleId: 2,
+    title: '課題 (小レポート2)',
+    state: 'active',
+    status: 'unattempted',
+  },
+];
+
+export const ED_LESSON_DETAILS: Record<number, unknown> = {
+  2002: {
+    ...ED_LESSONS[1],
+    createdAt: '2026-09-24T13:21:00+10:00',
+    slides: [
+      {
+        id: 821141,
+        index: 1,
+        title: '課題 (小レポート1)',
+        type: 'quiz',
+        status: 'seen',
+        content:
+          '<document version="2.0"><paragraph>提出期限: 10月6日 17:00PM  </paragraph></document>',
+      },
+    ],
+  },
+  2004: {
+    ...ED_LESSONS[3],
+    createdAt: '2026-10-01T10:00:00+10:00',
+    slides: [{ id: 9, index: 1, type: 'document', content: '<document><paragraph>ER図を描く</paragraph></document>' }],
+  },
+};
+
 export function createEdServer(options: ServerOptions = {}): McpServer {
   const refuse: Handler = () => {
     throw new Error('write tool called');
@@ -302,6 +375,8 @@ export function createEdServer(options: ServerOptions = {}): McpServer {
           };
         return text(detail);
       },
+      list_lessons: (args) => text(ED_LESSONS.filter((l) => l.courseId === Number(args.courseId))),
+      get_lesson: (args) => text(ED_LESSON_DETAILS[Number(args.lessonId)] ?? {}),
       // write tools the real server also offers: the mapping must never call them
       create_thread: refuse,
       reply_thread: refuse,

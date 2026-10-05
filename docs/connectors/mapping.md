@@ -201,6 +201,11 @@ warning. Raw items never contain credentials; credentials only travel through `c
   (後期) through the academic calendar, and returns nothing for a label that is not a term (an Ed
   placeholder such as "X"). `$profileTermAt(date)` gives `{year, term}` of the term containing a
   date.
+- Text functions: `$plainText(markup)` (Ed document XML / simple HTML, or an array of them → text,
+  one line per paragraph) and `$extractDeadline(text, reference)` → `{dueAt, phrase, evidence,
+confidence, timeAssumed}` for a deadline stated in Japanese text (「提出期限: 10月6日 17:00」,
+  「金曜日まで」; rule based, §20). Clock times are read in the university's time zone; `reference`
+  (when the text was written) anchors the year. Store it as an `origin: extracted` fact.
 - `a != b` with a missing `a` is **false** in JSONata, not true: write `$not(a = b)`.
 - A path that matches one element returns the element, not a one-element array; use `select`
   with an array path or wrap with `[]` where it matters (`items[]`).
