@@ -20,6 +20,9 @@ import {
   getView,
   normalizePaceSlots,
   PACE_PREDICATE,
+  browseVpnFiles,
+  searchVpnFiles,
+  recentVpnFiles,
   type ContextViewName,
   type UniContext,
   type DeadlineCoverage,
@@ -874,6 +877,91 @@ export function createMcpServer(deps: McpDeps): McpServer {
           citations: uc.context.citationsFor([r.id]),
         },
       };
+    },
+  );
+
+  // ----- VPN file share (Ivanti portal): browse / search / recent from the local index -----
+
+  const vpnCitations = (ids: string[]): Citation[] =>
+    ids.length ? uc.context.citationsFor(ids) : [];
+
+  tool(
+    'browse_vpn_files',
+    {
+      title: 'VPNファイル共有をたどる',
+      description:
+        '静岡大学 情報学部の SSL-VPN ファイル共有を、UniContext のローカル索引から（ライブのポータルに触れずに）たどる。root を省略すると最上位（共有の一覧）、root と path を渡すとそのフォルダの直下のサブフォルダ（各フォルダの最後に一覧できた時刻つき）とファイル（document:… の id は download_course_file でダウンロードできる）を返す。path は共有ルートからの相対パス。 / Browse the VPN file share from the local index (never the live portal). Omit root for the top level; pass root and path for a folder’s subfolders (with each folder’s last-listed time) and files (document ids are downloadable via download_course_file).',
+    },
+    {
+      root: z.string().optional().describe('ルートのキー（例: fs-share）。省略時は最上位'),
+      path: z
+        .string()
+        .optional()
+        .describe('共有ルートからの相対パス（例: class/2026…）。省略時はルート直下'),
+      source: z.string().optional().describe('ソースID（複数のVPNソースがあるとき）'),
+      limit: z.number().int().positive().max(1000).optional().describe('最大件数（既定200）'),
+      offset: z.number().int().nonnegative().optional().describe('ページング用オフセット'),
+    },
+    (a) => {
+      const r = browseVpnFiles(
+        uc,
+        opt({ source: a.source, root: a.root, path: a.path, limit: a.limit, offset: a.offset }),
+      );
+      return { data: { ...r, citations: vpnCitations(r.files.map((f) => f.id)) } };
+    },
+  );
+
+  tool(
+    'search_vpn_files',
+    {
+      title: 'VPNファイル共有を検索',
+      description:
+        'VPNファイル共有の索引を、ファイル名・フォルダ名・パスの部分一致で検索する（ローカル索引・ライブに触れない）。year で年度、course で科目名（best-effortで対応づけた科目）で絞れる。各ファイルの id は download_course_file でダウンロード・本文取得できる。 / Search the VPN file-share index by file/folder name or path substring (local index). Optional year and course filters. File ids download via download_course_file.',
+    },
+    {
+      query: z.string().min(1).max(200).describe('名前・パスの一部'),
+      year: z.number().int().optional().describe('年度（例: 2026）'),
+      course: z.string().optional().describe('科目名の一部（best-effortで対応づけた科目で絞る）'),
+      root: z.string().optional(),
+      source: z.string().optional(),
+      limit: z.number().int().positive().max(200).optional().describe('最大件数（既定30）'),
+    },
+    (a) => {
+      const r = searchVpnFiles(
+        uc,
+        opt({ query: a.query, year: a.year, course: a.course, root: a.root, source: a.source, limit: a.limit }),
+      );
+      return { data: { ...r, citations: vpnCitations(r.files.map((f) => f.id)) } };
+    },
+  );
+
+  tool(
+    'list_recent_vpn_files',
+    {
+      title: 'VPNファイル共有の最近のファイル',
+      description:
+        'VPNファイル共有で最近追加・更新されたファイルを新しい順に返す（ローカル索引・ライブに触れない）。 / Recently added or updated files in the VPN file share, newest first (local index).',
+    },
+    {
+      since: z
+        .string()
+        .optional()
+        .describe('ISO-8601 日時または YYYY-MM-DD 以降 / ISO datetime or YYYY-MM-DD'),
+      root: z.string().optional(),
+      source: z.string().optional(),
+      limit: z.number().int().positive().max(200).optional().describe('最大件数（既定20）'),
+    },
+    (a) => {
+      const r = recentVpnFiles(
+        uc,
+        opt({
+          since: a.since === undefined ? undefined : normalizeSince(uc, a.since),
+          root: a.root,
+          source: a.source,
+          limit: a.limit,
+        }),
+      );
+      return { data: { ...r, citations: vpnCitations(r.files.map((f) => f.id)) } };
     },
   );
 

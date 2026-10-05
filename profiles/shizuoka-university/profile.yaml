@@ -154,6 +154,16 @@ sources:
   portal: { product: wordpress-portal, connector: wordpress-portal, schedule: 1h }
   files: { product: local-files, connector: local-files, schedule: event }
   lectures: { product: chatgpt-record, connector: chatgpt-record, schedule: event }
+  # 情報学部 SSL-VPN ポータル（Ivanti Connect Secure）の Windows ファイル共有（講義資料など）。
+  # 不安定で 60 分でセッションが切れるため、索引はローカルから探索し、同期は日次・夜間を避けて増分で回す
+  # (docs/connectors/shizuoka-vpn-files.md, docs/research/shizuoka-vpn-files.md)。既定で無効。
+  # config.yaml の sources.shizuoka-vpn-files を列挙し、`unicontext login shizuoka-vpn-files` で本人が
+  # 一度サインインすると有効になる。別ブラウザプロファイル（LCU/Teams とは非共有）。
+  vpn-files:
+    product: shizuoka-vpn-files
+    connector: shizuoka-vpn-files
+    enabled: false
+    schedule: 1d
   # EdStem is not in the university's guidance (research §6); individual courses may use it.
   # Disabled by default; enable it in config.yaml with an EdStem MCP server command.
   discussion:
@@ -193,6 +203,12 @@ products:
     sourceLabel: Teams
     # The LiveCampusU browser profile already holds the Microsoft sign-in (same Entra tenant).
     browserProfile: livecampusu
+  shizuoka-vpn-files:
+    deployment: shizuoka
+    sourceLabel: VPNファイル共有
+    # Portal: Ivanti Connect Secure, https://vpn.inf.shizuoka.ac.jp (realm path url_3). The "FS share"
+    # bookmark and its resource id live in the connector's deployment module (src/deployment.ts).
+    # Its own browser profile (NOT shared with LiveCampusU/Teams: different host and session).
   local-files:
     sourceLabel: ローカルファイル
   chatgpt-record:

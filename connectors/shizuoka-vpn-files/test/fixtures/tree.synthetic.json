@@ -1,0 +1,45 @@
+{
+  "_comment": "Synthetic FS share tree modelled on docs/research/shizuoka-vpn-files.md §1/§7. No real names, ids, timestamps of a real person. Mixed naming and uneven depth on purpose.",
+  "forbidden": ["report", "student", "submit"],
+  "listings": {
+    "": [
+      { "name": "class", "isFile": "no" },
+      { "name": "report", "isFile": "no" },
+      { "name": "student", "isFile": "no" },
+      { "name": "submit", "isFile": "no" },
+      { "name": ".DS_Store", "isFile": "yes", "size": "14.00 KB", "timestamp": "Mon Oct  5 09:13:03 2026" }
+    ],
+    "class": [
+      { "name": "2024コンピュータ入門（教員A）", "isFile": "no" },
+      { "name": "2025Webシステム設計演習", "isFile": "no" },
+      { "name": "2026年度データ処理演習", "isFile": "no" },
+      { "name": "共通", "isFile": "no" }
+    ],
+    "class/2024コンピュータ入門（教員A）": [
+      { "name": "ガイダンス.pdf", "isFile": "yes", "size": "320.00 KB", "timestamp": "Tue Apr  9 10:00:00 2024" },
+      { "name": "資料", "isFile": "no" }
+    ],
+    "class/2024コンピュータ入門（教員A）/資料": [
+      { "name": "第1回.pdf", "isFile": "yes", "size": "1.20 MB", "timestamp": "Wed Apr 10 09:00:00 2024" },
+      { "name": "第2回.pptx", "isFile": "yes", "size": "3.40 MB", "timestamp": "Wed Apr 17 09:00:00 2024" }
+    ],
+    "class/2025Webシステム設計演習": [
+      { "name": "01_イントロ", "isFile": "no" },
+      { "name": "課題", "isFile": "no" },
+      { "name": "シラバス.docx", "isFile": "yes", "size": "88.00 KB", "timestamp": "Thu Oct  3 12:00:00 2025" }
+    ],
+    "class/2025Webシステム設計演習/01_イントロ": [
+      { "name": "slides.pdf", "isFile": "yes", "size": "900.00 KB", "timestamp": "Fri Oct  4 13:00:00 2025" }
+    ],
+    "class/2025Webシステム設計演習/課題": [
+      { "name": "kadai1.md", "isFile": "yes", "size": "2.00 KB", "timestamp": "Fri Oct 11 18:00:00 2025" }
+    ],
+    "class/2026年度データ処理演習": [
+      { "name": "readme.txt", "isFile": "yes", "size": "1.00 KB", "timestamp": "Thu Oct  1 08:40:00 2026" },
+      { "name": "week01.pdf", "isFile": "yes", "size": "500.00 KB", "timestamp": "Thu Oct  1 08:45:00 2026" }
+    ],
+    "class/共通": [
+      { "name": "注意事項.pdf", "isFile": "yes", "size": "40.00 KB", "timestamp": "Mon Sep 28 09:00:00 2026" }
+    ]
+  }
+}

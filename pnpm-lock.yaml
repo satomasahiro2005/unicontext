@@ -144,6 +144,9 @@ importers:
       '@unicontext/microsoft365':
         specifier: workspace:*
         version: link:../../connectors/microsoft365
+      '@unicontext/shizuoka-vpn-files':
+        specifier: workspace:*
+        version: link:../../connectors/shizuoka-vpn-files
       '@unicontext/syllabus':
         specifier: workspace:*
         version: link:../../connectors/syllabus
@@ -328,6 +331,30 @@ importers:
       '@unicontext/core':
         specifier: workspace:*
         version: link:../../packages/core
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
+  connectors/shizuoka-vpn-files:
+    dependencies:
+      '@unicontext/adapter-browser':
+        specifier: workspace:*
+        version: link:../../packages/adapter-browser
+      '@unicontext/canonical-model':
+        specifier: workspace:*
+        version: link:../../packages/canonical-model
+      '@unicontext/connector-sdk':
+        specifier: workspace:*
+        version: link:../../packages/connector-sdk
+      '@unicontext/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@unicontext/identity':
+        specifier: workspace:*
+        version: link:../../packages/identity
+      '@unicontext/local-files':
+        specifier: workspace:*
+        version: link:../local-files
       zod:
         specifier: ^4.6.5
         version: 4.6.5
@@ -744,6 +771,9 @@ importers:
       '@unicontext/database':
         specifier: workspace:*
         version: link:../packages/database
+      '@unicontext/shizuoka-vpn-files':
+        specifier: workspace:*
+        version: link:../connectors/shizuoka-vpn-files
 
 packages:
 
