@@ -61,7 +61,7 @@ export function remoteRequestInfo(
   };
 }
 
-const CORS_PATHS = /^\/(\.well-known\/|register$|token$|revoke$|mcp$)/;
+const CORS_PATHS = /^\/(\.well-known\/|register$|token$|revoke$|mcp$|$)/;
 const CORS_HEADERS: Record<string, string> = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
@@ -147,6 +147,22 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
   const infoOf = (request: FastifyRequest): RemoteRequestInfo =>
     remoteRequestInfo(request.raw, cfg.trustedProxies);
 
+  // Every request (path and status only): AI apps report failures without saying which call failed.
+  app.addHook('onResponse', async (request, reply) => {
+    audit({
+      event: 'http',
+      method: request.method,
+      // file links carry a bearer secret in the path: log only its tag
+      path: (request.url.split('?')[0] ?? '').replace(
+        /^\/files\/([^/]+)/,
+        (_m, t: string) => `/files/${tokenTag(t)}`,
+      ),
+      status: reply.statusCode,
+      ua: String(request.headers['user-agent'] ?? '').slice(0, 80),
+      ip: infoOf(request).ip,
+    });
+  });
+
   app.addHook('onRequest', async (request, reply) => {
     const info = infoOf(request);
     const host = parseHostHeader(info.host);
@@ -215,7 +231,10 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     const path = brandDir + file;
     if (!existsSync(path)) continue;
     app.get(route, (_request, reply) =>
-      reply.type(type).header('cache-control', 'public, max-age=86400').send(createReadStream(path)),
+      reply
+        .type(type)
+        .header('cache-control', 'public, max-age=86400')
+        .send(createReadStream(path)),
     );
   }
   const icons = existsSync(brandDir + 'icon.svg')
@@ -380,105 +399,115 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
   app.post('/revoke', tokenRoute('revoke'));
 
   // ---- read-only MCP ----------------------------------------------------------------------
-  app.route({
-    method: ['GET', 'POST', 'DELETE'],
-    url: '/mcp',
-    handler: async (request, reply) => {
-      const info = infoOf(request);
-      const check = oauth.checkAccessToken(bearerToken(request.headers.authorization));
-      if (!check.ok) {
-        audit({
-          event: 'mcp_rejected',
-          method: request.method,
-          error: check.error,
-          description: check.description,
-          bearer: Boolean(request.headers.authorization),
-          ip: info.ip,
-        });
-        return reply
-          .code(check.error === 'insufficient_scope' ? 403 : 401)
-          .header(
-            'WWW-Authenticate',
-            oauth.wwwAuthenticate(
-              request.headers.authorization
-                ? { error: check.error, description: check.description }
-                : undefined,
-            ),
-          )
-          .send({ error: check.error, error_description: check.description });
-      }
-      if (!mcpLimiter.hit(check.grantId)) return tooMany(reply, mcpLimiter, check.grantId);
-      const rpc = (request.body as { method?: unknown } | undefined)?.method;
-      if (typeof rpc === 'string' && rpc !== 'tools/call')
-        audit({ event: 'mcp', method: rpc, clientId: check.clientId, scope: check.scope, ip: info.ip });
-      // hijack() bypasses Fastify's header handling: copy what the hooks set onto the raw response.
-      for (const [k, v] of Object.entries(reply.getHeaders()))
-        if (v !== undefined) reply.raw.setHeader(k, v as string);
-      reply.hijack();
-      try {
-        await handleMcpHttp(
-          {
-            uc: runtime.uc,
-            proposals: runtime.proposals,
-            logger: runtime.logger,
-            version: options.version,
-            ...(icons ? { icons } : {}),
-            surface: 'remote',
-            allowWrite: hasScope(check.scope, WRITE_SCOPE),
-            client: { id: check.clientId, name: check.clientName },
-            filesDir: runtime.filesDir,
-            fileLink: (documentId) => {
-              const f = localFile(runtime.uc, documentId, { filesDir: runtime.filesDir });
-              if (!f) return undefined;
-              const { token, expiresAt } = fileLinks.mint({
-                clientId: check.clientId,
-                documentId,
-                ...f,
-              });
-              audit({
-                event: 'file_link',
-                clientId: check.clientId,
-                clientName: check.clientName,
-                documentId,
-                link: tokenTag(token),
-                expiresAt,
-                ip: info.ip,
-              });
-              return { url: `${publicUrl.origin}/files/${token}`, expiresAt };
-            },
-            onToolCall: (e) =>
-              audit({
-                event: 'tool',
-                clientId: check.clientId,
-                clientName: check.clientName,
-                tool: e.tool,
-                ok: e.ok,
-                ms: e.ms,
-                ip: info.ip,
-                // Writes: what was stored (ids only, never the text).
-                ...(e.write
-                  ? {
-                      write: e.write.status,
-                      additionId: e.write.additionId,
-                      entityIds: e.write.entityIds.join(' ').slice(0, 4000),
-                      factIds: e.write.factIds.join(' ').slice(0, 2000),
-                    }
-                  : {}),
-              }),
-          },
-          request.raw,
-          reply.raw,
-          request.body,
-        );
-      } catch (e) {
-        log.error('remote mcp request failed', { error: errorMessage(e) });
-        if (!reply.raw.headersSent) {
-          reply.raw.writeHead(500, { 'content-type': 'application/json' });
-          reply.raw.end(JSON.stringify({ error: 'server_error' }));
+  // `/` too: AI apps are often given the bare https://host, and would otherwise get a 404 after
+  // a successful sign-in ("action discovery failed").
+  for (const url of ['/mcp', '/'])
+    app.route({
+      // GET / stays the plain-text pointer page below.
+      method: url === '/' ? ['POST', 'DELETE'] : ['GET', 'POST', 'DELETE'],
+      url,
+      handler: async (request, reply) => {
+        const info = infoOf(request);
+        const check = oauth.checkAccessToken(bearerToken(request.headers.authorization));
+        if (!check.ok) {
+          audit({
+            event: 'mcp_rejected',
+            method: request.method,
+            error: check.error,
+            description: check.description,
+            bearer: Boolean(request.headers.authorization),
+            ip: info.ip,
+          });
+          return reply
+            .code(check.error === 'insufficient_scope' ? 403 : 401)
+            .header(
+              'WWW-Authenticate',
+              oauth.wwwAuthenticate(
+                request.headers.authorization
+                  ? { error: check.error, description: check.description }
+                  : undefined,
+              ),
+            )
+            .send({ error: check.error, error_description: check.description });
         }
-      }
-    },
-  });
+        if (!mcpLimiter.hit(check.grantId)) return tooMany(reply, mcpLimiter, check.grantId);
+        const rpc = (request.body as { method?: unknown } | undefined)?.method;
+        if (typeof rpc === 'string' && rpc !== 'tools/call')
+          audit({
+            event: 'mcp',
+            method: rpc,
+            clientId: check.clientId,
+            scope: check.scope,
+            ip: info.ip,
+          });
+        // hijack() bypasses Fastify's header handling: copy what the hooks set onto the raw response.
+        for (const [k, v] of Object.entries(reply.getHeaders()))
+          if (v !== undefined) reply.raw.setHeader(k, v as string);
+        reply.hijack();
+        try {
+          await handleMcpHttp(
+            {
+              uc: runtime.uc,
+              proposals: runtime.proposals,
+              logger: runtime.logger,
+              version: options.version,
+              ...(icons ? { icons } : {}),
+              surface: 'remote',
+              allowWrite: hasScope(check.scope, WRITE_SCOPE),
+              client: { id: check.clientId, name: check.clientName },
+              filesDir: runtime.filesDir,
+              fileLink: (documentId) => {
+                const f = localFile(runtime.uc, documentId, { filesDir: runtime.filesDir });
+                if (!f) return undefined;
+                const { token, expiresAt } = fileLinks.mint({
+                  clientId: check.clientId,
+                  documentId,
+                  ...f,
+                });
+                audit({
+                  event: 'file_link',
+                  clientId: check.clientId,
+                  clientName: check.clientName,
+                  documentId,
+                  link: tokenTag(token),
+                  expiresAt,
+                  ip: info.ip,
+                });
+                return { url: `${publicUrl.origin}/files/${token}`, expiresAt };
+              },
+              onToolCall: (e) =>
+                audit({
+                  event: 'tool',
+                  clientId: check.clientId,
+                  clientName: check.clientName,
+                  tool: e.tool,
+                  ok: e.ok,
+                  ms: e.ms,
+                  ip: info.ip,
+                  // Writes: what was stored (ids only, never the text).
+                  ...(e.write
+                    ? {
+                        write: e.write.status,
+                        additionId: e.write.additionId,
+                        entityIds: e.write.entityIds.join(' ').slice(0, 4000),
+                        factIds: e.write.factIds.join(' ').slice(0, 2000),
+                      }
+                    : {}),
+                }),
+            },
+            request.raw,
+            reply.raw,
+            request.body,
+          );
+        } catch (e) {
+          log.error('remote mcp request failed', { error: errorMessage(e) });
+          if (!reply.raw.headersSent) {
+            reply.raw.writeHead(500, { 'content-type': 'application/json' });
+            reply.raw.end(JSON.stringify({ error: 'server_error' }));
+          }
+        }
+      },
+    });
 
   // ---- short-lived file links (download_course_file with link=true) ----------------------
   app.get<{ Params: { token: string } }>('/files/:token', async (request, reply) => {
