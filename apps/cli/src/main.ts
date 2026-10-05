@@ -13,6 +13,7 @@ import { registerLogin } from './commands/login.js';
 import { registerMcp } from './commands/mcp.js';
 import { registerPace } from './commands/pace.js';
 import { registerRemote } from './commands/remote.js';
+import { registerSecrets } from './commands/secrets.js';
 import { registerService } from './commands/service.js';
 import { registerStatus } from './commands/status.js';
 import { registerSync } from './commands/sync.js';
@@ -61,6 +62,7 @@ export function buildProgram(deps: CliDeps): Command {
   registerStatus(program, harness);
   registerSync(program, harness);
   registerLogin(program, harness);
+  registerSecrets(program, harness);
   registerViewCommands(program, harness);
   registerGrades(program, harness);
   registerCorrect(program, harness);

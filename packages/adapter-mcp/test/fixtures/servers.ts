@@ -72,80 +72,124 @@ export const CANVAS_SUBMISSIONS: Record<number, unknown[]> = {
   102: [{ id: 7002, assignment_id: 5002, workflow_state: 'unsubmitted', late: false }],
 };
 
-export const ED_COURSES = {
-  courses: [
-    {
-      course: { id: 55, code: 'CS101', name: 'Intro to CS', year: '2026', session: 'Fall' },
-      role: { role: 'student' },
-    },
-  ],
-};
+/*
+ * Synthetic Ed Discussion data shaped like the results of bunizao/edstem-cli's `edstem-mcp`
+ * (v0.7.2): list_courses → array of projected courses, list_threads → array of compact summaries
+ * (no body, no author), get_thread → summary + userId/document/users/answers/comments. All names,
+ * ids and texts are fake.
+ */
+const DAY = 24 * 60 * 60 * 1000;
+/** Ed timestamps carry the course's offset; the projection drops fractional seconds. */
+const daysAgo = (n: number): string =>
+  new Date(Date.now() - n * DAY).toISOString().replace(/\.\d+Z$/, '+00:00');
 
-export const ED_THREADS = {
-  threads: [
-    {
-      id: 1,
-      course_id: 55,
-      title: 'Midterm room',
-      document: 'The midterm will be in Room 11.',
-      type: 'announcement',
-      category: 'Announcements',
-      pinned: true,
-      created_at: '2026-10-01T09:00:00+09:00',
-      updated_at: '2026-10-01T09:00:00+09:00',
-      comment_count: 0,
-      answer_count: 0,
-      user: { name: 'Prof Smith', role: 'admin' },
-    },
-    {
-      id: 2,
-      course_id: 55,
-      title: 'How do I submit lab 1?',
-      document: 'Where do I submit lab 1?',
-      type: 'question',
-      category: 'Labs',
-      created_at: '2026-10-02T10:00:00+09:00',
-      comment_count: 1,
-      answer_count: 1,
-      user: { name: 'Student A', role: 'student' },
-    },
-    {
-      id: 3,
-      course_id: 55,
-      title: 'Study group',
-      content: '<document><paragraph>Anyone up for a study group?</paragraph></document>',
-      type: 'post',
-      category: 'General',
-      created_at: '2026-10-03T10:00:00+09:00',
-      comment_count: 0,
-      answer_count: 0,
-      user: { name: 'Student B', role: 'student' },
-    },
-  ],
-};
+export const ED_COURSES = [
+  {
+    id: 55,
+    code: 'CS101',
+    name: 'Intro to CS',
+    year: '2026',
+    session: 'Fall',
+    status: 'active',
+    role: 'student',
+  },
+];
 
-export const ED_THREAD_DETAIL = {
-  thread: {
-    id: 2,
-    course_id: 55,
+export const ED_THREADS = [
+  {
+    // announcement: always gets a detail call, however old
+    id: 1001,
+    number: 1,
+    title: 'Midterm room',
+    type: 'announcement',
+    category: 'Announcements',
+    courseId: 55,
+    createdAt: '2026-04-10T09:00:00+09:00',
+    updatedAt: '2026-04-10T09:00:00+09:00',
+    metrics: { viewCount: 80, replyCount: 1 },
+    flags: ['pinned'],
+  },
+  {
+    id: 1002,
+    number: 2,
     title: 'How do I submit lab 1?',
-    created_at: '2026-10-02T10:00:00+09:00',
+    type: 'question',
+    category: 'Labs',
+    subcategory: 'Lab 1',
+    courseId: 55,
+    createdAt: daysAgo(3),
+    updatedAt: daysAgo(2),
+    metrics: { viewCount: 12, replyCount: 3 },
+    flags: ['answered', 'endorsed'],
+  },
+  {
+    id: 1003,
+    number: 3,
+    title: 'Study group',
+    type: 'post',
+    category: 'General',
+    courseId: 55,
+    createdAt: daysAgo(1),
+    flags: ['unseen'],
+  },
+  {
+    // older than 30 days: listed as a thread, but no detail call
+    id: 1004,
+    number: 4,
+    title: 'Old thread',
+    type: 'post',
+    category: 'General',
+    courseId: 55,
+    createdAt: daysAgo(90),
+    updatedAt: daysAgo(80),
+  },
+];
+
+const USERS = {
+  '7': { id: 7, name: 'Prof Smith', courseRole: 'admin', role: 'user' },
+  '8': { id: 8, name: 'TA Jones', courseRole: 'tutor', role: 'user' },
+  '9': { id: 9, name: 'Student A', courseRole: 'student', role: 'user' },
+  '10': { id: 10, name: 'Student B', courseRole: 'student', role: 'user' },
+};
+
+export const ED_THREAD_DETAILS: Record<number, unknown> = {
+  1001: {
+    ...ED_THREADS[0],
+    userId: 7,
+    document: 'The midterm will be in Room 11.',
+    users: { '7': USERS['7'], '9': USERS['9'] },
+    comments: [
+      { id: 5001, userId: 9, document: 'Is it open book?', createdAt: '2026-04-10T10:00:00+09:00' },
+    ],
+  },
+  1002: {
+    ...ED_THREADS[1],
+    userId: 9,
+    document: 'Where do I submit lab 1?',
+    endorsement: { endorsedAnswerIds: [5101], staffReplyCount: 1, hasStaffAnswer: true },
+    users: { '8': USERS['8'], '9': USERS['9'], '10': USERS['10'] },
     answers: [
       {
-        id: 21,
+        id: 5101,
+        userId: 8,
         document: 'Upload it on Canvas before Friday.',
-        created_at: '2026-10-02T11:00:00+09:00',
-        user: { name: 'TA Jones', role: 'staff' },
+        createdAt: daysAgo(2),
+        endorsed: true,
+        byStaff: true,
+        comments: [
+          { id: 5102, userId: 9, document: 'Thanks!', createdAt: daysAgo(2) },
+        ],
       },
     ],
     comments: [
-      {
-        id: 22,
-        document: 'Thanks!',
-        created_at: '2026-10-02T12:00:00+09:00',
-        user: { name: 'Student A', role: 'student' },
-      },
+      { id: 5103, userId: 10, document: 'Same question here.', createdAt: daysAgo(2) },
     ],
+  },
+  1003: {
+    ...ED_THREADS[2],
+    userId: 10,
+    document: 'Anyone up for a study group?',
+    users: { '10': USERS['10'] },
   },
 };
 
@@ -161,6 +205,8 @@ export interface ServerOptions {
   /** Tools that return an MCP error result. */
   failing?: string[];
   calls?: { tool: string; args: unknown }[];
+  /** Every tool answers like edstem-mcp does for a rejected Ed token. */
+  authFailing?: boolean;
 }
 
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -177,10 +223,31 @@ function build(name: string, handlers: Record<string, Handler>, options: ServerO
           course_id: anyId.optional(),
           thread_id: anyId.optional(),
           cursor: z.string().optional(),
+          // edstem-mcp argument names
+          courseId: anyId.optional(),
+          threadId: z.number().optional(),
+          includeArchived: z.boolean().optional(),
+          limit: z.number().optional(),
+          sort: z.string().optional(),
         },
       },
       (args: Record<string, unknown>) => {
         options.calls?.push({ tool, args });
+        if (options.authFailing)
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  error: {
+                    message: 'Authentication failed (HTTP 400). Check your Ed API token.',
+                    type: 'EDSTEM_REAUTH_REQUIRED',
+                  },
+                }),
+              },
+            ],
+            isError: true,
+          };
         if (options.failing?.includes(tool))
           return {
             content: [{ type: 'text' as const, text: 'upstream exploded with token=abc123' }],
@@ -211,21 +278,34 @@ export function createCanvasServer(options: ServerOptions = {}): McpServer {
 }
 
 export function createEdServer(options: ServerOptions = {}): McpServer {
+  const refuse: Handler = () => {
+    throw new Error('write tool called');
+  };
   return build(
     'fake-edstem',
     {
-      // structuredContent preferred over text
-      list_courses: () => ({
-        structuredContent: ED_COURSES,
-        content: [{ type: 'text', text: 'ignored text' }],
-      }),
-      list_threads: () => text(ED_THREADS),
-      get_thread: (args) =>
-        text(
-          Number(args.thread_id) === 2
-            ? ED_THREAD_DETAIL
-            : { thread: { id: Number(args.thread_id), course_id: 55 } },
-        ),
+      list_courses: () => text(ED_COURSES),
+      list_threads: (args) => text(ED_THREADS.filter((t) => t.courseId === Number(args.courseId))),
+      get_thread: (args) => {
+        const detail = ED_THREAD_DETAILS[Number(args.threadId)];
+        if (!detail)
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  error: { message: 'Ed API error (HTTP 404)', type: 'EDSTEM_API_ERROR' },
+                }),
+              },
+            ],
+            isError: true,
+          };
+        return text(detail);
+      },
+      // write tools the real server also offers: the mapping must never call them
+      create_thread: refuse,
+      reply_thread: refuse,
+      mark_lessons_read: refuse,
     },
     options,
   );

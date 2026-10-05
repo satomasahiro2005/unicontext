@@ -16,10 +16,15 @@ not ours). Default schedule `15m`, product and capabilities come from the mappin
    `canvas-mcp.yaml`, `edstem-mcp.yaml`. Community servers differ in tool names and result
    shapes. Each YAML documents its assumptions at the top: adapt `call.tool`, `call.args` and
    `select` to the real catalog (see **Discovery**).
-3. Store credentials in the SecretStore under `<sourceId>/<secretName>` (`secretKey('canvas',
-'canvas-token')` = `canvas/canvas-token`; the keychain, never config.yaml). Config only names
-   the secret.
-4. Add the source and run `unicontext sync canvas`.
+3. Add the source to config.yaml. Config only names the secret (`envSecrets` / `headerSecrets`).
+4. Enter the credential: `unicontext login canvas` asks for every named secret the keychain does
+   not hold yet (no echo) and stores it under `<sourceId>/<secretName>` (`canvas/canvas-token`),
+   then connects and lets a running daemon sync. `unicontext secrets set canvas [name]` replaces a
+   stored value (`--from-env VAR` for scripts), `unicontext secrets list` shows what is stored
+   (never the values). Secrets never go into config.yaml.
+5. `unicontext sync canvas`.
+
+A worked example with a real community server: [edstem.md](edstem.md).
 
 ```yaml
 # config.yaml
@@ -47,16 +52,16 @@ sources:
 
 ## Config keys
 
-| Key                            | Meaning                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`, `args`, `cwd`       | stdio transport. The command is spawned **without a shell**; the child gets a minimal environment (`PATH`, `HOME`, ... but nothing else from the host) plus `env` and `envSecrets`.                                                                                                                                                           |
-| `url`                          | Streamable HTTP transport. Exactly one of `command` / `url`.                                                                                                                                                                                                                                                                                  |
-| `env`                          | List of variable names to inherit, or `{NAME: literal}` for non-secret values. Names that look like credentials are rejected here.                                                                                                                                                                                                            |
-| `envSecrets` / `headerSecrets` | `{ENV_NAME: secretName}` or a list of `{name, secret, prefix?}`. Values are read from `ctx.secrets` when the process is spawned / the connection is opened, never stored in config, raw payloads or logs. Use the **list form** for names ending in `TOKEN`/`SECRET`/`KEY`: `config.yaml` loading rejects such record keys as inline secrets. |
-| `headers`                      | Literal non-secret headers (credential headers are rejected: use `headerSecrets`).                                                                                                                                                                                                                                                            |
-| `mapping`                      | Shipped mapping name, file path (relative to the working directory), inline YAML text or an inline object.                                                                                                                                                                                                                                    |
-| `timeoutMs`                    | Connect timeout and per-call timeout (default 60000).                                                                                                                                                                                                                                                                                         |
-| `minIntervalMs`                | Minimum pause between tool calls (default 0).                                                                                                                                                                                                                                                                                                 |
+| Key                            | Meaning                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`, `args`, `cwd`       | stdio transport. The command is spawned **without a shell**; the child gets a minimal environment (`PATH`, `HOME`, ... but nothing else from the host) plus `env` and `envSecrets`.                                                                                                                                                                                                             |
+| `url`                          | Streamable HTTP transport. Exactly one of `command` / `url`.                                                                                                                                                                                                                                                                                                                                    |
+| `env`                          | List of variable names to inherit, or `{NAME: literal}` for non-secret values. Names that look like credentials are rejected here.                                                                                                                                                                                                                                                              |
+| `envSecrets` / `headerSecrets` | `{ENV_NAME: secretName}` or a list of `{name, secret, prefix?}`. Values are read from `ctx.secrets` when the process is spawned / the connection is opened, never stored in config, raw payloads or logs. Both forms are accepted in `config.yaml` as long as each secret name is a short identifier (`ed-token`); a value that looks like a pasted credential is rejected as an inline secret. |
+| `headers`                      | Literal non-secret headers (credential headers are rejected: use `headerSecrets`).                                                                                                                                                                                                                                                                                                              |
+| `mapping`                      | Shipped mapping name, file path (relative to the working directory), inline YAML text or an inline object.                                                                                                                                                                                                                                                                                      |
+| `timeoutMs`                    | Connect timeout and per-call timeout (default 60000).                                                                                                                                                                                                                                                                                                                                           |
+| `minIntervalMs`                | Minimum pause between tool calls (default 0).                                                                                                                                                                                                                                                                                                                                                   |
 
 Resource `call` block: `{tool, args?, paginate?}`. `args` is templated (`{{course.id}}`).
 `paginate: {cursorArg: cursor, nextCursor: "meta.next"}` repeats the call with the cursor taken
@@ -65,7 +70,12 @@ from the result (JSONata) until it is empty.
 ## Auth
 
 Credentials only via `ctx.secrets`. Missing secrets give `auth_required` (`authenticate()`,
-`health()`, sync). An HTTP 401/403 or SDK `UnauthorizedError` while connecting is also
+`health()`, sync). A tool result with `isError` whose text says the credentials were rejected
+(`AUTH_ERROR_PATTERN`: `*_REAUTH_REQUIRED`, `UNAUTHORIZED`, "authentication failed", "invalid
+token", `HTTP 401`) is `auth_required` too, so a wrong or expired token points at
+`unicontext login <source>`. Note that `authenticate()` / `health()` only start the server and
+list its tools: a server that checks the token lazily (edstem-mcp) reports a bad token on the
+first sync, not at login. An HTTP 401/403 or SDK `UnauthorizedError` while connecting is also
 `auth_required`. The OAuth flow of the SDK is not wired in: for HTTP servers use `headerSecrets`
 with a token. `authenticate()` returns `authenticated` when secrets are configured and the server
 connects, otherwise `not_required`; a server that cannot start is `failed`.
@@ -108,14 +118,14 @@ announcements, submissions):
 | `canvas.submission`   | `list_submissions` per course   | `submission` (status graded / late / submitted / not_submitted; fact `submission_status`)              | `submission-system`       |
 
 `edstem-mcp.yaml` (product `edstem`, default authority `discussion`; capabilities courses,
-announcements, messages):
+announcements, messages) targets the `edstem-mcp` stdio server of
+[bunizao/edstem-cli](https://github.com/bunizao/edstem-cli) v0.7.2 (setup: [edstem.md](edstem.md)):
 
-| Raw type                              | Tool                                        | → Canonical                                                                                         | Authority                                                           |
-| ------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `edstem.course`                       | `list_courses`                              | `courseOffering`                                                                                    | `discussion`                                                        |
-| `edstem.thread` (type `announcement`) | `list_threads` per course                   | `announcement` (importance `high` when pinned)                                                      | `instructor-announcement`                                           |
-| `edstem.thread` (other types)         | same                                        | `thread` + the opening post as `message` (`isQuestion` for `question`; authorRole from the Ed role) | `discussion`; `instructor-announcement` when written by admin/staff |
-| `edstem.thread_detail`                | `get_thread`, only for threads with replies | `message` per answer and per comment                                                                | staff/admin: `instructor-announcement`, others `discussion`         |
+| Raw type               | Tool                                                                    | → Canonical                                                                                                                                                                                                                  | Authority                                                                                            |
+| ---------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `edstem.course`        | `list_courses {includeArchived: false}`                                 | `courseOffering` (title, courseCode, academicYear, term = session, url)                                                                                                                                                      | `discussion`                                                                                         |
+| `edstem.thread`        | `list_threads {courseId, limit: 50, sort: new}` per course              | `thread` (not for announcements; summaries carry no body or author)                                                                                                                                                          | `discussion`                                                                                         |
+| `edstem.thread_detail` | `get_thread {threadId}` for announcements and threads active in 30 days | `announcement` (type `announcement`, importance `high` when pinned) or the opening post as `message` (`isQuestion` for `question`); every answer, comment and nested reply as `message` (authorRole from the Ed course role) | announcements and staff posts (admin/staff/ta/tutor): `instructor-announcement`; others `discussion` |
 
 ## Schedule
 
@@ -127,7 +137,8 @@ calls per page by default).
 
 - Tool names and result shapes of community servers vary: the shipped mappings are templates.
 - No push / change notifications; no incremental cursor (full relist each run).
-- No rate limiter beyond `minIntervalMs`; EdStem details cost one call per thread with replies.
+- No rate limiter beyond `minIntervalMs`; EdStem details cost one call per announcement or thread
+  active in the last 30 days.
 - The SDK OAuth flow and server-initiated requests (sampling, elicitation) are not supported.
 - Only tools are used (no resources/prompts). Tools are called with the arguments the mapping
   gives; write-capable tools must simply not be mapped (§50).

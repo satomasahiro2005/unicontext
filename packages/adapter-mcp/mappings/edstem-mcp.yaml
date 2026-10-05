@@ -1,63 +1,79 @@
-# EdStem Discussion through an external MCP server (UniContext adapter-mcp, spec §28).
+# EdStem (Ed Discussion) through the community `edstem-mcp` stdio server of bunizao/edstem-cli
+# (MIT, https://github.com/bunizao/edstem-cli; UniContext adapter-mcp, spec §28). Tested against
+# v0.7.2 (commit 50570fb8577577d9f73dd556f05dfbbf0e906ecd). There is no official EdStem MCP server.
 #
-# ASSUMPTIONS ABOUT THE SERVER (there is no official EdStem MCP server; tool names differ):
-#   list_courses()                -> {"courses": [{"course": {id, code, name, year, session}, "role": {...}}]}
-#   list_threads({course_id})     -> {"threads": [{id, course_id, title, document, content, type,
-#                                    category, pinned, created_at, updated_at, comment_count,
-#                                    answer_count, user: {name, role}}]}
-#                                    type is "post" | "question" | "announcement"
-#   get_thread({thread_id})       -> {"thread": {id, course_id, answers: [...], comments: [...]}}
-#                                    answers/comments carry id, content/document, created_at,
-#                                    user: {name, role} with role "admin" | "staff" | "student"
-# Adapt `call.tool`, `call.args` and `select` to the output of `adapter.discover()`: a server that
-# returns bare arrays needs `select: '$'`; one that nests differently needs another path. The
-# paths inside `entities` follow the EdStem REST API field names; change them if the server
-# renames fields.
+# Read tools this mapping calls (all annotated readOnlyHint: true by the server). Results come back
+# as one JSON text block:
+#   list_courses({includeArchived})  -> [{id, code, name, year?, session?, status?, role?}]
+#   list_threads({courseId, limit, sort})
+#                                    -> [{id, number, title, type, category, courseId, subcategory?,
+#                                         createdAt?, updatedAt?, metrics?: {replyCount?, ...},
+#                                         flags?: ["pinned", "private", "answered", "unseen", ...]}]
+#                                       type is "post" | "question" | "announcement"; no body, no author
+#   get_thread({threadId})           -> the summary fields plus {userId, document, endorsement?,
+#                                         users?: {"<userId>": {id, name, courseRole?, role?}},
+#                                         answers?: [Comment], comments?: [Comment]}
+#                                       Comment = {id, userId, document, createdAt?, endorsed?,
+#                                         anonymous?, byStaff?, comments?: [Comment]} (nested replies)
+# The server also offers write tools (create_thread, reply_thread, submit_slide, mark_lessons_read,
+# ...). They are never mapped here (§50); posting stays off unless EDSTEM_ALLOW_POSTING=1, which the
+# UniContext source config must not set.
 #
-# Authorities: discussion posts are `discussion`. Posts of type "announcement" and every post by
-# course staff/admins are instructor statements, so they use `instructor-announcement` (§12);
-# staff answers also map authorRole to instructor / ta. Student questions get isQuestion = true.
+# Call budget: list_threads returns no body, so the opening post needs get_thread. To stay gentle
+# with Ed, details are fetched only for announcements and for threads created or updated in the last
+# 30 days; older details already stored stay as they were (the detail resource is not `complete`).
+#
+# Region: Ed web links below use https://edstem.org/us/. For another region (au, ...) copy this file
+# and change the URL prefix, and set EDSTEM_BASE_URL in the source env (see docs/connectors/edstem.md).
+#
+# Authorities: discussion posts are `discussion`. Announcements and every post by course staff
+# (Ed course roles admin / staff / ta / tutor) are instructor statements, `instructor-announcement`
+# (§12). Student questions get isQuestion = true.
 id: edstem
 product: edstem
 sourceLabel: Ed Discussion
-description: EdStem discussion boards via an MCP server (courses, threads, answers, comments)
+description: EdStem discussion boards via the edstem-mcp server (courses, threads, answers, comments)
+version: '2'
+testedVersion: 0.7.2
 defaultAuthority: discussion
 capabilities: [courses, announcements, messages]
 
 resources:
   - name: courses
-    call: { tool: list_courses }
-    select: 'courses.course'
+    call: { tool: list_courses, args: { includeArchived: false } }
+    select: '$'
     sourceType: edstem.course
     externalId: '$string(id)'
-    complete: true
+    # Archived courses drop out of this list; keep them (and their threads) instead of deleting.
+    complete: false
     capability: courses
 
   - name: threads
     forEach: { resource: courses, as: course }
     call:
       tool: list_threads
-      args: { course_id: '{{course.id}}', limit: 100, sort: new }
-    select: threads
+      args: { courseId: '{{course.id}}', limit: 50, sort: new }
+    select: '$'
     sourceType: edstem.thread
     externalId: '$string(id)'
-    updatedAt: 'updated_at ? updated_at : created_at'
-    attach: { courseId: 'course.id' }
+    updatedAt: 'updatedAt ? updatedAt : createdAt'
     capability: messages
 
-  # Answers and comments need one extra call per thread that has replies.
+  # Bodies, answers and comments: one call per announcement or recently active thread.
   - name: thread_details
     forEach:
       resource: threads
       as: thread
-      where: 'comment_count > 0 or answer_count > 0'
+      where: >-
+        type = "announcement" or
+        $toMillis(updatedAt ? updatedAt : createdAt) >= $toMillis($now()) - 2592000000
     call:
       tool: get_thread
-      args: { thread_id: '{{thread.id}}' }
-    select: thread
+      args: { threadId: '{{thread.id}}' }
+    select: '$'
     sourceType: edstem.thread_detail
     externalId: '$string(id)'
-    updatedAt: 'updated_at ? updated_at : created_at'
+    updatedAt: 'updatedAt ? updatedAt : createdAt'
     optional: true
     capability: messages
 
@@ -73,91 +89,91 @@ entities:
         url: '"https://edstem.org/us/courses/" & id'
       ref: { url: '"https://edstem.org/us/courses/" & id' }
 
+  # Summaries: one thread entity per discussion thread (announcements become announcement entities
+  # from their detail instead).
   edstem.thread:
-    # Announcements category -> announcement entities, authored by staff.
-    - kind: announcement
-      when: 'type = "announcement"'
-      key: '$string(id)'
-      fields:
-        title: title
-        body: 'document ? document : $replace(content, /<[^>]+>/, " ")'
-        publishedAt: created_at
-        authorName: user.name
-        category: category
-        importance: 'pinned = true ? "high" : "normal"'
-        scope: { const: course }
-        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
-        courseOfferingId: { ref: courseOffering, key: '$string(course_id)' }
-      ref:
-        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
-        authority: instructor-announcement
-        location: { messageId: '$string(id)' }
-    # Everything else -> a thread plus its opening post as a message.
     - kind: thread
       when: '$not(type = "announcement")'
       key: '$string(id)'
       fields:
         title: title
         platform: { const: edstem }
-        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
-        courseOfferingId: { ref: courseOffering, key: '$string(course_id)' }
+        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+        courseOfferingId: { ref: courseOffering, key: '$string(courseId)' }
       ref:
-        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
+        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+
+  edstem.thread_detail:
+    - kind: announcement
+      when: 'type = "announcement"'
+      key: '$string(id)'
+      fields:
+        title: title
+        body: document
+        publishedAt: createdAt
+        authorName: '$lookup(users, $string(userId)).name'
+        category: category
+        importance: '"pinned" in flags ? "high" : "normal"'
+        scope: { const: course }
+        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+        courseOfferingId: { ref: courseOffering, key: '$string(courseId)' }
+      ref:
+        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+        authority: instructor-announcement
+        location: { messageId: '$string(id)' }
+
+    # The opening post of a discussion thread.
     - kind: message
       when: '$not(type = "announcement")'
       key: '"t" & $string(id)'
       fields:
-        body: 'document ? document : $replace(content, /<[^>]+>/, " ")'
-        authorName: user.name
-        authorRole: 'user.role = "admin" ? "instructor" : user.role in ["staff", "tutor"] ? "ta" : "student"'
-        sentAt: created_at
+        body: document
+        authorName: '$lookup(users, $string(userId)).name'
+        authorRole: >-
+          ($r := $lookup(users, $string(userId)).courseRole;
+          $r = "admin" ? "instructor" : $r in ["staff", "ta", "tutor"] ? "ta" : "student")
+        sentAt: createdAt
         isQuestion: 'type = "question"'
-        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
+        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
         threadId: { ref: thread, key: '$string(id)' }
-        courseOfferingId: { ref: courseOffering, key: '$string(course_id)' }
+        courseOfferingId: { ref: courseOffering, key: '$string(courseId)' }
       ref:
-        url: '"https://edstem.org/us/courses/" & course_id & "/discussion/" & id'
+        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
         authority:
-          { expr: 'user.role in ["admin", "staff"] ? "instructor-announcement" : "discussion"' }
+          expr: >-
+            $lookup(users, $string(userId)).courseRole in ["admin", "staff", "ta", "tutor"]
+            ? "instructor-announcement" : "discussion"
         location: { messageId: '$string(id)' }
 
-  edstem.thread_detail:
-    # Staff answers: the most reliable statements on a board (authority instructor-announcement).
+    # Every answer and comment, nested replies included (flattened).
     - kind: message
-      forEach: answers
+      forEach: >-
+        ($all := function($c) { $c ? $append($c, $all($c.comments)) : [] };
+        $all($append(answers ? answers : [], comments ? comments : [])))
       key: '"c" & $string(id)'
       fields:
-        body: 'document ? document : $replace(content, /<[^>]+>/, " ")'
-        authorName: user.name
-        authorRole: 'user.role = "admin" ? "instructor" : user.role in ["staff", "tutor"] ? "ta" : "student"'
-        sentAt: created_at
+        body: document
+        authorName: '$lookup($root.users, $string(userId)).name'
+        authorRole: >-
+          ($r := $lookup($root.users, $string(userId)).courseRole;
+          $r = "admin" ? "instructor" : ($r in ["staff", "ta", "tutor"] or byStaff = true) ? "ta" :
+          "student")
+        sentAt: createdAt
         isQuestion: { const: false }
-        threadId: { ref: thread, key: '$string($root.id)' }
-        courseOfferingId: { ref: courseOffering, key: '$string($root.course_id)' }
-        url: '"https://edstem.org/us/courses/" & $root.course_id & "/discussion/" & $root.id'
+        # Replies to an announcement have no thread entity to point at.
+        threadId: { ref: thread, key: '$root.type = "announcement" ? "" : $string($root.id)' }
+        courseOfferingId: { ref: courseOffering, key: '$string($root.courseId)' }
+        url: '"https://edstem.org/us/courses/" & $root.courseId & "/discussion/" & $root.id'
       ref:
+        url: '"https://edstem.org/us/courses/" & $root.courseId & "/discussion/" & $root.id'
         authority:
-          { expr: 'user.role in ["admin", "staff"] ? "instructor-announcement" : "discussion"' }
-        location: { messageId: '$string(id)' }
-    - kind: message
-      forEach: comments
-      key: '"c" & $string(id)'
-      fields:
-        body: 'document ? document : $replace(content, /<[^>]+>/, " ")'
-        authorName: user.name
-        authorRole: 'user.role = "admin" ? "instructor" : user.role in ["staff", "tutor"] ? "ta" : "student"'
-        sentAt: created_at
-        isQuestion: { const: false }
-        threadId: { ref: thread, key: '$string($root.id)' }
-        courseOfferingId: { ref: courseOffering, key: '$string($root.course_id)' }
-        url: '"https://edstem.org/us/courses/" & $root.course_id & "/discussion/" & $root.id'
-      ref:
-        authority:
-          { expr: 'user.role in ["admin", "staff"] ? "instructor-announcement" : "discussion"' }
+          expr: >-
+            ($lookup($root.users, $string(userId)).courseRole in ["admin", "staff", "ta", "tutor"]
+            or byStaff = true) ? "instructor-announcement" : "discussion"
         location: { messageId: '$string(id)' }
 
 drift:
   edstem.course: { id: number, name: string, 'code?': 'string|null' }
   edstem.thread:
-    { id: number, course_id: number, title: string, 'type?': string, 'created_at?': 'string|null' }
-  edstem.thread_detail: { id: number, course_id: number }
+    { id: number, courseId: number, title: string, type: string, 'createdAt?': 'string|null' }
+  edstem.thread_detail: { id: number, courseId: number, userId: number, document: string }

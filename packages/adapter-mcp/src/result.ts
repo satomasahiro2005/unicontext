@@ -1,4 +1,4 @@
-import { ConnectorError, redact } from '@unicontext/core';
+import { AuthRequiredError, ConnectorError, redact } from '@unicontext/core';
 
 /** The parts of an MCP CallToolResult this adapter reads. */
 export interface ToolResultLike {
@@ -31,14 +31,26 @@ function tryJson(text: string): { ok: true; value: unknown } | { ok: false } {
 }
 
 /**
+ * Error texts by which servers that wrap a token-based API say "your credentials were rejected"
+ * (MCP has no error code for it). Such results become `auth_required` instead of a generic failure,
+ * so `unicontext status` points at `unicontext login <source>`. Examples: edstem-mcp
+ * `EDSTEM_REAUTH_REQUIRED` / "Authentication failed", "401 Unauthorized", "invalid API token".
+ */
+export const AUTH_ERROR_PATTERN =
+  /\b(?:\w+_)?(?:REAUTH(?:_REQUIRED)?|UNAUTHENTICATED|UNAUTHORI[SZ]ED)\b|authentication failed|invalid (?:api |access )?token|\b(?:HTTP|status)[ :]*401\b/i;
+
+/**
  * Tool results → data for `select`: `structuredContent` first, then JSON in the text content
  * (one block, the concatenation, or one JSON value per block), else `{text}`.
- * `isError` results become ConnectorError (message redacted).
+ * `isError` results become ConnectorError (message redacted), or AuthRequiredError when the text
+ * matches AUTH_ERROR_PATTERN.
  */
 export function parseToolResult(result: ToolResultLike, tool = 'tool'): unknown {
   const blocks = textBlocks(result.content);
   if (result.isError) {
     const message = String(redact(blocks.join('\n').slice(0, 500)) || 'no message');
+    if (AUTH_ERROR_PATTERN.test(message))
+      throw new AuthRequiredError(`MCP tool ${tool} reports rejected credentials: ${message}`);
     throw new ConnectorError(`MCP tool ${tool} returned an error: ${message}`, {
       details: { tool },
     });

@@ -485,61 +485,149 @@ describe('Canvas-like MCP server', () => {
   });
 });
 
-describe('EdStem-like MCP server', () => {
-  it('maps courses, threads, announcements, answers and comments with authorities', async () => {
+describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
+  it('maps courses, threads, announcements, answers and nested comments with authorities', async () => {
+    const calls: { tool: string; args: unknown }[] = [];
     const adapter = adapterFor(
       edSpec(),
-      inMemoryFactory(() => createEdServer()),
+      inMemoryFactory(() => createEdServer({ calls })),
     );
-    const { items } = await syncAll(adapter);
+    expect(adapter.mappedTools().sort()).toEqual(['get_thread', 'list_courses', 'list_threads']);
+    expect((await adapter.health()).state).toBe('healthy');
+    const { items, pages } = await syncAll(adapter);
+    // only read tools; the server's write tools are never touched
+    expect([...new Set(calls.map((c) => c.tool))].sort()).toEqual([
+      'get_thread',
+      'list_courses',
+      'list_threads',
+    ]);
+    expect(calls.find((c) => c.tool === 'list_courses')?.args).toEqual({ includeArchived: false });
+    expect(calls.find((c) => c.tool === 'list_threads')?.args).toEqual({
+      courseId: 55,
+      limit: 50,
+      sort: 'new',
+    });
+    // numbers stay numbers through the template (the server's threadId is z.number())
+    expect(calls.filter((c) => c.tool === 'get_thread').map((c) => c.args)).toEqual([
+      { threadId: 1001 },
+      { threadId: 1002 },
+      { threadId: 1003 },
+    ]);
+    expect(pages.flatMap((p) => p.warnings ?? [])).toEqual([]);
     const types = items.map((i) => `${i.sourceType}:${i.externalId}`).sort();
     expect(types).toEqual([
       'edstem.course:55',
-      'edstem.thread:1',
-      'edstem.thread:2',
-      'edstem.thread:3',
-      'edstem.thread_detail:2', // only threads with replies get a detail call
+      'edstem.thread:1001',
+      'edstem.thread:1002',
+      'edstem.thread:1003',
+      'edstem.thread:1004',
+      // announcements always, other threads only when active in the last 30 days
+      'edstem.thread_detail:1001',
+      'edstem.thread_detail:1002',
+      'edstem.thread_detail:1003',
     ]);
+    // archived courses / threads beyond the page are kept, never retired
+    expect(pages.at(-1)?.complete).toBeUndefined();
+
     const { entities, outputs } = await normalizeAll(edSpec(), items);
     expect(outputs.flatMap(({ out }) => out.warnings ?? [])).toEqual([]);
+
+    const course = entities.find((e) => e.kind === 'courseOffering');
+    expect(course).toMatchObject({
+      title: 'Intro to CS',
+      courseCode: 'CS101',
+      academicYear: 2026,
+      term: 'Fall',
+      url: 'https://edstem.org/us/courses/55',
+    });
 
     const announcements = entities.filter((e) => e.kind === 'announcement');
     expect(announcements).toHaveLength(1);
     expect(announcements[0]).toMatchObject({
       title: 'Midterm room',
+      body: 'The midterm will be in Room 11.',
+      authorName: 'Prof Smith',
       importance: 'high',
       scope: 'course',
       category: 'Announcements',
+      url: 'https://edstem.org/us/courses/55/discussion/1001',
+      courseOfferingId: course?.id,
     });
-    expect(
-      entities
-        .filter((e) => e.kind === 'thread')
-        .map((e) => (e as { title: string }).title)
-        .sort(),
-    ).toEqual(['How do I submit lab 1?', 'Study group']);
+    const threads = entities.filter((e) => e.kind === 'thread') as unknown as {
+      id: string;
+      title: string;
+    }[];
+    expect(threads.map((t) => t.title).sort()).toEqual([
+      'How do I submit lab 1?',
+      'Old thread',
+      'Study group',
+    ]);
     const messages = entities.filter((e) => e.kind === 'message') as unknown as {
-      authorName: string;
+      authorName?: string;
       authorRole: string;
       isQuestion?: boolean;
       body: string;
+      threadId?: string;
     }[];
-    expect(messages).toHaveLength(4); // 2 root posts + 1 answer + 1 comment
-    const byAuthor = Object.fromEntries(messages.map((m) => [m.authorName, m]));
-    expect(byAuthor['Student A']?.authorRole).toBe('student');
-    expect(byAuthor['TA Jones']).toMatchObject({ authorRole: 'ta', isQuestion: false });
-    expect(messages.find((m) => m.body === 'Where do I submit lab 1?')?.isQuestion).toBe(true);
-    expect(messages.find((m) => m.authorName === 'Student B')?.body).toContain('study group');
+    // 2 opening posts + answer + reply to the answer + comment + comment on the announcement
+    expect(messages).toHaveLength(6);
+    const byBody = Object.fromEntries(messages.map((m) => [m.body, m]));
+    expect(byBody['Where do I submit lab 1?']).toMatchObject({
+      authorName: 'Student A',
+      authorRole: 'student',
+      isQuestion: true,
+    });
+    expect(byBody['Upload it on Canvas before Friday.']).toMatchObject({
+      authorName: 'TA Jones',
+      authorRole: 'ta',
+      isQuestion: false,
+    });
+    expect(byBody['Thanks!']).toMatchObject({ authorName: 'Student A', authorRole: 'student' });
+    expect(byBody['Same question here.']?.authorName).toBe('Student B');
+    expect(byBody['Anyone up for a study group?']?.isQuestion).toBe(false);
+    const lab = threads.find((t) => t.title === 'How do I submit lab 1?');
+    expect(byBody['Thanks!']?.threadId).toBe(lab?.id);
+    // a comment under an announcement has no thread entity to point at
+    expect(byBody['Is it open book?']).toMatchObject({ authorName: 'Student A' });
+    expect(byBody['Is it open book?']?.threadId).toBeUndefined();
 
-    const authorityOf = (type: string, id: string, kind: string): string | undefined =>
-      outputs
-        .find((o) => o.item.sourceType === type && o.item.externalId === id)
-        ?.out.entities.find((e) => e.entity.kind === kind)?.ref?.authority;
-    expect(authorityOf('edstem.thread', '1', 'announcement')).toBe('instructor-announcement');
-    const detail = outputs.find((o) => o.item.sourceType === 'edstem.thread_detail');
-    const auth = detail?.out.entities.map((e) => e.ref?.authority);
-    expect(auth).toEqual(['instructor-announcement', 'discussion']); // staff answer, student comment
-    expect(authorityOf('edstem.thread', '2', 'message')).toBe('discussion');
+    const authorities = (id: string): Record<string, string | undefined> =>
+      Object.fromEntries(
+        (
+          outputs.find(
+            (o) => o.item.sourceType === 'edstem.thread_detail' && o.item.externalId === id,
+          )?.out.entities ?? []
+        ).map((e) => [(e.entity as { body?: string }).body ?? e.entity.kind, e.ref?.authority]),
+      );
+    expect(authorities('1001')).toEqual({
+      'The midterm will be in Room 11.': 'instructor-announcement',
+      'Is it open book?': 'discussion',
+    });
+    expect(authorities('1002')).toEqual({
+      'Where do I submit lab 1?': 'discussion',
+      'Upload it on Canvas before Friday.': 'instructor-announcement',
+      'Thanks!': 'discussion',
+      'Same question here.': 'discussion',
+    });
     await adapter.dispose();
+  });
+
+  it('turns the server\'s "re-authenticate" error into auth_required', async () => {
+    const adapter = adapterFor(
+      edSpec(),
+      inMemoryFactory(() => createEdServer({ authFailing: true })),
+    );
+    await expect(adapter.sync({ mode: 'initial' })).rejects.toBeInstanceOf(AuthRequiredError);
+    await adapter.dispose();
+    expect(() =>
+      parseToolResult({
+        content: [{ type: 'text', text: '{"error":{"message":"401 Unauthorized"}}' }],
+        isError: true,
+      }),
+    ).toThrow(AuthRequiredError);
+    expect(() =>
+      parseToolResult({ content: [{ type: 'text', text: 'rate limited' }], isError: true }),
+    ).toThrow(ConnectorError);
   });
 });
 

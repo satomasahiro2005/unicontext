@@ -52,7 +52,7 @@ student: { campus: 浜松, faculty: 情報学部 } # optional: campus/faculty-on
 sources:
   livecampusu: { enabled: true }
   microsoft365: { enabled: true }
-  edstem: { adapter: mcp, command: npx, args: [edstem-mcp] }
+  edstem: { adapter: mcp, command: node, args: [/path/to/edstem-cli/dist/edstem-mcp.js] } # + envSecrets: docs/connectors/edstem.md
   files: { roots: [~/University] }
 sync: { background: true }
 ```
@@ -64,6 +64,7 @@ Connectors are loaded by package name on start (`livecampusu` loads `@unicontext
 ```sh
 pnpm unicontext login livecampusu
 pnpm unicontext login microsoft365      # opens your browser (OAuth 2.0 + PKCE)
+pnpm unicontext login edstem            # asks for the Ed API token (not echoed, OS keychain)
 pnpm unicontext sync
 pnpm unicontext today
 pnpm unicontext changes --since yesterday

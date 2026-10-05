@@ -4,6 +4,7 @@ import type { Command } from 'commander';
 import { CliError, loginHint } from '../errors.js';
 import { shortTime } from '../format/common.js';
 import { action, type Harness } from '../harness.js';
+import { promptMissingSecrets } from './secrets.js';
 import { runSync } from './sync.js';
 
 const AUTH_LABELS: Record<AuthResult['status'], string> = {
@@ -49,6 +50,9 @@ export function registerLogin(program: Command, h: Harness): void {
           ctx.err(
             '注意: キーチェーンを使わない設定のため、ログイン情報はこのコマンドの終了とともに失われます',
           );
+        // Token-based sources (envSecrets / headerSecrets, e.g. an MCP server): ask for the values
+        // the keychain does not hold yet, without echo, before the adapter tries to connect.
+        const enteredSecrets = await promptMissingSecrets(ctx, sourceId);
         let auth: AuthResult;
         try {
           // authenticate() never prompts (connector-sdk contract); when the stored session is not
@@ -92,12 +96,15 @@ export function registerLogin(program: Command, h: Harness): void {
           ctx.printJson({
             sourceId,
             auth,
+            ...(enteredSecrets.length > 0 ? { stored: enteredSecrets } : {}),
             ...(synced ? { sync: synced.reports } : {}),
             ...(syncError ? { syncError } : {}),
           });
           return ok ? 0 : 1;
         }
         const s = ctx.style;
+        if (enteredSecrets.length > 0)
+          ctx.out(`${sourceId}: 秘密情報を保存しました（${enteredSecrets.join(', ')}）`);
         ctx.out(
           `${sourceId}: ${ok ? s.green(AUTH_LABELS[auth.status]) : s.red(AUTH_LABELS[auth.status])}`,
         );

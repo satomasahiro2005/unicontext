@@ -16,6 +16,7 @@ registers with the sync engine (`instantiateConnector` → `SyncEngine.register`
 | [teams-web](teams-web.md)                               | `@unicontext/teams-web`                         | Teams web client (browser)    | unofficial   | 30m              |
 | [local-files](local-files.md)                           | `@unicontext/local-files`                       | filesystem                    | official     | event            |
 | [chatgpt-record](chatgpt-record.md)                     | `@unicontext/chatgpt-record`                    | filesystem / manual import    | official     | event            |
+| [edstem](edstem.md)                                     | `@unicontext/adapter-mcp` + `edstem-mcp.yaml`   | MCP (community edstem-mcp)    | experimental | 30m (config)     |
 | [adapter-browser](adapter-browser.md)                   | `@unicontext/adapter-browser`                   | Playwright                    | —            | —                |
 | [adapter-mcp](adapter-mcp.md)                           | `@unicontext/adapter-mcp`                       | MCP (stdio / streamable HTTP) | experimental | config           |
 | [adapter-cli](adapter-cli.md)                           | `@unicontext/adapter-cli`                       | child process + JSON          | experimental | config           |

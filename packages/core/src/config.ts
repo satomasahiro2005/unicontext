@@ -189,12 +189,36 @@ export function parseConfig(text: string, options: { home?: string } = {}): UniC
   return config;
 }
 
+/**
+ * Keys whose values only *name* SecretStore entries (`{EDSTEM_TOKEN: ed-token}` or
+ * `[{name: EDSTEM_TOKEN, secret: ed-token}]`): their key names say "token"/"secret" by design.
+ */
+const SECRET_BINDING_KEYS = new Set(['envSecrets', 'headerSecrets']);
+/** A secret *name* is a short identifier; anything else in a binding looks like a pasted value. */
+const SECRET_NAME = /^[A-Za-z0-9][\w.:-]{0,47}$/;
+
+function findInlineSecretsInBindings(value: unknown, keyPath: string): string[] {
+  const out: string[] = [];
+  const check = (v: unknown, p: string): void => {
+    if (typeof v === 'string' && !SECRET_NAME.test(v)) out.push(p);
+  };
+  if (Array.isArray(value))
+    value.forEach((b, i) => {
+      if (b && typeof b === 'object')
+        check((b as { secret?: unknown }).secret, `${keyPath}.${i}.secret`);
+    });
+  else if (value && typeof value === 'object')
+    for (const [k, v] of Object.entries(value)) check(v, `${keyPath}.${k}`);
+  return out;
+}
+
 function findInlineSecrets(value: unknown, prefix = ''): string[] {
   if (!value || typeof value !== 'object') return [];
   const out: string[] = [];
   for (const [k, v] of Object.entries(value)) {
     const keyPath = prefix ? `${prefix}.${k}` : k;
-    if (SECRET_KEY_HINT.test(k) && typeof v === 'string' && v.length > 0) out.push(keyPath);
+    if (SECRET_BINDING_KEYS.has(k)) out.push(...findInlineSecretsInBindings(v, keyPath));
+    else if (SECRET_KEY_HINT.test(k) && typeof v === 'string' && v.length > 0) out.push(keyPath);
     else out.push(...findInlineSecrets(v, keyPath));
   }
   return out;

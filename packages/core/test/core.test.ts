@@ -112,6 +112,34 @@ sync: { background: true }
     ).not.toThrow();
   });
 
+  it('accepts secret *names* in envSecrets / headerSecrets but not pasted values', () => {
+    const named = parseConfig(
+      [
+        'sources:',
+        '  edstem:',
+        '    envSecrets:',
+        '      - { name: EDSTEM_TOKEN, secret: ed-token }',
+        '    headerSecrets: { Authorization: api.token }',
+        '',
+      ].join('\n'),
+    );
+    expect(named.sources.edstem).toMatchObject({
+      envSecrets: [{ name: 'EDSTEM_TOKEN', secret: 'ed-token' }],
+    });
+    expect(() =>
+      parseConfig('sources:\n  a: { envSecrets: { EDSTEM_TOKEN: ed-token } }\n'),
+    ).not.toThrow();
+    // a real token pasted where the name belongs is still refused
+    expect(() =>
+      parseConfig(
+        'sources:\n  a:\n    envSecrets:\n      - { name: EDSTEM_TOKEN, secret: "abc/DEF+ghi=" }\n',
+      ),
+    ).toThrow(/keychain.*envSecrets\.0\.secret/);
+    expect(() =>
+      parseConfig(`sources:\n  a: { envSecrets: { EDSTEM_TOKEN: ${'x'.repeat(60)} } }\n`),
+    ).toThrow(/keychain/);
+  });
+
   it('defaults to safe values', () => {
     expect(defaultConfig()).toMatchObject({
       sync: { background: true },
