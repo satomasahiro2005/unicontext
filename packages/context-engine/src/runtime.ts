@@ -115,7 +115,18 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
       return 2;
     }
   };
-  const identity = new IdentityResolver(database, { clock, sourcePriority });
+  // Course codes of the academic system and the syllabus are registrar codes; every other source's
+  // codes (Ed "db2026", an LMS course code) are that platform's own labels (§14).
+  const codeScheme = (sourceId: string | undefined): 'registrar' | 'platform' | undefined => {
+    if (!sourceId) return undefined;
+    try {
+      const authority = sync.getSource(sourceId).metadata.defaultAuthority;
+      return authority === 'academic-system' || authority === 'syllabus' ? 'registrar' : 'platform';
+    } catch {
+      return undefined;
+    }
+  };
+  const identity = new IdentityResolver(database, { clock, sourcePriority, codeScheme });
   const rules = mergeAuthorityRules(
     options.authorityRules ?? loadDefaultAuthorityRules(),
     profile?.authorityRules ? { predicates: profile.authorityRules } : undefined,

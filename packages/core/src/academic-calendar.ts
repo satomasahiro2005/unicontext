@@ -68,6 +68,114 @@ export function findTerm(
   );
 }
 
+/**
+ * A term label written by a system that does not use the university's own names (Ed "Semester 2",
+ * "S2", Canvas "Fall", 「秋学期」): the n-th term of an academic year, or a season. Undefined for
+ * anything else (a placeholder such as Ed's "X", a free-text session name).
+ */
+export type ExternalTermLabel =
+  | { kind: 'ordinal'; n: number }
+  | { kind: 'season'; season: 'spring' | 'summer' | 'fall' | 'winter' };
+
+const KANJI_DIGITS: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4 };
+
+export function parseExternalTermLabel(label: string | undefined): ExternalTermLabel | undefined {
+  if (!label) return undefined;
+  const t = label
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/(?:^|\s)(?:19|20)\d{2}(?:\s*(?:年度|年|ay|fy))?(?=\s|$)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const ordinal =
+    /^(?:semester|sem|term|s|t)\s*\.?\s*([1-4])$/.exec(t) ??
+    /^([1-4])(?:st|nd|rd|th)?\s*(?:semester|sem|term)$/.exec(t) ??
+    /^第\s*([1-4一二三四])\s*学期$/.exec(t);
+  if (ordinal?.[1]) return { kind: 'ordinal', n: KANJI_DIGITS[ordinal[1]] ?? Number(ordinal[1]) };
+  const season =
+    /^(spring|summer|fall|autumn|winter)(?:\s*(?:semester|term|session))?$/.exec(t) ??
+    /^(春|夏|秋|冬)(?:学期|期)?$/.exec(t);
+  if (season?.[1]) {
+    const s = season[1];
+    const map: Record<string, 'spring' | 'summer' | 'fall' | 'winter'> = {
+      spring: 'spring',
+      summer: 'summer',
+      fall: 'fall',
+      autumn: 'fall',
+      winter: 'winter',
+      春: 'spring',
+      夏: 'summer',
+      秋: 'fall',
+      冬: 'winter',
+    };
+    const v = map[s];
+    if (v) return { kind: 'season', season: v };
+  }
+  return undefined;
+}
+
+/** A mid-season date inside an academic year that starts in `year` (northern hemisphere, Japan). */
+const SEASON_DATE: Record<'spring' | 'summer' | 'fall' | 'winter', [number, string]> = {
+  spring: [0, '05-15'],
+  summer: [0, '07-15'],
+  fall: [0, '11-15'],
+  winter: [1, '01-15'],
+};
+
+export interface ExternalTermMatch {
+  /** The profile's label for the term (termCode, e.g. 後期; else the term name). */
+  termCode: string;
+  /** Academic year of the course (the given year; the calendar's year when none was given). */
+  year: number;
+  /** The profile term itself, when the calendar covers that academic year. */
+  term: TermDefinition | undefined;
+}
+
+/**
+ * Map an external term label (`label`, academic `year`) onto the university's terms through the
+ * academic calendar: the university's own names (前期 / 後期 / term id) directly, "Semester 2" /
+ * "S2" / 第2学期 as the second term of the year, and seasons through the calendar dates (Spring →
+ * the term containing mid-May, Fall → mid-November, Winter → mid-January of the next calendar
+ * year). When the calendar has no terms for that year, the nearest year's term layout stands in
+ * (前期 / 後期 recur every year) and `term` is undefined. Undefined when the label is not understood
+ * or the calendar has no terms: an unknown term is better than a wrong one.
+ */
+export function termForExternalLabel(
+  cal: AcademicCalendar,
+  label: string | undefined,
+  year: number | undefined,
+): ExternalTermMatch | undefined {
+  if (!label || cal.terms.length === 0) return undefined;
+  // The calendar year to read the term layout from: the course's own year, else the nearest one
+  // (the later on a tie), else (no year given) the latest.
+  const years = [...new Set(cal.terms.map((t) => t.year))].sort((a, b) => b - a);
+  const target = year ?? years[0] ?? 0;
+  const template = [...years].sort(
+    (a, b) => Math.abs(a - target) - Math.abs(b - target) || b - a,
+  )[0];
+  if (template === undefined) return undefined;
+  const yearTerms = cal.terms
+    .filter((t) => t.year === template)
+    .sort((a, b) => a.start.localeCompare(b.start));
+  const result = (t: TermDefinition | undefined): ExternalTermMatch | undefined =>
+    t
+      ? {
+          termCode: t.termCode ?? t.name,
+          year: year ?? template,
+          term: year === undefined || year === template ? t : undefined,
+        }
+      : undefined;
+
+  const direct = findTerm(cal, template, label);
+  if (direct) return result(direct);
+  const parsed = parseExternalTermLabel(label);
+  if (!parsed) return undefined;
+  if (parsed.kind === 'ordinal') return result(yearTerms[parsed.n - 1]);
+  const [dy, md] = SEASON_DATE[parsed.season];
+  const hit = termForDate(cal, `${template + dy}-${md}`);
+  return result(hit && hit.year === template ? hit : undefined);
+}
+
 /** Weeks with regular classes. */
 export function classWindow(term: TermDefinition): { start: string; end: string } {
   return term.classes ?? { start: term.start, end: term.end };

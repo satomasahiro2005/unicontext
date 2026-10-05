@@ -1,5 +1,5 @@
 import { isIdOf, type CourseOffering } from '@unicontext/canonical-model';
-import { NotFoundError, ValidationError } from '@unicontext/core';
+import { NotFoundError, ValidationError, zonedDateString } from '@unicontext/core';
 import type { CourseRef, UniContext } from '@unicontext/context-engine';
 
 function norm(s: string): string {
@@ -84,13 +84,27 @@ export function resolveCourse(
     const enrolled = ranked.filter((r) => uc.context.enrollmentOf(r.ref.id).enrolled);
     if (enrolled.length > 0) ranked = enrolled;
   }
-  const best = ranked[0];
-  if (!best)
+  const top = ranked[0];
+  if (!top)
     throw new NotFoundError(`course "${text}" (no course offering matches that id, title or code)`);
-  const second = ranked[1];
-  if (second && second.score >= best.score - 0.001)
+  // Equally good matches (「データベースシステム論」 this year, last year's Ed course of the same
+  // name, a catalog section): the course the student takes, then the one of the current term.
+  let tied = ranked.filter((r) => r.score >= top.score - 0.001);
+  const narrow = (keep: (r: (typeof tied)[number]) => boolean): void => {
+    if (tied.length < 2) return;
+    const kept = tied.filter(keep);
+    if (kept.length > 0) tied = kept;
+  };
+  narrow((r) => uc.context.enrollmentOf(r.ref.id).enrolled);
+  const today = zonedDateString(uc.clock.now(), uc.timezone);
+  narrow((r) => {
+    const term = uc.context.enrollmentOf(r.ref.id).term;
+    return term !== undefined && term.start <= today && today <= term.end;
+  });
+  const best = tied[0] ?? top;
+  if (tied.length > 1)
     throw new ValidationError(
-      `course "${text}" is ambiguous: ${ranked
+      `course "${text}" is ambiguous: ${tied
         .slice(0, 5)
         .map((r) => `${r.ref.title} (${r.ref.id})`)
         .join(', ')}. Use the exact courseOfferingId.`,

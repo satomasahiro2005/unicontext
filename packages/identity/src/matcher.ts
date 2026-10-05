@@ -1,6 +1,7 @@
 import type { CourseOffering } from '@unicontext/canonical-model';
 import {
   extractYear,
+  isKnownTerm,
   normalizeCourseCode,
   normalizeTerm,
   personNamesMatch,
@@ -17,12 +18,25 @@ export interface OfferingCandidate {
   term: string | undefined;
   instructorNames: string[];
   schedule: { dayOfWeek: number; period?: number }[];
+  /**
+   * What the course code is: the university's registrar code (学務情報システム, syllabus; the
+   * default) or a label of a platform (Ed "db2026", a Canvas course code). Two different platform /
+   * registrar codes are not evidence against a match, they come from different code systems.
+   */
+  codeScheme?: CodeScheme | undefined;
 }
 
-export function toCandidate(o: CourseOffering, sourceId?: string): OfferingCandidate {
+export type CodeScheme = 'registrar' | 'platform';
+
+export function toCandidate(
+  o: CourseOffering,
+  sourceId?: string,
+  codeScheme?: CodeScheme,
+): OfferingCandidate {
   return {
     id: o.id,
     sourceId,
+    ...(codeScheme ? { codeScheme } : {}),
     title: o.title,
     courseCode: o.courseCode,
     academicYear: o.academicYear ?? extractYear(o.title),
@@ -56,9 +70,16 @@ export interface MatchResult {
   titleOnly?: boolean;
 }
 
-/** A source that knows only a course's title (course folder, transcript hint, Teams team name). */
+/**
+ * A source that knows only a course's title (course folder, transcript hint, Teams team name, an Ed
+ * course whose code is the platform's own label).
+ */
 export function isTitleOnly(c: OfferingCandidate): boolean {
-  return !c.courseCode && c.instructorNames.length === 0 && c.schedule.length === 0;
+  return (
+    (!c.courseCode || c.codeScheme === 'platform') &&
+    c.instructorNames.length === 0 &&
+    c.schedule.length === 0
+  );
 }
 
 /**
@@ -81,8 +102,11 @@ export function scoreOfferingMatch(
 
   if (a.academicYear && b.academicYear && a.academicYear !== b.academicYear)
     return none(`year differs (${a.academicYear} vs ${b.academicYear})`);
-  const ta = normalizeTerm(a.term);
-  const tb = normalizeTerm(b.term);
+  // Only real terms count: a free-text session ("X") is an unknown term, compatible with any.
+  const na = normalizeTerm(a.term);
+  const nb = normalizeTerm(b.term);
+  const ta = isKnownTerm(na) ? na : undefined;
+  const tb = isKnownTerm(nb) ? nb : undefined;
   if (ta && tb && ta !== tb) return none(`term differs (${a.term} vs ${b.term})`);
 
   let score = 0;
@@ -92,6 +116,8 @@ export function scoreOfferingMatch(
       score += 0.4;
       codeMatch = true;
       evidence.push(`course code ${a.courseCode}`);
+    } else if (a.codeScheme === 'platform' || b.codeScheme === 'platform') {
+      evidence.push(`course codes from different systems (${a.courseCode} vs ${b.courseCode})`);
     } else {
       score -= 0.2;
       evidence.push(`course code differs (${a.courseCode} vs ${b.courseCode})`);

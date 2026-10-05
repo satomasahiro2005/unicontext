@@ -23,8 +23,18 @@
 # with Ed, details are fetched only for announcements and for threads created or updated in the last
 # 30 days; older details already stored stay as they were (the detail resource is not `complete`).
 #
-# Region: Ed web links below use https://edstem.org/us/. For another region (au, ...) copy this file
-# and change the URL prefix, and set EDSTEM_BASE_URL in the source env (see docs/connectors/edstem.md).
+# Region: Ed accounts live in one region. The API host is the source env EDSTEM_BASE_URL (the
+# server's default https://edstem.org/api/ is the AU region; US is https://us.edstem.org/api/) and
+# the web links below are https://edstem.org/<region>/courses/... with <region> from `vars.region`
+# (default au; set `mappingVars: { region: us }` in the source config for a US account). See
+# docs/connectors/edstem.md.
+#
+# Course terms: Ed's `session` is free text typed by the course admin ("Semester 2", "S2",
+# "Spring", or a placeholder such as "X"). $profileTerm maps it through the university profile's
+# academic calendar onto the university's own term names (Semester 2 → 後期), so the offering can be
+# identity-linked to the academic system's one (§14). A label that is not a term stays unknown (no
+# `term`), never a wrong literal; the raw session is kept in extra.session. Ed's `year` is taken as
+# the academic year (a 後期 course running Oct 2025 – Feb 2026 is year 2025).
 #
 # Authorities: discussion posts are `discussion`. Announcements and every post by course staff
 # (Ed course roles admin / staff / ta / tutor) are instructor statements, `instructor-announcement`
@@ -33,10 +43,12 @@ id: edstem
 product: edstem
 sourceLabel: Ed Discussion
 description: EdStem discussion boards via the edstem-mcp server (courses, threads, answers, comments)
-version: '2'
+version: '3'
 testedVersion: 0.7.2
 defaultAuthority: discussion
 capabilities: [courses, announcements, messages]
+vars:
+  region: au
 
 resources:
   - name: courses
@@ -85,9 +97,10 @@ entities:
         title: name
         courseCode: code
         academicYear: 'year ? $number(year)'
-        term: session
-        url: '"https://edstem.org/us/courses/" & id'
-      ref: { url: '"https://edstem.org/us/courses/" & id' }
+        term: '$profileTerm(session, year)'
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & id'
+      extra: { session: session }
+      ref: { url: '"https://edstem.org/" & $vars.region & "/courses/" & id' }
 
   # Summaries: one thread entity per discussion thread (announcements become announcement entities
   # from their detail instead).
@@ -98,10 +111,10 @@ entities:
       fields:
         title: title
         platform: { const: edstem }
-        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/discussion/" & id'
         courseOfferingId: { ref: courseOffering, key: '$string(courseId)' }
       ref:
-        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/discussion/" & id'
 
   edstem.thread_detail:
     - kind: announcement
@@ -115,10 +128,10 @@ entities:
         category: category
         importance: '"pinned" in flags ? "high" : "normal"'
         scope: { const: course }
-        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/discussion/" & id'
         courseOfferingId: { ref: courseOffering, key: '$string(courseId)' }
       ref:
-        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/discussion/" & id'
         authority: instructor-announcement
         location: { messageId: '$string(id)' }
 
@@ -134,11 +147,11 @@ entities:
           $r = "admin" ? "instructor" : $r in ["staff", "ta", "tutor"] ? "ta" : "student")
         sentAt: createdAt
         isQuestion: 'type = "question"'
-        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/discussion/" & id'
         threadId: { ref: thread, key: '$string(id)' }
         courseOfferingId: { ref: courseOffering, key: '$string(courseId)' }
       ref:
-        url: '"https://edstem.org/us/courses/" & courseId & "/discussion/" & id'
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/discussion/" & id'
         authority:
           expr: >-
             $lookup(users, $string(userId)).courseRole in ["admin", "staff", "ta", "tutor"]
@@ -163,9 +176,9 @@ entities:
         # Replies to an announcement have no thread entity to point at.
         threadId: { ref: thread, key: '$root.type = "announcement" ? "" : $string($root.id)' }
         courseOfferingId: { ref: courseOffering, key: '$string($root.courseId)' }
-        url: '"https://edstem.org/us/courses/" & $root.courseId & "/discussion/" & $root.id'
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & $root.courseId & "/discussion/" & $root.id'
       ref:
-        url: '"https://edstem.org/us/courses/" & $root.courseId & "/discussion/" & $root.id'
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & $root.courseId & "/discussion/" & $root.id'
         authority:
           expr: >-
             ($lookup($root.users, $string(userId)).courseRole in ["admin", "staff", "ta", "tutor"]

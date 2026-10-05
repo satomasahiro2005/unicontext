@@ -11,7 +11,8 @@ import { createRestConnector, restConnector } from './connector.js';
 export async function connector(
   input: ConnectorFactoryInput,
 ): Promise<ConnectorModule<RestConfig>> {
-  const mapping = (input.config as { mapping?: unknown } | undefined)?.mapping;
+  const config = input.config as { mapping?: unknown; mappingVars?: unknown } | undefined;
+  const mapping = config?.mapping;
   if (mapping === undefined || mapping === null) return restConnector;
-  return createRestConnector(resolveMapping(mapping));
+  return createRestConnector(resolveMapping(mapping, { vars: config?.mappingVars }));
 }

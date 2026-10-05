@@ -6,6 +6,7 @@ import {
   ConfigError,
   ConnectorError,
   OfflineError,
+  parseProfile,
   type SecretStore,
   silentLogger,
 } from '@unicontext/core';
@@ -538,7 +539,7 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
       courseCode: 'CS101',
       academicYear: 2026,
       term: 'Fall',
-      url: 'https://edstem.org/us/courses/55',
+      url: 'https://edstem.org/au/courses/55',
     });
 
     const announcements = entities.filter((e) => e.kind === 'announcement');
@@ -550,7 +551,7 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
       importance: 'high',
       scope: 'course',
       category: 'Announcements',
-      url: 'https://edstem.org/us/courses/55/discussion/1001',
+      url: 'https://edstem.org/au/courses/55/discussion/1001',
       courseOfferingId: course?.id,
     });
     const threads = entities.filter((e) => e.kind === 'thread') as unknown as {
@@ -610,6 +611,86 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
       'Same question here.': 'discussion',
     });
     await adapter.dispose();
+  });
+
+  it('maps Ed sessions onto the profile terms and links into the account region', async () => {
+    const profile = parseProfile(`
+id: sample
+academicCalendar:
+  timezone: Asia/Tokyo
+  terms:
+    - { id: '2026-1', name: '2026年度 前期', termCode: 前期, year: 2026, start: '2026-04-01', end: '2026-09-30' }
+    - { id: '2026-2', name: '2026年度 後期', termCode: 後期, year: 2026, start: '2026-10-01', end: '2027-03-31' }
+`);
+    const course = async (
+      payload: Record<string, unknown>,
+      spec: MappingSpec = edSpec(),
+    ): Promise<Record<string, unknown> | undefined> => {
+      const out = await createMappedNormalizer(spec).normalize(
+        {
+          id: 'raw:c',
+          sourceId: 'src',
+          sourceType: 'edstem.course',
+          externalId: String(payload.id),
+          payload,
+          fetchedAt: '2026-10-05T00:00:00.000Z',
+          sourceUpdatedAt: undefined,
+          contentHash: 'h',
+        },
+        createNormalizeContext({ sourceId: 'src', sourceSystem: 'edstem', profile }),
+      );
+      expect(out.warnings).toEqual([]);
+      return out.entities[0]?.entity as Record<string, unknown> | undefined;
+    };
+    // the live payloads of a Shizuoka student's two Ed courses (AU region)
+    expect(
+      await course({
+        id: 41566,
+        code: 'db2026',
+        name: 'データベースシステム論',
+        year: '2026',
+        session: 'Semester 2',
+        status: 'active',
+        role: 'student',
+      }),
+    ).toMatchObject({
+      academicYear: 2026,
+      term: '後期',
+      courseCode: 'db2026',
+      url: 'https://edstem.org/au/courses/41566',
+      extra: { session: 'Semester 2' },
+    });
+    // "X" is a placeholder, not a term: no term rather than a wrong one
+    const past = await course({
+      id: 28169,
+      code: 'db2025',
+      name: 'データベースシステム論',
+      year: '2025',
+      session: 'X',
+    });
+    expect(past).toMatchObject({ academicYear: 2025, extra: { session: 'X' } });
+    expect(past?.term).toBeUndefined();
+    // a year the calendar does not cover still maps through the term layout
+    expect((await course({ id: 1, code: 'c', name: 'n', year: '2025', session: 'S1' }))?.term).toBe(
+      '前期',
+    );
+
+    // a US account: mappingVars from the source config
+    const us = await mcpDefault({
+      sourceId: 'src',
+      config: { mapping: 'edstem-mcp', mappingVars: { region: 'us' } },
+    });
+    const usSpec = (us.createNormalizer({} as never) as unknown as { spec: MappingSpec }).spec;
+    expect(usSpec.vars).toEqual({ region: 'us' });
+    expect((await course({ id: 7, name: 'x', year: '2026', session: 'Fall' }, usSpec))?.url).toBe(
+      'https://edstem.org/us/courses/7',
+    );
+    await expect(
+      mcpDefault({
+        sourceId: 'src',
+        config: { mapping: 'edstem-mcp', mappingVars: { regoin: 'us' } },
+      }),
+    ).rejects.toBeInstanceOf(ConfigError);
   });
 
   it('turns the server\'s "re-authenticate" error into auth_required', async () => {

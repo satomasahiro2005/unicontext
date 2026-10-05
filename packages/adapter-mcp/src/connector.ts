@@ -60,6 +60,7 @@ export function createMcpConnector(
     const hit = cache.get(ctx);
     if (hit) return hit;
     const loaded = resolveMapping(ctx.config.mapping, {
+      vars: (ctx.config as { mappingVars?: unknown }).mappingVars,
       builtinDir: MAPPINGS_DIR,
       ...(options.baseDir ? { baseDir: options.baseDir } : {}),
     });

@@ -194,3 +194,135 @@ describe('IdentityResolver', () => {
     db2.close();
   });
 });
+
+describe('discussion platform courses (EdStem) against the academic system', () => {
+  // A Shizuoka student's real case: Ed course "データベースシステム論" (code db2026, session
+  // "Semester 2" → 後期 through the profile) and the LCU / syllabus offering with code 77403030.
+  const lcu = offering('courseOffering:lcu', {
+    title: 'データベースシステム論',
+    courseCode: '77403030',
+    academicYear: 2026,
+    term: '後期',
+    instructorNames: ['山本 泰生'],
+    schedule: [{ dayOfWeek: 4, period: 2 }],
+  });
+  const ed = (o: Partial<CourseOffering> = {}): CourseOffering =>
+    offering('courseOffering:ed', {
+      title: 'データベースシステム論',
+      courseCode: 'db2026',
+      academicYear: 2026,
+      term: '後期',
+      ...o,
+    });
+
+  it('links an exact title in the same year and term although the codes differ', () => {
+    const m = scoreOfferingMatch(
+      toCandidate(lcu, 'livecampusu', 'registrar'),
+      toCandidate(ed(), 'edstem', 'platform'),
+    );
+    expect(m.decision).toBe('link');
+    expect(m.evidence.join(' ')).toContain('course codes from different systems');
+    // two registrar codes that differ still count against a match
+    expect(scoreOfferingMatch(toCandidate(lcu), toCandidate(ed())).decision).toBe('none');
+  });
+
+  it('treats Ed session labels as terms and placeholders as unknown', () => {
+    expect(normalizeTerm('Semester 2')).toBe('second');
+    expect(normalizeTerm('S1')).toBe('first');
+    const cand = (term: string) => toCandidate(ed({ term }), 'edstem', 'platform');
+    const academic = toCandidate(lcu, 'livecampusu', 'registrar');
+    expect(scoreOfferingMatch(academic, cand('Semester 2')).decision).toBe('link');
+    expect(scoreOfferingMatch(academic, cand('Semester 1')).veto).toMatch(/term differs/);
+    // "X" (a placeholder session) neither vetoes nor counts
+    expect(scoreOfferingMatch(academic, cand('X')).decision).toBe('link');
+    // another academic year is another offering (§8)
+    const past = toCandidate(ed({ academicYear: 2025, term: undefined }), 'edstem', 'platform');
+    expect(scoreOfferingMatch(academic, past).veto).toMatch(/year differs/);
+  });
+
+  it('auto-links the Ed course into the LCU + syllabus group and keeps last year apart', () => {
+    const db = openDatabase();
+    const entities = new EntityStore(db);
+    const lcuId = stableId('courseOffering', 'livecampusu', '1');
+    const sylId = stableId('courseOffering', 'syllabus', '1');
+    const edNow = stableId('courseOffering', 'edstem', '41566');
+    const edPast = stableId('courseOffering', 'edstem', '28169');
+    entities.upsert({ ...lcu, id: lcuId }, { sourceId: 'livecampusu', at: '2026-04-01T00:00:00Z' });
+    entities.upsert({ ...lcu, id: sylId }, { sourceId: 'syllabus', at: '2026-04-02T00:00:00Z' });
+    entities.upsert(ed({ id: edNow }), { sourceId: 'edstem' });
+    entities.upsert(ed({ id: edPast, courseCode: 'db2025', academicYear: 2025, term: undefined }), {
+      sourceId: 'edstem',
+    });
+    const r = new IdentityResolver(db, {
+      sourcePriority: (s) => (s === 'livecampusu' ? 0 : 1),
+      codeScheme: (s) => (s === 'edstem' ? 'platform' : 'registrar'),
+    });
+    r.resolveCourseOfferings();
+    expect(r.getLink(lcuId, edNow)?.status).toBe('auto');
+    expect(r.getLink(sylId, edNow)?.status).toBe('auto');
+    expect(r.expand(edNow)).toEqual([lcuId, sylId, edNow]);
+    expect(r.expand(edPast)).toEqual([edPast]);
+    expect(r.listLinks({ entityId: edPast })).toEqual([]);
+
+    // without knowing that Ed codes are platform labels, nothing links (the pre-fix behaviour)
+    const db2 = openDatabase();
+    const e2 = new EntityStore(db2);
+    e2.upsert({ ...lcu, id: lcuId }, { sourceId: 'livecampusu' });
+    e2.upsert(ed({ id: edNow }), { sourceId: 'edstem' });
+    const r2 = new IdentityResolver(db2);
+    r2.resolveCourseOfferings();
+    expect(r2.getLink(lcuId, edNow)).toBeUndefined();
+    db.close();
+    db2.close();
+  });
+
+  it('with several same-titled offerings links only to the one the student takes', () => {
+    const db = openDatabase();
+    const entities = new EntityStore(db);
+    const secA = stableId('courseOffering', 'syllabus', 'A');
+    const secB = stableId('courseOffering', 'syllabus', 'B');
+    const edId = stableId('courseOffering', 'edstem', '1');
+    const section = (code: string, teacher: string) => ({
+      title: '英語I',
+      academicYear: 2026,
+      term: '後期',
+      courseCode: code,
+      instructorNames: [teacher],
+    });
+    entities.upsert(offering(secA, section('E101', '山田太郎')), { sourceId: 'syllabus' });
+    entities.upsert(offering(secB, section('E102', '佐藤花子')), { sourceId: 'syllabus' });
+    entities.upsert(
+      offering(edId, { title: '英語I', courseCode: 'eng', academicYear: 2026, term: '後期' }),
+      { sourceId: 'edstem' },
+    );
+    const codeScheme = (s: string | undefined) => (s === 'edstem' ? 'platform' : 'registrar');
+    const r = new IdentityResolver(db, { codeScheme });
+    r.resolveCourseOfferings();
+    // not enrolled in either: both are only suggestions for `unicontext confirm`
+    expect(r.getLink(edId, secA)?.status).toBe('suggested');
+    expect(r.getLink(edId, secB)?.status).toBe('suggested');
+
+    const me = stableId('person', 'livecampusu', 'me');
+    entities.upsert({ id: me, kind: 'person', name: '本人', isSelf: true } as never, {
+      sourceId: 'livecampusu',
+    });
+    entities.upsert(
+      {
+        id: stableId('enrollment', 'livecampusu', 'B'),
+        kind: 'enrollment',
+        personId: me,
+        courseOfferingId: secB,
+        role: 'student',
+        status: 'active',
+      } as never,
+      { sourceId: 'livecampusu' },
+    );
+    new IdentityResolver(db, { codeScheme }).resolveCourseOfferings();
+    const r3 = new IdentityResolver(db, { codeScheme });
+    expect(r3.getLink(edId, secB)?.status).toBe('auto');
+    expect(r3.getLink(edId, secB)?.evidence.join(' ')).toContain('enrolled');
+    expect(r3.getLink(edId, secA)?.status).toBe('suggested');
+    expect(r3.expand(secA)).toEqual([secA]);
+    db.close();
+  });
+});

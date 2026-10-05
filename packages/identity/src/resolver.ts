@@ -15,6 +15,7 @@ import {
 } from '@unicontext/database';
 import { and, asc, eq, inArray, or } from 'drizzle-orm';
 import {
+  type CodeScheme,
   DEFAULT_THRESHOLDS,
   isTitleOnly,
   type MatchResult,
@@ -32,6 +33,11 @@ export interface IdentityResolverOptions {
    * Default: earliest stored entity wins.
    */
   sourcePriority?: (sourceId: string | undefined) => number;
+  /**
+   * Whether a source's course codes are the university's registrar codes or a platform's own labels
+   * (Ed, an LMS). Default: registrar (codes are compared).
+   */
+  codeScheme?: (sourceId: string | undefined) => CodeScheme | undefined;
 }
 
 export interface ResolveReport {
@@ -41,6 +47,7 @@ export interface ResolveReport {
 }
 
 const LIVE: IdentityLinkStatus[] = ['auto', 'confirmed'];
+const ENROLLED_EVIDENCE = 'the only offering with this title the student is enrolled in';
 
 function ordered(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
@@ -55,6 +62,7 @@ export class IdentityResolver {
   private readonly thresholds: MatchThresholds;
   private readonly entities: EntityStore;
   private readonly priority: (sourceId: string | undefined) => number;
+  private readonly codeScheme: (sourceId: string | undefined) => CodeScheme | undefined;
   private cache: Map<string, string[]> | undefined;
 
   constructor(
@@ -65,6 +73,7 @@ export class IdentityResolver {
     this.thresholds = options.thresholds ?? DEFAULT_THRESHOLDS;
     this.entities = new EntityStore(db, { clock: this.clock });
     this.priority = options.sourcePriority ?? (() => 0);
+    this.codeScheme = options.codeScheme ?? (() => undefined);
   }
 
   getLink(a: string, b: string): IdentityLink | undefined {
@@ -161,9 +170,10 @@ export class IdentityResolver {
 
   /** Match CourseOfferings from different sources and persist auto/suggested links. */
   resolveCourseOfferings(): ResolveReport {
-    const offerings = this.entities
-      .list('courseOffering')
-      .map((o) => toCandidate(o, this.entities.meta(o.id)?.sourceId));
+    const offerings = this.entities.list('courseOffering').map((o) => {
+      const sourceId = this.entities.meta(o.id)?.sourceId;
+      return toCandidate(o, sourceId, this.codeScheme(sourceId));
+    });
     const report: ResolveReport = { linked: [], suggested: [], removed: 0 };
     const pairs: { a: OfferingCandidate; b: OfferingCandidate; m: MatchResult }[] = [];
     for (let i = 0; i < offerings.length; i++) {
@@ -201,10 +211,37 @@ export class IdentityResolver {
   }
 
   /**
-   * Links are unioned transitively, so a title-only offering (a folder named 「英語I」) auto-linked
-   * to two different offerings with that title (two sections from the syllabus) would merge those
-   * sections into one course. When the offerings a title-only one would auto-link to are not all
-   * linked to each other on their own evidence (or by the user), those links become suggestions.
+   * Offerings the student takes: targets of their active student enrollments (the self person's,
+   * when one is marked).
+   */
+  private enrolledOfferingIds(): Set<string> {
+    const self = new Set(
+      this.entities
+        .list('person')
+        .filter((p) => p.isSelf)
+        .map((p) => p.id as string),
+    );
+    return new Set(
+      this.entities
+        .list('enrollment')
+        .filter(
+          (e) =>
+            e.status === 'active' &&
+            e.role === 'student' &&
+            (self.size === 0 || self.has(e.personId)),
+        )
+        .map((e) => e.courseOfferingId as string),
+    );
+  }
+
+  /**
+   * Links are unioned transitively, so a title-only offering (a folder named 「英語I」, an Ed
+   * course) auto-linked to two different offerings with that title (two sections from the
+   * syllabus) would merge those sections into one course. When the offerings a title-only one would
+   * auto-link to are not all linked to each other on their own evidence (or by the user), those
+   * links become suggestions, unless exactly one of those offerings (with what it is linked to) is
+   * one the student is enrolled in: the student's own course is then the one meant, and only the
+   * links to the others become suggestions.
    */
   private demoteAmbiguousTitleOnly(
     pairs: { a: OfferingCandidate; b: OfferingCandidate; m: MatchResult }[],
@@ -227,16 +264,32 @@ export class IdentityResolver {
         targets.set(hub.id, [...(targets.get(hub.id) ?? []), other.id]);
       }
     }
+    let enrolled: Set<string> | undefined;
     for (const [hub, others] of targets) {
       const ambiguous = others.some((x, i) =>
         others.slice(i + 1).some((y) => !linked.has(key(x, y))),
       );
       if (!ambiguous) continue;
-      for (const m of byHub.get(hub) ?? []) {
-        if (m.decision !== 'link') continue;
+      // Groups of targets that are linked to each other; keep the links into the one enrolled group.
+      enrolled ??= this.enrolledOfferingIds();
+      let groups: string[][] = [];
+      for (const x of others) {
+        const hits = groups.filter((members) => members.some((y) => linked.has(key(x, y))));
+        groups = [...groups.filter((g) => !hits.includes(g)), [x, ...hits.flat()]];
+      }
+      const mine = groups.filter((g) => g.some((x) => enrolled?.has(x)));
+      const keep = mine.length === 1 ? new Set(mine[0]) : new Set<string>();
+      const matches = byHub.get(hub) ?? [];
+      others.forEach((other, i) => {
+        const m = matches[i];
+        if (!m || m.decision !== 'link') return;
+        if (keep.has(other)) {
+          if (!m.evidence.includes(ENROLLED_EVIDENCE)) m.evidence.push(ENROLLED_EVIDENCE);
+          return;
+        }
         m.decision = 'suggest';
         m.evidence.push('same title matches several different offerings; needs confirmation');
-      }
+      });
     }
   }
 

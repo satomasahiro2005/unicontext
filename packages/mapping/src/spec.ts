@@ -161,6 +161,12 @@ export const MappingSpecSchema = z
     defaultAuthority: z.string().default('unknown'),
     capabilities: z.array(CapabilitySchema).min(1),
     testedVersion: z.string().optional(),
+    /**
+     * Named constants for expressions (`$vars.<name>`), e.g. a web host or region that differs per
+     * account. These are defaults: a source config overrides them with `mappingVars` (only names
+     * declared here; see resolveMapping). Never credentials.
+     */
+    vars: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
     resources: z.array(ResourceSchema).min(1),
     entities: z.record(z.string(), z.array(EntityRuleSchema)).default({}),
     facts: z.array(FactRuleSchema).default([]),

@@ -65,11 +65,12 @@ sources:
     command: C:\Program Files\nodejs\node.exe
     args: ['C:\Users\<you>\mcp\edstem-cli\dist\edstem-mcp.js']
     env:
-      EDSTEM_BASE_URL: https://us.edstem.org/api/ # region of your Ed account (us / au / ...)
+      EDSTEM_BASE_URL: https://edstem.org/api/ # AU region; US accounts: https://us.edstem.org/api/
       EDSTEM_WIDGETS: '0' # text-only tools, no MCP Apps views
     envSecrets:
       - { name: EDSTEM_TOKEN, secret: ed-token } # keychain entry edstem/ed-token
     mapping: edstem-mcp
+    mappingVars: { region: au } # web links https://edstem.org/au/...; `us` for a US account
     timeoutMs: 60000
     minIntervalMs: 500
     schedule: 30m
@@ -80,9 +81,21 @@ sources:
 - The child process gets only `PATH`, `USERPROFILE`, ... plus `env` and `envSecrets` (never the rest
   of your environment). The server reads `EDSTEM_TOKEN` first; its own token file
   (`~/.config/edstem-cli/token`) is only a fallback and is not used here.
-- Region: the token page you used (`https://edstem.org/us/settings/api-tokens`) is the US region,
-  hence `https://us.edstem.org/api/`. For another region change `EDSTEM_BASE_URL` and copy the
-  mapping with the URL prefix `https://edstem.org/<region>/` (web links only).
+- Region: an Ed account lives in one region, and the API host and the web links must both match it.
+
+  | Region | `EDSTEM_BASE_URL`            | `mappingVars.region` | Web links                   |
+  | ------ | ---------------------------- | -------------------- | --------------------------- |
+  | AU     | `https://edstem.org/api/`    | `au` (default)       | `https://edstem.org/au/...` |
+  | US     | `https://us.edstem.org/api/` | `us`                 | `https://edstem.org/us/...` |
+
+  The Shizuoka student's account is **AU** (`https://edstem.org/api/`, the server's default). How
+  to tell: the address bar after signing in to Ed reads `https://edstem.org/<region>/dashboard`, and
+  the API tokens page is `https://edstem.org/<region>/settings/api-tokens`. With the wrong host the
+  first sync fails as `要ログイン` (Ed answers 401 for a token of another region); with the right
+  host but the wrong `mappingVars.region` the sync works but the cited links open the wrong region.
+  AU timestamps also come back with Sydney offsets (`+10:00` / `+11:00`). `mappingVars` may only name
+  vars the mapping declares (a typo is a config error); changing it re-normalizes the stored items.
+
 - Restart the daemon after editing config.yaml (`unicontext daemon stop`, then start it again or
   sign in again; the Startup launcher starts it at login).
 
@@ -121,6 +134,22 @@ The token is checked lazily by the server: `login` succeeding only proves that t
 The first sync is what talks to Ed; a rejected token shows up there as `auth_required`.
 
 ## Mapping summary
+
+Courses: Ed's `year` is the academic year, and `session` is free text typed by the course admin.
+The mapping turns it into the university's term name through the profile's academic calendar
+(`$profileTerm`: "Semester 2" / "S2" / 第2学期 → 後期, "Spring" → 前期, "Fall" → 後期, also for a
+year the calendar does not list). A session that is not a term stays unknown rather than a wrong
+literal; the observed case is `"session": "X"` on the 2025 course `db2025` (a placeholder, its
+threads ran Oct 2025 – Feb 2026). The raw value is kept in `extra.session`.
+
+Identity (§14): Ed course codes (`db2026`) are Ed's own labels, not 学務 codes, so a different code
+is not evidence against a match, and an Ed course counts as a title-only source. An exact title in
+the same academic year and a compatible term links it to the LiveCampusU / syllabus offering
+automatically (`identity_links`, method `course-offering-matcher`); when several same-titled
+offerings qualify, the one the student is enrolled in wins and the rest become candidates in
+`unicontext confirm --list`. A different academic year never links (the 2025 Ed course stays a
+separate past offering), and `get_course` by title prefers the enrolled, current-term course over a
+same-titled past or catalog one.
 
 See [adapter-mcp.md](adapter-mcp.md#raw-types-and-mapping-tables). Announcements become
 `announcement` (authority `instructor-announcement`, importance `high` when pinned); other threads

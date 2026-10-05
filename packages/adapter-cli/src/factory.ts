@@ -9,7 +9,10 @@ import { createCliConnector, cliConnector, MAPPINGS_DIR } from './connector.js';
  * a mapping the generic module is returned (its adapter then reports the missing mapping).
  */
 export async function connector(input: ConnectorFactoryInput): Promise<ConnectorModule<CliConfig>> {
-  const mapping = (input.config as { mapping?: unknown } | undefined)?.mapping;
+  const config = input.config as { mapping?: unknown; mappingVars?: unknown } | undefined;
+  const mapping = config?.mapping;
   if (mapping === undefined || mapping === null) return cliConnector;
-  return createCliConnector(resolveMapping(mapping, { builtinDir: MAPPINGS_DIR }));
+  return createCliConnector(
+    resolveMapping(mapping, { builtinDir: MAPPINGS_DIR, vars: config?.mappingVars }),
+  );
 }

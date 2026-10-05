@@ -119,6 +119,11 @@ export interface ResolveMappingOptions {
   baseDir?: string;
   /** Directory of shipped mappings; `mapping: canvas-mcp` finds `<builtinDir>/canvas-mcp.yaml`. */
   builtinDir?: string;
+  /**
+   * The source config's `mappingVars`: overrides for the mapping's declared `vars` (e.g. the Ed
+   * region). A name the mapping does not declare is a config error (catches typos).
+   */
+  vars?: unknown;
 }
 
 /**
@@ -126,6 +131,30 @@ export interface ResolveMappingOptions {
  * file path, or the name of a shipped mapping.
  */
 export function resolveMapping(ref: unknown, options: ResolveMappingOptions = {}): MappingSpec {
+  return withMappingVars(loadMappingRef(ref, options), options.vars);
+}
+
+/** Apply a source config's `mappingVars` to a mapping (see ResolveMappingOptions.vars). */
+export function withMappingVars(spec: MappingSpec, vars: unknown): MappingSpec {
+  if (vars === undefined || vars === null) return spec;
+  if (typeof vars !== 'object' || Array.isArray(vars))
+    throw new ConfigError('"mappingVars" must be a map of names to values');
+  const out = { ...spec.vars };
+  for (const [name, value] of Object.entries(vars as Record<string, unknown>)) {
+    if (!(name in spec.vars))
+      throw new ConfigError(
+        `mappingVars.${name}: mapping ${spec.id} declares no such var (${
+          Object.keys(spec.vars).join(', ') || 'none'
+        })`,
+      );
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean')
+      throw new ConfigError(`mappingVars.${name} must be a string, number or boolean`);
+    out[name] = value;
+  }
+  return { ...spec, vars: out };
+}
+
+function loadMappingRef(ref: unknown, options: ResolveMappingOptions): MappingSpec {
   if (ref === undefined || ref === null) throw new ConfigError('Source config needs a "mapping"');
   if (typeof ref !== 'string') return parseMappingSpec(ref);
   if (ref.includes('\n')) return parseMappingSpec(ref);

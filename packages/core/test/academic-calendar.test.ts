@@ -7,8 +7,10 @@ import {
   expandWeeklySlots,
   findTerm,
   loadProfile,
+  parseExternalTermLabel,
   parseProfile,
   termForDate,
+  termForExternalLabel,
 } from '../src/index.js';
 
 // Synthetic calendar (not a real university's dates).
@@ -43,6 +45,39 @@ academicCalendar:
     - { date: '2030-10-16', dayOfWeek: 1, note: 月曜授業 }
 `);
 const cal = profile.academicCalendar;
+
+describe('external term labels (Ed / Canvas sessions)', () => {
+  it('parses ordinal and season labels, and nothing else', () => {
+    expect(parseExternalTermLabel('Semester 2')).toEqual({ kind: 'ordinal', n: 2 });
+    expect(parseExternalTermLabel('S1')).toEqual({ kind: 'ordinal', n: 1 });
+    expect(parseExternalTermLabel('2nd Semester')).toEqual({ kind: 'ordinal', n: 2 });
+    expect(parseExternalTermLabel('第２学期')).toEqual({ kind: 'ordinal', n: 2 });
+    expect(parseExternalTermLabel('Fall 2026')).toEqual({ kind: 'season', season: 'fall' });
+    expect(parseExternalTermLabel('Autumn')).toEqual({ kind: 'season', season: 'fall' });
+    expect(parseExternalTermLabel('春学期')).toEqual({ kind: 'season', season: 'spring' });
+    // Ed's session is free text; a placeholder such as "X" is not a term
+    expect(parseExternalTermLabel('X')).toBeUndefined();
+    expect(parseExternalTermLabel('Week 2')).toBeUndefined();
+    expect(parseExternalTermLabel('')).toBeUndefined();
+  });
+
+  it('maps them onto the profile terms through the calendar', () => {
+    const at = (label: string, year?: number) => termForExternalLabel(cal, label, year);
+    expect(at('Semester 2', 2030)).toMatchObject({ termCode: '後期', year: 2030 });
+    expect(at('Semester 2', 2030)?.term?.id).toBe('2030-2');
+    expect(at('S1', 2030)?.termCode).toBe('前期');
+    expect(at('Spring', 2030)?.termCode).toBe('前期');
+    expect(at('Fall', 2030)?.termCode).toBe('後期');
+    // Winter of academic year 2030 is January 2031, still 後期
+    expect(at('Winter', 2030)?.termCode).toBe('後期');
+    expect(at('後期', 2030)?.term?.id).toBe('2030-2');
+    // a year the calendar does not cover: the layout of the nearest year, no term definition
+    expect(at('Semester 2', 2029)).toEqual({ termCode: '後期', year: 2029, term: undefined });
+    expect(at('Semester 3', 2030)).toBeUndefined();
+    expect(at('X', 2029)).toBeUndefined();
+    expect(termForExternalLabel({ ...cal, terms: [] }, 'Semester 2', 2030)).toBeUndefined();
+  });
+});
 
 describe('academic calendar arithmetic', () => {
   it('local date helpers', () => {

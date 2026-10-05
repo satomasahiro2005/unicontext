@@ -1,3 +1,5 @@
+import { parseExternalTermLabel } from '@unicontext/core';
+
 /**
  * Text normalization for matching course titles across systems (§14), e.g.
  * LCU「データベースシステム論」/ Teams「2026 DB Systems」/ EdStem「DBSys」→ "dbsys".
@@ -76,14 +78,31 @@ export function extractYear(title: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
-/** Term marker in a title or term field, normalized to "first" | "second" | other. */
+/**
+ * Term marker in a title or term field, normalized to "first" | "second" | "full-year" |
+ * "intensive", or the compacted label when it is none of those (see isKnownTerm).
+ */
 export function normalizeTerm(term: string | undefined): string | undefined {
   if (!term) return undefined;
   const t = normalizeText(term);
+  // "Semester 2", "S1", "2nd semester", 第2学期 (an LMS / Ed session) = the n-th half of the year
+  const external = parseExternalTermLabel(t);
+  if (external?.kind === 'ordinal' && external.n <= 2) return external.n === 1 ? 'first' : 'second';
   if (/前期|前学期|春|spring|第1|1q|2q/.test(t)) return 'first';
   if (/後期|後学期|秋|fall|autumn|第2|3q|4q/.test(t)) return 'second';
   if (/通年|full/.test(t)) return 'full-year';
+  if (/集中|intensive/.test(t)) return 'intensive';
   return t.replace(/\s/g, '');
+}
+
+const KNOWN_TERMS = new Set(['first', 'second', 'full-year', 'intensive']);
+
+/**
+ * A normalized term that names a real term. Free-text session names (Ed's placeholder "X") are
+ * unknown: they neither veto nor support a match.
+ */
+export function isKnownTerm(normalized: string | undefined): normalized is string {
+  return normalized !== undefined && KNOWN_TERMS.has(normalized);
 }
 
 function bigrams(s: string): string[] {

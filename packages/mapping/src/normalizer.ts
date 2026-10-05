@@ -4,7 +4,12 @@ import {
   type EntityKind,
   type JsonValue,
 } from '@unicontext/canonical-model';
-import { contentHash } from '@unicontext/core';
+import {
+  contentHash,
+  parseExternalTermLabel,
+  termForDate,
+  termForExternalLabel,
+} from '@unicontext/core';
 import {
   detectSchemaDrift,
   type FactInput,
@@ -20,6 +25,7 @@ import {
   coerceExplicit,
   coerceForField,
   toIsoDateTime,
+  toLocalDate,
   toNumber,
   toStringValue,
 } from './coerce.js';
@@ -47,6 +53,39 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** Term names a label can carry when there is no academic calendar to map it through. */
+const UNIVERSITY_TERM_WORD = /(前|後)学?期|通年|集中/;
+
+/**
+ * Functions the mapping expressions can call (bound per raw item):
+ *  - `$profileTerm(label, year)` an external term label (Ed session "Semester 2", "S2", "Spring",
+ *    前期 …) of academic year `year` → the university's term name (後期) through the profile's
+ *    academic calendar. Undefined when the label is not a term (Ed's placeholder "X") or does not
+ *    fit the calendar. Without a calendar, a recognizable term label is kept as written.
+ *  - `$profileTermAt(date)` → `{year, term}` of the profile term containing that date (local date
+ *    in the source time zone), or undefined.
+ */
+function calendarFunctions(ctx: NormalizeContext): Bindings {
+  const cal = ctx.profile?.academicCalendar;
+  const hasTerms = cal !== undefined && cal.terms.length > 0;
+  return {
+    profileTerm: (label: unknown, year: unknown): string | undefined => {
+      const text = toStringValue(label)?.trim();
+      if (!text) return undefined;
+      if (hasTerms) return termForExternalLabel(cal, text, toNumber(year))?.termCode;
+      return parseExternalTermLabel(text) || UNIVERSITY_TERM_WORD.test(text.normalize('NFKC'))
+        ? text
+        : undefined;
+    },
+    profileTermAt: (date: unknown): { year: number; term: string } | undefined => {
+      if (!hasTerms) return undefined;
+      const local = toLocalDate(date, ctx.timezone);
+      const t = local ? termForDate(cal, local) : undefined;
+      return t ? { year: t.year, term: t.termCode ?? t.name } : undefined;
+    },
+  };
+}
+
 function toJson(v: unknown): JsonValue | undefined {
   if (v === undefined) return undefined;
   try {
@@ -59,12 +98,16 @@ function toJson(v: unknown): JsonValue | undefined {
 
 class RuleRunner {
   readonly warnings: string[] = [];
+  private readonly functions: Bindings;
 
   constructor(
     private readonly item: RawItemView,
     private readonly ctx: NormalizeContext,
     private readonly payload: unknown,
-  ) {}
+    private readonly vars: MappingSpec['vars'] = {},
+  ) {
+    this.functions = calendarFunctions(ctx);
+  }
 
   private warn(message: string): void {
     const text = `${this.item.sourceType}/${this.item.externalId}: ${message}`;
@@ -77,6 +120,8 @@ class RuleRunner {
       tz: this.ctx.timezone,
       sourceId: this.ctx.sourceId,
       externalId: this.item.externalId,
+      vars: this.vars,
+      ...this.functions,
     };
   }
 
@@ -283,7 +328,8 @@ export function createMappedNormalizer(spec: MappingSpec): MappedNormalizer {
   const sourceTypes = [
     ...new Set([...Object.keys(spec.entities), ...spec.facts.map((f) => f.sourceType)]),
   ];
-  const version = `${spec.version}.${contentHash({ e: spec.entities, f: spec.facts, d: spec.drift }).slice(0, 8)}`;
+  // vars take part: another Ed region (mappingVars) changes every web link, so items re-normalize.
+  const version = `${spec.version}.${contentHash({ e: spec.entities, f: spec.facts, d: spec.drift, ...(Object.keys(spec.vars).length > 0 ? { v: spec.vars } : {}) }).slice(0, 8)}`;
 
   return {
     id: `mapped:${spec.id}`,
@@ -291,7 +337,7 @@ export function createMappedNormalizer(spec: MappingSpec): MappedNormalizer {
     sourceTypes,
     spec,
     async normalize(item: RawItemView, ctx: NormalizeContext): Promise<NormalizeOutput> {
-      const runner = new RuleRunner(item, ctx, item.payload);
+      const runner = new RuleRunner(item, ctx, item.payload, spec.vars);
       const entities: NormalizedEntity[] = [];
       const facts: FactInput[] = [];
       const rules = spec.entities[item.sourceType] ?? [];

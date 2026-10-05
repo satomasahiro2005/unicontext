@@ -52,6 +52,7 @@ productVersion?, warnings?}`:
 | `facts`                      | Explicit facts (value, evidence, validity) from raw items.                                                                                                                                           |
 | `drift`                      | Mini schema per source type for schema drift detection (§73).                                                                                                                                        |
 | `strictDrift`                | Also report fields not listed in `drift` (default `false`).                                                                                                                                          |
+| `vars`                       | Named constants for expressions (`$vars.region`), e.g. a per-account web host. A source config overrides declared ones with `mappingVars: {region: us}`; undeclared names are config errors.         |
 
 Unknown keys are errors everywhere (typos should not pass silently).
 
@@ -194,7 +195,12 @@ warning. Raw items never contain credentials; credentials only travel through `c
 ## JSONata notes
 
 - Variables: `$root` (the whole payload, useful inside `forEach`), `$tz`, `$sourceId`,
-  `$externalId`.
+  `$externalId`, `$vars` (the mapping's `vars` after `mappingVars`).
+- Calendar functions (university profile): `$profileTerm(label, year)` maps an external term label
+  ("Semester 2", "S2", "Spring", 第2学期, 後期) of an academic year onto the university's term name
+  (後期) through the academic calendar, and returns nothing for a label that is not a term (an Ed
+  placeholder such as "X"). `$profileTermAt(date)` gives `{year, term}` of the term containing a
+  date.
 - `a != b` with a missing `a` is **false** in JSONata, not true: write `$not(a = b)`.
 - A path that matches one element returns the element, not a one-element array; use `select`
   with an array path or wrap with `[]` where it matters (`items[]`).

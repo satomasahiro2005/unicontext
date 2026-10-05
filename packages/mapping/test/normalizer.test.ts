@@ -1,7 +1,8 @@
 import { createNormalizeContext, type RawItemView } from '@unicontext/connector-sdk';
 import { CanonicalEntitySchema, stableId } from '@unicontext/canonical-model';
 import { describe, expect, it } from 'vitest';
-import { createMappedNormalizer, parseMappingSpec } from '../src/index.js';
+import { parseProfile } from '@unicontext/core';
+import { createMappedNormalizer, parseMappingSpec, withMappingVars } from '../src/index.js';
 import { ANNOUNCEMENTS, ASSIGNMENTS, canvasYaml, COURSES } from './helpers.js';
 
 const SOURCE_ID = 'canvas-src';
@@ -288,5 +289,72 @@ strictDrift: true
     );
     expect(out.entities[0]?.entity).toMatchObject({ title: 'T' });
     expect(out.warnings?.some((w) => /points/.test(w))).toBe(true);
+  });
+});
+
+describe('mapping vars and calendar functions', () => {
+  const yaml = `
+id: t
+product: t
+capabilities: [courses]
+vars: { host: 'https://a.example' }
+resources:
+  - { name: c, call: {}, sourceType: t.course, externalId: '$string(id)' }
+entities:
+  t.course:
+    - kind: courseOffering
+      fields:
+        title: name
+        term: '$profileTerm(session, year)'
+        academicYear: '$profileTermAt(start).year'
+        url: '$vars.host & "/" & id'
+`;
+  const profile = parseProfile(`
+id: sample
+academicCalendar:
+  timezone: Asia/Tokyo
+  terms:
+    - { id: '2026-1', name: '2026年度 前期', termCode: 前期, year: 2026, start: '2026-04-01', end: '2026-09-30' }
+    - { id: '2026-2', name: '2026年度 後期', termCode: 後期, year: 2026, start: '2026-10-01', end: '2027-03-31' }
+`);
+  const run = async (
+    payload: unknown,
+    s = parseMappingSpec(yaml),
+    withProfile = true,
+  ): Promise<Record<string, unknown> | undefined> => {
+    const c = createNormalizeContext({
+      sourceId: SOURCE_ID,
+      sourceSystem: 't',
+      timezone: 'Asia/Tokyo',
+      ...(withProfile ? { profile } : {}),
+    });
+    const out = await createMappedNormalizer(s).normalize(view('t.course', '1', payload), c);
+    return out.entities[0]?.entity as Record<string, unknown> | undefined;
+  };
+
+  it('maps session labels through the academic calendar', async () => {
+    const e = await run({
+      id: 1,
+      name: 'n',
+      session: 'Semester 2',
+      year: '2026',
+      start: '2027-01-20T09:00:00+09:00',
+    });
+    expect(e).toMatchObject({ term: '後期', academicYear: 2026, url: 'https://a.example/1' });
+    expect((await run({ id: 1, name: 'n', session: 'X', year: '2026' }))?.term).toBeUndefined();
+    // without a profile: a term-like label is kept, a placeholder dropped
+    expect((await run({ id: 1, name: 'n', session: 'Fall' }, undefined, false))?.term).toBe('Fall');
+    expect((await run({ id: 1, name: 'n', session: '後期' }, undefined, false))?.term).toBe('後期');
+    expect((await run({ id: 1, name: 'n', session: 'X' }, undefined, false))?.term).toBeUndefined();
+  });
+
+  it('source config vars override the declared defaults and change the version', () => {
+    const base = parseMappingSpec(yaml);
+    const other = withMappingVars(base, { host: 'https://b.example' });
+    expect(other.vars).toEqual({ host: 'https://b.example' });
+    expect(createMappedNormalizer(other).version).not.toBe(createMappedNormalizer(base).version);
+    expect(withMappingVars(base, undefined)).toBe(base);
+    expect(() => withMappingVars(base, { hots: 'x' })).toThrow(/declares no such var/);
+    expect(() => withMappingVars(base, { host: { a: 1 } })).toThrow(/string, number or boolean/);
   });
 });
