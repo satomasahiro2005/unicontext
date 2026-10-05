@@ -1,4 +1,5 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { IncomingMessage } from 'node:http';
 import { localFile } from '@unicontext/context-engine';
 import { errorMessage, parseDuration, type Logger } from '@unicontext/core';
@@ -200,6 +201,31 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       .header('retry-after', String(Math.ceil(limiter.retryAfterMs(key) / 1000)))
       .send({ error: 'too_many_requests', error_description: 'slow down' });
 
+  // ---- icons (assets/brand, built by assets/brand/build.py) --------------------------------
+  // AI apps show the domain's favicon or serverInfo.icons next to the connection.
+  const brandDir = fileURLToPath(new URL('../../../../assets/brand/', import.meta.url));
+  const brand: Record<string, [string, string]> = {
+    '/favicon.ico': ['favicon.ico', 'image/x-icon'],
+    '/icon.svg': ['icon.svg', 'image/svg+xml'],
+    '/icon-192.png': ['icon-192.png', 'image/png'],
+    '/icon-512.png': ['icon-512.png', 'image/png'],
+    '/apple-touch-icon.png': ['icon-180.png', 'image/png'],
+  };
+  for (const [route, [file, type]] of Object.entries(brand)) {
+    const path = brandDir + file;
+    if (!existsSync(path)) continue;
+    app.get(route, (_request, reply) =>
+      reply.type(type).header('cache-control', 'public, max-age=86400').send(createReadStream(path)),
+    );
+  }
+  const icons = existsSync(brandDir + 'icon.svg')
+    ? [
+        { src: `${publicUrl.origin}/icon.svg`, mimeType: 'image/svg+xml', sizes: ['any'] },
+        { src: `${publicUrl.origin}/icon-512.png`, mimeType: 'image/png', sizes: ['512x512'] },
+        { src: `${publicUrl.origin}/icon-192.png`, mimeType: 'image/png', sizes: ['192x192'] },
+      ]
+    : undefined;
+
   // ---- discovery --------------------------------------------------------------------------
   const prm = async () => oauth.protectedResourceMetadata();
   app.get('/.well-known/oauth-protected-resource', prm);
@@ -385,6 +411,7 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
             proposals: runtime.proposals,
             logger: runtime.logger,
             version: options.version,
+            ...(icons ? { icons } : {}),
             surface: 'remote',
             allowWrite: hasScope(check.scope, WRITE_SCOPE),
             client: { id: check.clientId, name: check.clientName },

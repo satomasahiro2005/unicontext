@@ -89,6 +89,8 @@ export interface McpDeps {
   version?: string;
   /** Extra, already-safe source information (e.g. connector health) the daemon adds to `get_source`. */
   sourcesInfo?: () => unknown;
+  /** Icons announced in `serverInfo` (absolute URLs); AI apps show them next to the connection. */
+  icons?: { src: string; mimeType: string; sizes?: string[] }[];
   /**
    * `local` (default): every tool, including the propose-only writes. `remote`: the read-only
    * surface published through a tunnel to ChatGPT / claude.ai — tools that are not read-only are
@@ -280,7 +282,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const logger = deps.logger ?? silentLogger;
   const remote = deps.surface === 'remote';
   const server = new McpServer(
-    { name: MCP_SERVER_NAME, version: deps.version ?? DEFAULT_MCP_VERSION },
+    {
+      name: MCP_SERVER_NAME,
+      title: 'UniContext',
+      version: deps.version ?? DEFAULT_MCP_VERSION,
+      ...(deps.icons ? { icons: deps.icons } : {}),
+    },
     {
       instructions: remote
         ? deps.allowWrite
