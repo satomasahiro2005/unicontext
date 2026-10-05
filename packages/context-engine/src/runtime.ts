@@ -55,6 +55,8 @@ export interface UniContextOptions {
   schedules?: Record<string, string>;
   /** Campus/faculty of the student (config.yaml `student:`) for scoped calendar exceptions. */
   student?: StudentScope;
+  /** Sources turned off in config.yaml (`enabled: false`): left out of deadline coverage. */
+  disabledSources?: readonly string[];
 }
 
 export interface PipelineReport {
@@ -179,12 +181,13 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
   // Deadline coverage (coverage.ts): every source known to the raw store, with the capabilities of
   // its loaded connector (none when it failed to load) and its health. A source counts as stale after
   // three missed scheduled runs (at least 6 h; 24 h without a schedule).
+  const disabled = new Set(options.disabledSources ?? []);
   const coverageSources = (): CoverageSourceInput[] => {
     const stores = sync.stores;
     const intervals = new Map(scheduler.status().map((x) => [x.sourceId, x.intervalMs]));
     return stores.raw
       .listSources()
-      .filter((s) => s.id !== ADDITIONS_SOURCE_ID)
+      .filter((s) => s.id !== ADDITIONS_SOURCE_ID && !disabled.has(s.id))
       .map((s) => {
         let meta: ConnectorMetadata | undefined;
         let label: string | undefined;

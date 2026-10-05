@@ -159,6 +159,9 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
     ...(profile ? { profile } : {}),
     ...(config.timezone ? { timezone: config.timezone } : {}),
     ...(config.student ? { student: config.student } : {}),
+    disabledSources: Object.entries(config.sources)
+      .filter(([, s]) => s.enabled === false)
+      .map(([id]) => id),
     schedules: config.sync.schedules,
   });
   const proposals = new ProposalStore(path.join(paths.root, 'proposals'), { clock });
