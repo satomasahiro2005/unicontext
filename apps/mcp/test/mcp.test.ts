@@ -105,6 +105,7 @@ describe('MCP contract: tools listing', () => {
     const writeCapable = new Set([
       'correct_fact',
       'propose_pace_slot',
+      'ingest_lecture',
       'record_lecture',
       'add_deadline',
       'add_note',

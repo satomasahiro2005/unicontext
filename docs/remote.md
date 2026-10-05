@@ -29,8 +29,9 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
   `get_announcement`, `search_syllabus`, `get_syllabus`, `get_credit_summary`, …), each with
   `readOnlyHint: true` and an output schema. Results are kept small for ChatGPT (see
   [Result size](#result-size)).
-  With the `unicontext.write` scope only, also the record tools `record_lecture`, `add_deadline`,
-  `add_note`, `add_task`, `list_my_additions` and `retract_addition` (`readOnlyHint: false`,
+  With the `unicontext.write` scope only, also the record tools `ingest_lecture`,
+  `record_lecture`, `add_deadline`, `add_note`, `add_task`, `list_my_additions` and
+  `retract_addition` (`readOnlyHint: false`,
   `destructiveHint` only on `retract_addition`), and `open_announcement` (fetches the body of
   LiveCampusU notices that are unread there; this marks them read in LiveCampusU and cannot be
   undone, so it is `destructiveHint: true`, `openWorldHint: true` and ChatGPT asks first).
@@ -180,7 +181,62 @@ other ChatGPT chats, claude.ai and the local clients see the same deadlines and 
 - `add_task`: something to do, with or without a due date — what you say you have to do, or the
   study plan you work out with ChatGPT (「毎日TOEICの単語を30分」).
 - `add_note`: a memo, about a course or personal (「覚えておいて: ESは12月に3社」).
-- `record_lecture`: the summary and key points of a lecture (ChatGPT Record, or told in the chat).
+- `ingest_lecture`: a whole lecture recording or transcript (ChatGPT Record) in one call — see
+  [Lecture recordings](#lecture-recordings-ingest_lecture).
+- `record_lecture`: only the summary and key points of a lecture (to redo the lecture alone, or
+  when you tell ChatGPT about a lecture in the chat).
+
+### Lecture recordings (`ingest_lecture`)
+
+When ChatGPT (or any client with the write scope) is given a lecture recording or transcript and
+can reasonably tell the course and date, it calls `ingest_lecture` **without being asked**, in
+addition to answering whatever you asked. The tool description and the server instructions say
+so in Japanese and English: it does not ask whether to save, and does not ask again for a
+course, date or period that the conversation, the recording or the timetable tells. Safety comes
+from how it is stored, not from asking: everything is unconfirmed 「録音から」 and never changes
+what LiveCampusU or the LMS say.
+
+One call stores:
+
+- the lecture (`record_lecture` semantics): a summary and key points cut down to what is needed
+  to search and review later (not the transcript), and only the important timestamped segments;
+  chatter and conversations between other students are left out;
+- `deadlines[]`: only deadlines, exams, quizzes and preparation the lecturer actually stated
+  (「次回までに〜」 counts; merely having a next class does not);
+- `tasks[]`: what the student has to do;
+- `notes[]`: information that is not a deadline but is needed later (classroom operations,
+  attendance and submission procedure, grouping, special procedures, important warnings).
+
+Each part carries a verbatim `evidence` quote and its `recordingTimestamp`, and goes through the
+same path as `add_deadline` / `add_task` / `add_note` with `via: recording` (relative dates such
+as 次回 resolved from the lecture date, the timetable and the academic calendar; dedupe; conflicts
+with LiveCampusU; limits). `course` may be omitted: the class of the timetable at `lectureDate`
+(default today) and `period` is used. `period` may be omitted when the course has one class, or
+one continuous block (実験 5・6限), that day; separate classes of the same course on one day need
+the period, so they never overwrite each other.
+
+The result reports every part (`created`, `updated`, `duplicate`, `replayed`, `skipped`,
+`failed` with an error code) with the resolved dates and any conflicts; one bad part never drops
+the others (`outcome: partial`).
+
+**Re-running is safe.** Every part gets a deterministic idempotency key:
+
+| part     | key                                                           |
+| -------- | ------------------------------------------------------------- |
+| lecture  | `<base>:lecture`                                              |
+| deadline | `<base>:deadline:<key>` (default `<normalized title>:<kind>`) |
+| to-do    | `<base>:task:<key>` (default the normalized title)            |
+| note     | `<base>:note:<key>` (default the normalized title)            |
+
+`<base>` is the client-supplied `recordingRef` when the AI knows an id for the recording or the
+conversation (convention: `chatgpt-record:<conversation-id>`), otherwise a hash of course +
+lecture date + period. `<key>` is the item's optional stable name (`report-2`, `quiz-uml`). The
+same key with the same content is a replay; with changed content it updates that same addition;
+so sending the whole call again after 2 of 3 deadlines were stored adds only the third. All
+parts of one recording carry the same `ingestionId` (per client and base), which
+`list_my_additions` takes as a filter.
+
+### Where items come from
 
 Where an item came from is kept: told or planned **in a chat** (`via: chat`, the default) is shown
 as 「チャットで登録」 with source 「ChatGPTとの会話」; **heard in a lecture recording** (`via:
@@ -208,8 +264,14 @@ sees them too.
   can list and withdraw only its own unconfirmed additions (`list_my_additions`,
   `retract_addition`).
 - The same deadline told twice (same course, title, due date within 36 h) is one item; a retried
-  call with the same `idempotencyKey` is not stored again. Each client may write at most 30 items
-  per 10 minutes and 300 per day. Every write is in the audit log (ids only, never text).
+  call with the same `idempotencyKey` is not stored again.
+- Limits per client: 30 creates/updates per 10 minutes and 300 per 24 hours, plus a burst limit
+  of 30 calls per minute (counting duplicates, replays and retractions too). One `ingest_lecture`
+  call counts once against the burst limit and each part it creates or updates once against the
+  write limits; it takes at most 10 deadlines, 10 to-dos and 10 notes, 20 together, besides the
+  lecture (at most 21 writes). Parts beyond the remaining budget come back as `failed`
+  (`rate_limited`) while the others are stored; with no budget left the call fails as a whole.
+- Every write is in the audit log (ids only, never text).
 - The tools cannot submit anything, mark tasks submitted/completed, or touch grades or enrolment.
 
 ### Re-authorizing an existing ChatGPT connection to get the write scope

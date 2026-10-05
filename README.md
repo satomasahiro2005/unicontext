@@ -100,6 +100,7 @@ Record tools let any AI chat register deadlines, to-dos and notes the student me
 
 | Tool                | What it stores                                                                                                                                                                                                  |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ingest_lecture`    | A whole lecture recording or transcript in one call, stored without being asked: the lecture plus the deadlines, to-dos and notes said in it, each with a quote and recording timestamp; safe to re-send        |
 | `record_lecture`    | Summary, key points and an optional timestamped transcript excerpt, linked to that day's class (Lecture, LectureTranscript, LectureSegments)                                                                    |
 | `add_deadline`      | An assignment, report, quiz, exam or preparation item, course optional. `dueAt` is ISO-8601 or Japanese as said (`10月20日17時`, `来週の金曜`, `次回`), resolved with the date, timetable and academic calendar |
 | `add_note`          | A note on a course or a personal one (searchable, listed by `get_notes`)                                                                                                                                        |

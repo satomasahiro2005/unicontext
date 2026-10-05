@@ -499,13 +499,19 @@ describe('authorization code + PKCE + resource binding', () => {
     const tools = await toolNames(granted.token.access_token);
     const names = tools.map((t) => t.name);
     expect(names).toEqual(
-      expect.arrayContaining(['record_lecture', 'add_deadline', 'add_note', 'add_task']),
+      expect.arrayContaining([
+        'ingest_lecture',
+        'record_lecture',
+        'add_deadline',
+        'add_note',
+        'add_task',
+      ]),
     );
     expect(names).toEqual(expect.arrayContaining(['list_my_additions', 'retract_addition']));
     expect(names).not.toContain('correct_fact');
     expect(names).not.toContain('propose_pace_slot');
     const isWrite = (n: string): boolean =>
-      /^(record_lecture|add_deadline|add_note|add_task|list_my_additions|retract_addition|open_announcement)$/.test(
+      /^(ingest_lecture|record_lecture|add_deadline|add_note|add_task|list_my_additions|retract_addition|open_announcement)$/.test(
         n,
       );
     for (const t of tools) expect(t.annotations?.readOnlyHint, t.name).toBe(!isWrite(t.name));
