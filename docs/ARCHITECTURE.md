@@ -785,6 +785,39 @@ next_class | default, basis, confidence: medium | low, text, checkWhere, checkUr
   `NextAction.estimatedDue`; coverage `unknown_due` items. MCP answer hints and server
   instructions (local and remote) say: plan with the early estimate, say 「推定」 with the basis
   and where to confirm, never state or register it as the deadline.
+- `candidate` (medium): a to-do that may be an assignment UniContext already knows (below) is
+  never estimated while that assignment has a known due date: its due date is used, with the
+  assignment named in the basis and 「同じものか要確認」.
+
+#### Recorded work that already exists (`task-engine/assignment-match.ts`)
+
+2026-10: the student told ChatGPT 「レポート1：レンタル店のER図を作成する（提出期限は現時点で未確認）」
+(add_task via chat, lecture 10/1) while Ed already had 「当日課題 (小レポート1)」 due 10/6 17:00 in
+the linked offering. Kept apart, the to-do was estimated at the next class (10/8 10:20) and the
+chat said the deadline was unknown.
+
+- Every to-do fact (add_task, add_deadline kind prep, ingest_lecture tasks) is matched against the
+  assignments of its course (every linked offering), deterministically: title (the same numbered
+  item across spellings — レポート1 ~ 小レポート1 ~ Report 1 — or close titles, 0.6; another number
+  of the same kind rules it out; the same kind of work or a loosely similar title, 0.3), content
+  words shared with the assignment's title / description (+0.1 / +0.3), timing against the
+  lecture date (`TodoValue.lectureDate`, else when it was written): the assignment appeared within
+  a week (`availableFrom`, the LMS lesson date 「(10/1)」) or is due within 4 weeks after it
+  (+0.25), closed more than 2 days before it (−0.4).
+- `linked` (≥ 0.8 with a same-item title and a 0.2 lead over the next): stored on the fact
+  (`TodoValue.assignmentId`) when known at write time; `derive()` re-checks on every run, so an
+  assignment synced later links it then. The to-do has no task of its own: its fact joins the
+  assignment task's `sourceFactIds`, its notes become a block 「〔チャットで登録「<title>」〕…」 in
+  that task's notes (sentences saying the deadline is unknown dropped; rebuilt every run), the
+  student's own progress on the old to-do task carries over and that task row is removed. Due
+  date and status come from the source; `recordedMarker` does not mark a task that also rests on
+  a system's facts. The addition shows `attachedTo` and `stored.taskId` of the assignment task.
+- `candidate` (≥ 0.5): both stay; the addition shows `possibleSameAs` and the estimator uses the
+  candidate's due date (above).
+- `add_task.assignmentId` links explicitly. `add_deadline` (assignment / report) also attaches to
+  the same numbered item. MCP tool descriptions and server instructions (`EXISTING_ITEM_RULE_*`):
+  look the course's deadlines / assignments up before registering, use the existing item, and
+  check the course's assignments first when the item says its deadline is unknown.
 
 #### Effective schedule and personal conditions (`personal-schedule.ts`, `group-schedule.ts`)
 

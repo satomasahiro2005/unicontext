@@ -76,7 +76,7 @@ import {
 } from '@unicontext/task-engine';
 import { additionViaOfAuthority } from './additions.js';
 import { readAnnouncementExtra } from './announcements.js';
-import { type EstimatedDue, estimateDue, type EstimateHost } from './estimate.js';
+import { candidateDue, type EstimatedDue, estimateDue, type EstimateHost } from './estimate.js';
 import {
   classifyWork,
   computeNextActions,
@@ -751,6 +751,9 @@ export class ContextEngine {
       .filter((f) => !f.fact.retractedAt);
     if (facts.some((f) => f.fact.origin === 'authoritative' || f.fact.origin === 'user'))
       return undefined;
+    // A system's assignment a recorded to-do was linked to rests on the system, not the chat.
+    if (facts.some((f) => f.source !== undefined && f.source.sourceId !== ADDITIONS_SOURCE_ID))
+      return undefined;
     const rec = facts.find((f) => f.source?.sourceId === ADDITIONS_SOURCE_ID);
     if (!rec?.source) return undefined;
     const item = rec.source.sourceItemId;
@@ -907,6 +910,22 @@ export class ContextEngine {
           : course
             ? `${course}の先生・LMS`
             : '出した先生・LMS';
+      // Possibly an assignment UniContext already knows with a stated due date: that date, never a
+      // guess (the student was told 「締切不明」 while Ed said 10/6 17:00).
+      const candidate = this.tasks.candidateOf(t);
+      if (candidate?.dueAt) {
+        const cUrl = this.entities.getOfKind('assignment', candidate.assignmentId)?.url;
+        const cLabel = this.citationsFor([candidate.assignmentId])[0]?.sourceLabel;
+        const viaCandidate = candidateDue(
+          {
+            checkWhere: `${cLabel ?? '提出先'}の課題ページ`,
+            ...(cUrl ? { checkUrl: cUrl } : url ? { checkUrl: url } : {}),
+          },
+          { title: candidate.title, dueAt: candidate.dueAt, source: cLabel },
+          { now, timezone: tz },
+        );
+        if (viaCandidate) return viaCandidate;
+      }
       return estimateDue(
         {
           id: t.assignmentId ?? t.id,

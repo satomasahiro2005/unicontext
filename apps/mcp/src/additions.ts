@@ -180,6 +180,14 @@ export const addTaskShape = {
   dueAt: addDeadlineShape.dueAt.optional().describe('期限（なければ省略） / Due date, if any'),
   notes: z.string().max(L.notes).optional(),
   evidence: evidence.optional(),
+  assignmentId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      '既にある課題（get_assignments / get_deadlines の assignment:… の id）の一部・メモとして登録するとき。締切と状態はその課題のものになる / An existing assignment (assignment:… from get_assignments / get_deadlines) this to-do is part of: stored as its details, its due date and status come from that assignment',
+    ),
   via,
   lectureDate,
   recordingTimestamp,
@@ -514,6 +522,7 @@ function ingestItem(
       ? { dueInput: a.dueResolution.input }
       : {}),
     ...(a.attachedTo ? { attachedTo: { id: a.attachedTo.id, title: a.attachedTo.title } } : {}),
+    ...(a.possibleSameAs ? { possibleSameAs: a.possibleSameAs } : {}),
     ...(a.conflicts.length > 0 ? { conflicts: a.conflicts } : {}),
   };
 }
@@ -558,6 +567,16 @@ export function ingestOutput(
   if (dated.length > 0)
     hint.push(
       `日時は ${dated.map((x) => `「${x.title}」${String(x.dueText)}`).join('、')} として登録しました。この日時をユーザーに伝えてください。`,
+    );
+  const linked = items.filter((x) => x.type === 'task' && x.attachedTo !== undefined);
+  if (linked.length > 0)
+    hint.push(
+      `${linked.map((x) => `「${x.title}」`).join('、')}は既にある課題（${linked.map((x) => `「${(x.attachedTo as { title: string }).title}」`).join('、')}）と同じなので、新しい項目は作らずその課題に紐づけました。締切と提出状態はその課題の値を伝えてください。`,
+    );
+  const maybe = items.filter((x) => x.possibleSameAs !== undefined);
+  if (maybe.length > 0)
+    hint.push(
+      `${maybe.map((x) => `「${x.title}」`).join('、')}は既にある課題と同じかもしれません（possibleSameAs）。その締切で動くよう伝え、同じものかユーザーに確かめてください。`,
     );
   if (all.some((x) => Array.isArray(x.conflicts)))
     hint.push(
@@ -626,10 +645,19 @@ const COMMON_EN =
 export const RECORDING_RULES_JA =
   'summary と keyPoints は後で検索・復習するのに要ることに絞り、文字起こしをそのまま入れない。segments には大事な発言（課題・試験・連絡など）だけをタイムスタンプつきで入れる。雑談や、他の学生どうしの会話は入れない。deadlines には先生が実際に言った締切・試験・小テスト・授業までの準備だけを入れる（「次回までに〜」は根拠になるが、次の授業があるというだけでは締切にしない）。tasks は学生がやらなければならないこと。notes は締切ではないが後で要る情報（教室・出席・提出の方法、グループ分け、特別な手順、先生の大事な注意）。各項目の evidence に発言をそのまま引用し、recordingTimestamp に録音の位置を入れる。';
 
+/**
+ * Look before registering: a to-do / deadline the student mentions is often an assignment a system
+ * already has (「レポート1」 told in a chat = Ed's 「当日課題 (小レポート1)」 due 10/6 17:00).
+ */
+export const EXISTING_ITEM_RULE_JA =
+  '登録の前に、その科目の get_deadlines か get_assignments（course 指定）で同じ課題が既にないか確かめる。番号が同じなら題名が違っても同じ課題とみなす（「レポート1」＝「当日課題 (小レポート1)」）。既にあるなら新しく登録せず、その課題の締切・状態をそのまま伝える（内容のメモを残すなら add_task に assignmentId を付ける）。ユーザーや録音が「期限は未確認・不明」と言っていても、先にその科目の課題を確かめ、載っている締切を伝える。UniContextも登録時に同じ科目の課題と照合し、同じものなら既存の課題に紐づける（結果の attachedTo）。同じかもしれないもの（possibleSameAs）が返ったら、その締切で動くよう伝え、同じものかユーザーに確かめる。';
+export const EXISTING_ITEM_RULE_EN =
+  "Before registering, look the course's items up (get_deadlines / get_assignments with the course): an item with the same number is the same assignment even under another title (レポート1 = 当日課題 (小レポート1)). If it exists, do not register a new one — use the existing one's due date and status (add_task with assignmentId keeps notes on it). When the student or a recording says the deadline is unknown, check the course's assignments first. UniContext also matches every write against the course's assignments (attachedTo = linked; possibleSameAs = maybe the same: plan by its due date and ask).";
+
 export const WRITE_TOOLS = {
   ingest_lecture: {
     title: '講義の録音を取り込む',
-    description: `講義の録音・文字起こし（ChatGPT Record など）が入力として与えられ、科目と日付を合理的に特定できる場合は、ユーザーから保存依頼がなくても ingest_lecture を呼ぶ。質問への回答や要約はいつもどおり行い、それとは別に1回呼ぶ。保存してよいかユーザーに確かめない（本人が確認するまで「録音から」の未確認情報として保存され、大学側の値は上書きしない）。科目・日付・時限は会話・録音の内容・時間割から決め、ユーザーに聞き直さない（course を省略すると lectureDate と period から時間割で決まる。lectureDate の省略は今日）。1回の呼び出しで、講義の記録（要約・要点・大事な発言）と、録音で言われた締切・やること・メモをまとめて保存する。${RECORDING_RULES_JA}dueAt は言われたままの表現（次回・来週の金曜・10月20日17時）でよく、講義の日・時間割・学年暦で解決した日時が返るのでユーザーに伝える。録音・会話の id が分かれば recordingRef に入れる（例 chatgpt-record:<会話id>）。分からなければ省略してよい（科目・日付・時限から決まる）。同じ呼び出しをもう一度送っても、保存済みのものは二重にならず、変わったものは更新され、前回保存できなかったものだけが足される。結果は項目ごとに返り、一部が保存できなくても他は保存される。結果の ingestionId で、この録音から保存したものを list_my_additions で一覧できる。${COMMON_DESC} / When a lecture recording or transcript (e.g. ChatGPT Record) is given as input and the course and date can reasonably be determined, call ingest_lecture even if the user did not ask to save anything, in addition to answering as usual. Do not ask the user first: everything is stored as unconfirmed 「録音から」 and never overrides university data. Infer course, date and period from the conversation, the recording and the timetable instead of asking. One call stores the lecture (summary and key points for later search and review, not the transcript; only the important timestamped segments) and the deadlines (only those actually stated), to-dos and notes said in it, each with a verbatim evidence quote and its recording timestamp. Leave out chatter and conversations between other students. Sending the same call again never stores anything twice (recordingRef such as chatgpt-record:<conversation-id> and per-item keys, or course + date + period); parts that failed before are added. Results per part. ${COMMON_EN}`,
+    description: `講義の録音・文字起こし（ChatGPT Record など）が入力として与えられ、科目と日付を合理的に特定できる場合は、ユーザーから保存依頼がなくても ingest_lecture を呼ぶ。質問への回答や要約はいつもどおり行い、それとは別に1回呼ぶ。保存してよいかユーザーに確かめない（本人が確認するまで「録音から」の未確認情報として保存され、大学側の値は上書きしない）。科目・日付・時限は会話・録音の内容・時間割から決め、ユーザーに聞き直さない（course を省略すると lectureDate と period から時間割で決まる。lectureDate の省略は今日）。1回の呼び出しで、講義の記録（要約・要点・大事な発言）と、録音で言われた締切・やること・メモをまとめて保存する。${RECORDING_RULES_JA}dueAt は言われたままの表現（次回・来週の金曜・10月20日17時）でよく、講義の日・時間割・学年暦で解決した日時が返るのでユーザーに伝える。録音・会話の id が分かれば recordingRef に入れる（例 chatgpt-record:<会話id>）。分からなければ省略してよい（科目・日付・時限から決まる）。同じ呼び出しをもう一度送っても、保存済みのものは二重にならず、変わったものは更新され、前回保存できなかったものだけが足される。結果は項目ごとに返り、一部が保存できなくても他は保存される。結果の ingestionId で、この録音から保存したものを list_my_additions で一覧できる。${EXISTING_ITEM_RULE_JA}${COMMON_DESC} / When a lecture recording or transcript (e.g. ChatGPT Record) is given as input and the course and date can reasonably be determined, call ingest_lecture even if the user did not ask to save anything, in addition to answering as usual. Do not ask the user first: everything is stored as unconfirmed 「録音から」 and never overrides university data. Infer course, date and period from the conversation, the recording and the timetable instead of asking. One call stores the lecture (summary and key points for later search and review, not the transcript; only the important timestamped segments) and the deadlines (only those actually stated), to-dos and notes said in it, each with a verbatim evidence quote and its recording timestamp. Leave out chatter and conversations between other students. Sending the same call again never stores anything twice (recordingRef such as chatgpt-record:<conversation-id> and per-item keys, or course + date + period); parts that failed before are added. Results per part. ${EXISTING_ITEM_RULE_EN} ${COMMON_EN}`,
   },
   record_lecture: {
     title: '講義の記録を保存',
@@ -637,7 +665,7 @@ export const WRITE_TOOLS = {
   },
   add_deadline: {
     title: '締切・試験を登録',
-    description: `どの会話でも、ユーザーが課題・レポートの締切、小テスト・試験の日程、授業までの準備を言ったら（例「レポートの締切10/20って登録しといて」「来週の金曜に小テスト」）、これで登録する。ユーザーが頼んでいなくても、UniContextにまだない締切が話に出たら登録を提案する。講義の録音・文字起こしから取り出す締切は ingest_lecture でまとめて保存する。録音の締切を1件だけ足すならここで via=recording とし、recordingTimestamp に録音の位置を入れ、ユーザーに確かめずに保存する。録音からは先生が実際に言った締切だけを入れる（「次回までに〜」は根拠になるが、次の授業があるというだけでは締切にしない）。UniContextの推定（estimatedDue）や自分の見積もりは登録しない（推定は推定のまま「推定」と伝える）。dueAt は ISO-8601 か言われたままの日本語（10月20日17時・来週の金曜・次回）で、解決した日時が返るので必ずユーザーに伝える。course は分かれば科目名で、科目に関係ない締切（奨学金・就活など）なら省略。evidence にユーザーの言葉や発言をそのまま引用する。同じ科目・題名・近い締切なら二重にせず更新する。${COMMON_DESC} / Register a deadline, exam or preparation item the student mentions in ANY chat so every other session sees it; returns the resolved date — tell it to the user. Deadlines from a lecture recording go through ingest_lecture (or here with via=recording), stored without asking, and only when actually stated. Never register an estimate (UniContext's estimatedDue or your own guess): an estimate stays labelled 推定. ${COMMON_EN}`,
+    description: `どの会話でも、ユーザーが課題・レポートの締切、小テスト・試験の日程、授業までの準備を言ったら（例「レポートの締切10/20って登録しといて」「来週の金曜に小テスト」）、これで登録する。ユーザーが頼んでいなくても、UniContextにまだない締切が話に出たら登録を提案する。講義の録音・文字起こしから取り出す締切は ingest_lecture でまとめて保存する。録音の締切を1件だけ足すならここで via=recording とし、recordingTimestamp に録音の位置を入れ、ユーザーに確かめずに保存する。録音からは先生が実際に言った締切だけを入れる（「次回までに〜」は根拠になるが、次の授業があるというだけでは締切にしない）。UniContextの推定（estimatedDue）や自分の見積もりは登録しない（推定は推定のまま「推定」と伝える）。dueAt は ISO-8601 か言われたままの日本語（10月20日17時・来週の金曜・次回）で、解決した日時が返るので必ずユーザーに伝える。course は分かれば科目名で、科目に関係ない締切（奨学金・就活など）なら省略。evidence にユーザーの言葉や発言をそのまま引用する。同じ科目・題名・近い締切なら二重にせず更新する。${EXISTING_ITEM_RULE_JA}${COMMON_DESC} / Register a deadline, exam or preparation item the student mentions in ANY chat so every other session sees it; returns the resolved date — tell it to the user. Deadlines from a lecture recording go through ingest_lecture (or here with via=recording), stored without asking, and only when actually stated. Never register an estimate (UniContext's estimatedDue or your own guess): an estimate stays labelled 推定. ${EXISTING_ITEM_RULE_EN} ${COMMON_EN}`,
   },
   add_note: {
     title: 'メモを保存',
@@ -645,7 +673,7 @@ export const WRITE_TOOLS = {
   },
   add_task: {
     title: 'やることを登録',
-    description: `やること（期限なしも可）を登録する。ユーザーが「〜をやらなきゃ」と言ったこと、会話でユーザーと一緒に立てた勉強計画のTODOに使う。講義の録音・文字起こしで言われた、学生がやらなければならないことは ingest_lecture の tasks でまとめて保存する（1件だけならここで via=recording とし、ユーザーに確かめずに保存する）。科目に関係ないものは course を省略。期限があれば dueAt に入れる（解決した日時が返るのでユーザーに伝える）。${COMMON_DESC} / Register a to-do the student mentions or plans with you in ANY chat, so every other session sees it in get_tasks / get_today. To-dos from a lecture recording go through ingest_lecture (or here with via=recording), stored without asking. ${COMMON_EN}`,
+    description: `やること（期限なしも可）を登録する。ユーザーが「〜をやらなきゃ」と言ったこと、会話でユーザーと一緒に立てた勉強計画のTODOに使う。講義の録音・文字起こしで言われた、学生がやらなければならないことは ingest_lecture の tasks でまとめて保存する（1件だけならここで via=recording とし、ユーザーに確かめずに保存する）。科目に関係ないものは course を省略。期限があれば dueAt に入れる（解決した日時が返るのでユーザーに伝える）。${EXISTING_ITEM_RULE_JA}${COMMON_DESC} / Register a to-do the student mentions or plans with you in ANY chat, so every other session sees it in get_tasks / get_today. To-dos from a lecture recording go through ingest_lecture (or here with via=recording), stored without asking. ${EXISTING_ITEM_RULE_EN} ${COMMON_EN}`,
   },
   set_course_condition: {
     title: '科目での本人の条件（グループ・班／履修しているか）を登録',
@@ -699,9 +727,18 @@ export function writeHint(r: AdditionResult): string {
   const parts = [STATUS_HINT[r.status]];
   if (a.dueText)
     parts.push(`日時は${a.dueText}として登録されています。この日時をユーザーに伝えてください。`);
-  if (a.attachedTo)
+  const linkedTodo = (a.kind === 'task' || a.kind === 'prep') && a.attachedTo !== undefined;
+  if (a.attachedTo && linkedTodo)
+    parts.push(
+      `UniContextに既にある課題「${a.attachedTo.title}」と同じものなので、新しい項目は作らずその課題に紐づけました（内容はその課題のメモとして残ります）。締切と提出状態はその課題の値（get_deadlines / get_assignments）を伝えてください。「締切不明」とは言わないでください。`,
+    );
+  else if (a.attachedTo)
     parts.push(
       `大学側の既存の項目「${a.attachedTo.title}」に、${a.label}の日時として添えました（大学側の値は変わりません）。`,
+    );
+  if (a.possibleSameAs)
+    parts.push(
+      `既にある課題「${a.possibleSameAs.title}」${a.possibleSameAs.dueText ? `（締切 ${a.possibleSameAs.dueText}）` : ''}と同じものかもしれません。${a.possibleSameAs.dueText ? 'その締切で動くよう伝え、' : ''}同じ課題かユーザーに確かめてください（同じなら retract_addition で取り消して add_task に assignmentId を付け直せます）。`,
     );
   if (a.conflicts.length > 0)
     parts.push(

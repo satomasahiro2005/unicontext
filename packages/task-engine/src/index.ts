@@ -7,3 +7,4 @@ export * from './group-schedule.js';
 export * from './session-rules.js';
 export * from './deadline-context.js';
 export * from './enrollment-declaration.js';
+export * from './assignment-match.js';

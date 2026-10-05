@@ -26,6 +26,7 @@ import {
   systemClock,
   type UniversityProfile,
   zonedDateString,
+  zonedParts,
   zonedTime,
 } from '@unicontext/core';
 import {
@@ -38,6 +39,12 @@ import {
 } from '@unicontext/database';
 import { type ConflictResolver, factId, FactStore } from '@unicontext/provenance';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import {
+  type AssignmentMatch,
+  type MatchableAssignment,
+  matchAssignment,
+  notesAsDetails,
+} from './assignment-match.js';
 import { ClassSchedule } from './class-schedule.js';
 import { doneMarker, groupAddress, shortDeadlineTitle } from './deadline-context.js';
 import { extractDeadlines } from './deadline-extractor.js';
@@ -59,7 +66,23 @@ export interface TodoValue {
   kind?: string;
   courseOfferingId?: string;
   notes?: string;
+  /** The lecture it was heard in / told about (YYYY-MM-DD): when the item was given. */
+  lectureDate?: string;
+  /**
+   * The assignment it is the same work as, decided when it was stored (or named by the client):
+   * the to-do is then part of that assignment's task (see {@link TaskEngine.todoMatch}).
+   */
+  assignmentId?: string;
 }
+
+/**
+ * A linked to-do's notes in its assignment task's notes: one block per to-do, 「〔チャットで登録
+ * 「<title>」〕<notes>」, rebuilt on every derive (blocks are separated by a blank line; the rest is
+ * the student's own).
+ */
+const linkedTodoBlock = (authority: string | undefined, title: string, notes: string): string =>
+  `〔${authority === 'student-statement' ? 'チャットで登録' : '録音から'}「${title}」〕${notes.replace(/\n{2,}/gu, '\n')}`;
+const LINKED_TODO_BLOCK = /^〔(?:チャットで登録|録音から)「/u;
 export const EXTRACTOR_ID = 'ja-deadline-rules';
 
 /** Who is asking to change a task status. AI may never mark work as submitted/completed (§19). */
@@ -395,6 +418,151 @@ export class TaskEngine {
     }
     const facts = this.facts.active({ subjects: [a.id], predicate: 'assignment_due' });
     return { dueAt: a.dueAt, factIds: facts.map((f) => f.id) };
+  }
+
+  /**
+   * Assignments of a course (every linked offering) as the to-do matcher sees them. `dues`: due
+   * dates already computed (derive); otherwise the assignment's task, then its resolved due.
+   */
+  private matchableAssignments(
+    courseOfferingId: string,
+    referenceMs: number | undefined,
+    dues?: ReadonlyMap<string, string | undefined>,
+  ): MatchableAssignment[] {
+    const ids = [...new Set([courseOfferingId, ...this.expandCourse(courseOfferingId)])];
+    return this.entities.list('assignment', { where: { courseOfferingId: ids } }).map((a) => {
+      const dueAt = dues?.has(a.id)
+        ? dues.get(a.id)
+        : (this.get(stableId('task', 'assignment', a.id))?.dueAt ?? this.dueOf(a).dueAt);
+      return {
+        id: a.id,
+        title: a.title,
+        ...(a.description ? { description: a.description } : {}),
+        ...(dueAt ? { dueAt } : {}),
+        appearedAt: [a.availableFrom, this.moduleDate(a, referenceMs)],
+      };
+    });
+  }
+
+  /** 「第1回: ガイダンス・導入 (10/1)」: the lesson / module date an LMS files the item under. */
+  private moduleDate(a: Assignment, referenceMs: number | undefined): string | undefined {
+    const extra = (a as { extra?: Record<string, unknown> }).extra;
+    const text = typeof extra?.module === 'string' ? extra.module : undefined;
+    const m = text
+      ? /[(（]\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*[)）]/.exec(text.normalize('NFKC'))
+      : null;
+    if (!m) return undefined;
+    const month = Number(m[1]);
+    const day = Number(m[2]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+    const ref = referenceMs ?? this.clock.now().getTime();
+    const year = zonedParts(new Date(ref), this.tz).year;
+    const options = [year - 1, year, year + 1].map((y) =>
+      zonedTime({ year: y, month, day, hour: 12, minute: 0 }, this.tz).getTime(),
+    );
+    const best = options.sort((x, y) => Math.abs(x - ref) - Math.abs(y - ref))[0] as number;
+    return new Date(best).toISOString();
+  }
+
+  /** When a to-do was given: its lecture date (local noon), else when it was written. */
+  private todoReference(f: Fact, v: Partial<TodoValue>): number | undefined {
+    if (typeof v.lectureDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.lectureDate)) {
+      const [y, m, d] = v.lectureDate.split('-').map(Number) as [number, number, number];
+      return zonedTime({ year: y, month: m, day: d, hour: 12, minute: 0 }, this.tz).getTime();
+    }
+    const t = Date.parse(f.observedAt);
+    return Number.isNaN(t) ? undefined : t;
+  }
+
+  /**
+   * The assignment a to-do fact (an AI addition) is — `linked` — or may be — `candidate` — the same
+   * work as (see assignment-match.ts). An assignment named on the fact (decided when it was
+   * stored) is linked while it exists in the to-do's course.
+   */
+  todoMatch(f: Fact, dues?: ReadonlyMap<string, string | undefined>): AssignmentMatch | undefined {
+    if (f.predicate !== TODO_PREDICATE) return undefined;
+    const v = f.value as Partial<TodoValue> | null;
+    if (!v || typeof v.title !== 'string') return undefined;
+    const course =
+      typeof v.courseOfferingId === 'string'
+        ? v.courseOfferingId
+        : f.subject.startsWith('courseOffering:')
+          ? f.subject
+          : undefined;
+    if (!course) return undefined;
+    const ref = this.todoReference(f, v);
+    // The client's own recorded assignment for the same addition is not "another" item.
+    const list = this.matchableAssignments(course, ref, dues).filter(
+      (a) =>
+        typeof v.additionId !== 'string' ||
+        (this.entities.get(a.id) as { extra?: { additionId?: unknown } } | undefined)?.extra
+          ?.additionId !== v.additionId,
+    );
+    if (typeof v.assignmentId === 'string') {
+      const named = list.find((a) => a.id === v.assignmentId);
+      if (named)
+        return {
+          assignmentId: named.id,
+          title: named.title,
+          dueAt: named.dueAt,
+          level: 'linked',
+          score: 1,
+          reasons: ['登録時に同じ課題として紐づけ'],
+        };
+    }
+    return matchAssignment(
+      {
+        title: v.title,
+        texts: [v.notes, f.evidence],
+        ...(ref !== undefined ? { referenceAt: new Date(ref).toISOString() } : {}),
+      },
+      list,
+    );
+  }
+
+  /** {@link todoMatch} for a stored to-do (as written, before it was ever derived). */
+  todoMatchFor(input: {
+    title: string;
+    courseOfferingId: string | undefined;
+    notes?: string | undefined;
+    evidence?: string | undefined;
+    lectureDate?: string | undefined;
+    additionId?: string | undefined;
+  }): AssignmentMatch | undefined {
+    if (!input.courseOfferingId) return undefined;
+    const now = this.clock.now().toISOString();
+    return this.todoMatch({
+      id: 'fact:probe',
+      subject: input.courseOfferingId,
+      predicate: TODO_PREDICATE,
+      value: {
+        title: input.title,
+        courseOfferingId: input.courseOfferingId,
+        ...(input.notes ? { notes: input.notes } : {}),
+        ...(input.lectureDate ? { lectureDate: input.lectureDate } : {}),
+        ...(input.additionId ? { additionId: input.additionId } : {}),
+      },
+      origin: 'extracted',
+      confidence: 0.7,
+      observedAt: now,
+      sourceReferenceId: 'sourceReference:probe',
+      producer: { type: 'ai', id: 'probe' },
+      ...(input.evidence ? { evidence: input.evidence } : {}),
+      createdAt: now,
+    } as unknown as Fact);
+  }
+
+  /**
+   * For a task derived from a to-do: the assignment it may be (a `candidate`; linked ones have no
+   * task of their own). Its known due date is what the to-do is planned against — never an
+   * estimate.
+   */
+  candidateOf(t: Task): AssignmentMatch | undefined {
+    if (t.taskKind !== 'extracted' || t.assignmentId || t.dueAt) return undefined;
+    const f = this.facts
+      .getMany(t.sourceFactIds)
+      .find((x) => x.predicate === TODO_PREDICATE && !x.retractedAt);
+    return f ? this.todoMatch(f) : undefined;
   }
 
   /**
@@ -811,16 +979,73 @@ export class TaskEngine {
       );
     }
 
-    for (const t of assignmentTasks) count(this.save(t).status);
-
-    // Things to do heard in a lecture (AI additions): one task per todo fact.
+    // Things to do heard in a lecture or told in a chat (AI additions): one task per todo fact —
+    // unless it is an assignment a system already knows (「レポート1」 told in a chat = Ed's
+    // 「当日課題 (小レポート1)」): then it is part of that assignment's task, whose due date and status
+    // come from the source, and its notes become details there.
     const todoPairs = this.facts.activePairs().filter((p) => p.predicate === TODO_PREDICATE);
-    for (const f of this.facts.active({
+    const todoFacts = this.facts.active({
       subjects: [...new Set(todoPairs.map((p) => p.subject))],
       predicate: TODO_PREDICATE,
-    })) {
+    });
+    const dues = new Map<string, string | undefined>(
+      assignmentTasks.map((t) => [t.assignmentId as string, t.dueAt]),
+    );
+    const byAssignment = new Map(assignmentTasks.map((t) => [t.assignmentId as string, t]));
+    const linkedNotes = new Map<string, string[]>();
+    const separate: Fact[] = [];
+    for (const f of todoFacts) {
       const v = f.value as Partial<TodoValue> | null;
       if (!v || typeof v.title !== 'string' || !v.title) continue;
+      const match = this.todoMatch(f, dues);
+      const target = match?.level === 'linked' ? byAssignment.get(match.assignmentId) : undefined;
+      if (!target) {
+        separate.push(f);
+        continue;
+      }
+      const todoId = stableId(
+        'task',
+        'todo',
+        typeof v.additionId === 'string' ? v.additionId : f.id,
+      );
+      if (!target.sourceFactIds.includes(f.id as Task['sourceFactIds'][number]))
+        target.sourceFactIds = [...target.sourceFactIds, f.id as Task['sourceFactIds'][number]];
+      const details = notesAsDetails(typeof v.notes === 'string' ? v.notes : undefined);
+      const authority = this.refs.get(f.sourceReferenceId)?.authority;
+      const blocks = linkedNotes.get(target.id) ?? [];
+      blocks.push(linkedTodoBlock(authority, v.title, details ?? ''));
+      linkedNotes.set(target.id, blocks);
+      // The to-do's own task (stored before the assignment was known) is the same work: the
+      // student's progress on it carries over, then it goes (no second entry anywhere).
+      const own = this.get(todoId);
+      if (own) {
+        if (
+          own.statusSetBy === 'user' &&
+          target.statusSetBy === 'system' &&
+          (own.status === 'in_progress' || own.status === 'completed')
+        ) {
+          target.status = own.status;
+          target.statusSetBy = 'user';
+        }
+        this.db.orm.delete(tasks).where(eq(tasks.id, todoId)).run();
+      }
+    }
+    for (const t of assignmentTasks) {
+      const own = (t.notes ?? '')
+        .split(/\n{2,}/u)
+        .filter((b) => b.trim() && !LINKED_TODO_BLOCK.test(b))
+        .join('\n\n');
+      const blocks = linkedNotes.get(t.id) ?? [];
+      const notes = [own, ...blocks].filter((x) => x.trim()).join('\n\n');
+      if (notes) t.notes = notes;
+      else delete t.notes;
+    }
+
+    for (const t of assignmentTasks) count(this.save(t).status);
+
+    for (const f of separate) {
+      const v = f.value as Partial<TodoValue>;
+      const title = v.title as string;
       const id = stableId('task', 'todo', typeof v.additionId === 'string' ? v.additionId : f.id);
       if (derivedIds.has(id)) continue;
       derivedIds.add(id);
@@ -834,7 +1059,7 @@ export class TaskEngine {
       count(
         this.save({
           id,
-          title: v.title,
+          title,
           ...(course ? { courseOfferingId: course as Task['courseOfferingId'] } : {}),
           sourceFactIds: [f.id],
           ...(typeof v.dueAt === 'string' ? { dueAt: v.dueAt } : {}),

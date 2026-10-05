@@ -27,7 +27,12 @@ const GIVEN_IN_LOOKBACK_DAYS = 8;
 /** The next class is looked for this many days ahead (breaks, half-terms). */
 const NEXT_CLASS_LOOKAHEAD_DAYS = 35;
 
-export type EstimateMethod = 'series' | 'relative_rule' | 'next_class' | 'default';
+/**
+ * `candidate`: not an estimate at all — the item may be an assignment UniContext already knows
+ * (「レポート1」 = 「当日課題 (小レポート1)」), and that assignment's stated due date is used. No
+ * pattern or fallback guess is made while such a candidate has a known due date.
+ */
+export type EstimateMethod = 'series' | 'relative_rule' | 'next_class' | 'default' | 'candidate';
 
 /**
  * An estimated deadline: NOT a deadline anyone stated. Always say 「推定」, the basis and where to
@@ -370,4 +375,32 @@ export function estimateDue(subject: EstimateSubject, host: EstimateHost): Estim
     `締切の手がかりも授業の予定もないため、出てから1週間後の23:59とみなす`,
     'low',
   );
+}
+
+/**
+ * The item may be an assignment with a known due date: plan against that date, say which
+ * assignment it is and that it is the same work is to be confirmed — never a guessed time.
+ */
+export function candidateDue(
+  subject: Pick<EstimateSubject, 'checkWhere' | 'checkUrl'>,
+  candidate: { title: string; dueAt: string; source?: string | undefined },
+  host: Pick<EstimateHost, 'now' | 'timezone'>,
+): EstimatedDue | undefined {
+  const at = Date.parse(candidate.dueAt);
+  if (!Number.isFinite(at)) return undefined;
+  const when = formatShortJa(new Date(at), host.timezone);
+  const basis = `同じ課題とみられる「${candidate.title}」${candidate.source ? `（${candidate.source}）` : ''}の締切が${when}`;
+  const passed = at < host.now.getTime();
+  return {
+    label: '推定',
+    at: new Date(at).toISOString(),
+    earliest: new Date(at).toISOString(),
+    method: 'candidate',
+    basis,
+    confidence: 'medium',
+    text: `${when}（${basis}。同じものか要確認）${passed ? '・もう過ぎている可能性' : ''}。要確認: ${subject.checkWhere}`,
+    checkWhere: subject.checkWhere,
+    ...(subject.checkUrl ? { checkUrl: subject.checkUrl } : {}),
+    passed,
+  };
 }

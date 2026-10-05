@@ -50,6 +50,7 @@ import {
 import type { IdentityResolver } from '@unicontext/identity';
 import { type Citation, type ConflictResolver, factId, toCitation } from '@unicontext/provenance';
 import {
+  itemKeys,
   resolveDueExpression,
   type ResolvedDue,
   type TaskEngine,
@@ -255,6 +256,11 @@ export interface AddTaskInput extends Common {
   dueAt?: string | undefined;
   notes?: string | undefined;
   evidence?: string | undefined;
+  /**
+   * The existing assignment (get_assignments / get_deadlines) this to-do is part of: it is stored
+   * as details of that assignment, whose due date and status come from its source.
+   */
+  assignmentId?: string | undefined;
 }
 
 /** Fields every item of an ingest_lecture call carries: it was said in the recording. */
@@ -368,8 +374,18 @@ export interface AdditionView {
   client: { id: string; name: string | undefined };
   /** Ids written for this addition (lecture/transcript/segments/assignment/exam/document/task). */
   stored: Record<string, JsonValue>;
-  /** Someone else's entity (e.g. the LiveCampusU assignment) the due date was attached to. */
+  /**
+   * Someone else's entity (e.g. the LiveCampusU assignment) the due date was attached to, or the
+   * assignment a to-do turned out to be (its due date and status come from there).
+   */
   attachedTo: { id: string; kind: string; title: string; source: string | undefined } | undefined;
+  /**
+   * A to-do that may be an assignment UniContext already knows (not sure enough to link): plan
+   * against that assignment's due date and ask the student; never estimate one for the to-do.
+   */
+  possibleSameAs?:
+    | { id: string; title: string; dueAt: string | undefined; dueText: string | undefined }
+    | undefined;
   /** Open conflicts about what this addition says (the recording disagrees with a system). */
   conflicts: { id: string; predicate: string; values: { value: JsonValue; source: string }[] }[];
   createdAt: string;
@@ -859,7 +875,9 @@ export class AdditionsService {
       },
       apply: (a, ref) =>
         group === 'todo'
-          ? this.applyTodo(a, ref, course, title, 'prep', due.dueAt, input.evidence, input.notes)
+          ? this.applyTodo(a, ref, course, title, 'prep', due.dueAt, input.evidence, input.notes, {
+              lectureDate: input.lectureDate,
+            })
           : group === 'exam'
             ? this.applyExam(a, ref, course, title, input, due)
             : this.applyAssignment(a, ref, course, title, input, due),
@@ -1015,7 +1033,10 @@ export class AdditionsService {
   }
 
   private taskSpec(input: AddTaskInput): WriteSpec {
-    const course = this.course(input.courseOfferingId);
+    const named = input.assignmentId?.trim() || undefined;
+    const assignment = named ? this.entities.getOfKind('assignment', named) : undefined;
+    if (named && !assignment) throw new NotFoundError(`assignment ${named}`);
+    const course = this.course(input.courseOfferingId ?? assignment?.courseOfferingId);
     const title = input.title.trim();
     if (!title) throw new ValidationError('title is empty');
     const due =
@@ -1036,9 +1057,13 @@ export class AdditionsService {
         ...(due ? { dueResolution: { ...due.resolution } } : {}),
         ...(input.evidence ? { evidence: input.evidence } : {}),
         ...(input.notes ? { notes: input.notes } : {}),
+        ...(named ? { assignmentId: named } : {}),
       },
       apply: (a, ref) =>
-        this.applyTodo(a, ref, course, title, 'task', due?.dueAt, input.evidence, input.notes),
+        this.applyTodo(a, ref, course, title, 'task', due?.dueAt, input.evidence, input.notes, {
+          lectureDate: input.lectureDate,
+          assignmentId: named,
+        }),
     };
   }
 
@@ -1588,7 +1613,24 @@ export class AdditionsService {
     dueAt: string | undefined,
     evidence: string | undefined,
     notes: string | undefined,
+    context: { lectureDate?: string | undefined; assignmentId?: string | undefined } = {},
   ): Applied {
+    // Already known as an assignment (「レポート1」 told in a chat = Ed's 「当日課題 (小レポート1)」)?
+    // Linked: the to-do becomes details of that assignment, whose due date and status come from
+    // its source; derive() re-checks every time (an assignment synced later links it then).
+    const lectureDate = context.lectureDate?.trim() || undefined;
+    const match = context.assignmentId
+      ? undefined
+      : this.deps.tasks.todoMatchFor({
+          title,
+          courseOfferingId: course,
+          notes,
+          evidence,
+          lectureDate,
+          additionId: a.id,
+        });
+    const linkedTo =
+      context.assignmentId ?? (match?.level === 'linked' ? match.assignmentId : undefined);
     const value: TodoValue = {
       additionId: a.id,
       title,
@@ -1596,6 +1638,8 @@ export class AdditionsService {
       ...(course ? { courseOfferingId: course } : {}),
       ...(dueAt ? { dueAt } : {}),
       ...(notes ? { notes } : {}),
+      ...(lectureDate ? { lectureDate } : {}),
+      ...(linkedTo ? { assignmentId: linkedTo } : {}),
     };
     const fact = this.putFact(
       a,
@@ -1606,11 +1650,26 @@ export class AdditionsService {
       evidence,
       true,
     );
+    if (linkedTo)
+      return {
+        entityIds: [linkedTo],
+        ownEntityIds: [],
+        factIds: [fact.id],
+        stored: {
+          taskId: stableId('task', 'assignment', linkedTo),
+          assignmentId: linkedTo,
+          linked: true,
+        },
+        attachedTo: linkedTo,
+      };
     return {
       entityIds: [],
       ownEntityIds: [],
       factIds: [fact.id],
-      stored: { taskId: stableId('task', 'todo', a.id) },
+      stored: {
+        taskId: stableId('task', 'todo', a.id),
+        ...(match ? { candidateAssignmentId: match.assignmentId } : {}),
+      },
     };
   }
 
@@ -1781,7 +1840,13 @@ export class AdditionsService {
     const list = this.entities
       .list('assignment', { where: { courseOfferingId: ids } })
       .filter((x) => this.entities.meta(x.id)?.sourceId !== ADDITIONS_SOURCE_ID);
-    const titled = list.filter((x) => sameItemTitle(x.title, title));
+    // 「レポート1」 heard = 「当日課題 (小レポート1)」 on Ed: the same numbered item counts too.
+    const keys = itemKeys(title);
+    const titled = list.filter(
+      (x) =>
+        sameItemTitle(x.title, title) ||
+        itemKeys(x.title).some((k) => keys.some((y) => y.family === k.family && y.n === k.n)),
+    );
     if (titled.length <= 1) return titled[0];
     const t = Date.parse(dueAt);
     const gap = (x: Assignment): number => {
@@ -1975,10 +2040,24 @@ export class AdditionsService {
     const data = a.data;
     const str = (v: JsonValue | undefined): string | undefined =>
       typeof v === 'string' ? v : undefined;
-    const attachedId = str(data.attachedTo);
+    // A to-do is linked to an assignment when it is stored or later, when the assignment syncs.
+    const todo =
+      a.kind === 'task' || a.kind === 'prep'
+        ? this.deps.resolver.facts
+            .getMany(a.factIds)
+            .find((f) => f.predicate === TODO_PREDICATE && !f.retractedAt)
+        : undefined;
+    const match = todo ? this.deps.tasks.todoMatch(todo) : undefined;
+    const attachedId =
+      str(data.attachedTo) ?? (match?.level === 'linked' ? match.assignmentId : undefined);
     const attached = attachedId
       ? this.entities.get(attachedId, { includeDeleted: true })
       : undefined;
+    const storedData = (
+      data.stored && typeof data.stored === 'object' && !Array.isArray(data.stored)
+        ? data.stored
+        : {}
+    ) as Record<string, JsonValue>;
     const subjects = new Set([...a.entityIds, ...(a.courseOfferingId ? [a.courseOfferingId] : [])]);
     const facts = new Set<string>(a.factIds);
     const conflicts = this.deps.resolver
@@ -2010,9 +2089,15 @@ export class AdditionsService {
       ingestionId: str(data.ingestionId),
       source: str(data.source) ?? a.clientName ?? a.clientId,
       client: { id: a.clientId, name: a.clientName },
-      stored: (data.stored && typeof data.stored === 'object' && !Array.isArray(data.stored)
-        ? data.stored
-        : {}) as Record<string, JsonValue>,
+      stored:
+        match?.level === 'linked'
+          ? {
+              ...storedData,
+              taskId: stableId('task', 'assignment', match.assignmentId),
+              assignmentId: match.assignmentId,
+              linked: true,
+            }
+          : storedData,
       attachedTo: attached
         ? {
             id: attached.id,
@@ -2024,6 +2109,16 @@ export class AdditionsService {
             source: this.entities.meta(attached.id)?.sourceId,
           }
         : undefined,
+      ...(match?.level === 'candidate'
+        ? {
+            possibleSameAs: {
+              id: match.assignmentId,
+              title: match.title,
+              dueAt: match.dueAt,
+              dueText: match.dueAt ? formatShortJa(new Date(match.dueAt), this.tz) : undefined,
+            },
+          }
+        : {}),
       conflicts,
       createdAt: a.createdAt,
       updatedAt: a.updatedAt,
