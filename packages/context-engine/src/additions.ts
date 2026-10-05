@@ -11,9 +11,11 @@ import {
   type EntityId,
   type Exam,
   type Fact,
+  ENROLLMENT_CONDITION_PREDICATE,
   GROUP_CONDITION_PREDICATE,
   type JsonValue,
   makeId,
+  normalizeEnrollmentDeclaration,
   normalizeGroupLabel,
   SESSION_RULE_PREDICATE,
   type SessionRuleValue,
@@ -151,6 +153,8 @@ const ATTACHABLE_PREDICATES = new Set([
   'exam_at',
   // The student's own conditions in a course and a group schedule: never the course's data itself.
   GROUP_CONDITION_PREDICATE,
+  // Whether the student takes the course (their word; the enrollment record is never touched).
+  ENROLLMENT_CONDITION_PREDICATE,
   SESSION_RULE_PREDICATE,
 ]);
 /** Predicates whose facts are separate items (confirmed one by one, never a single slot). */
@@ -213,9 +217,9 @@ export interface AddNoteInput extends Common {
  */
 export interface SetCourseConditionInput extends Common {
   courseOfferingId: string;
-  /** Only `group` for now. */
+  /** group (default) = the student's group / 班; enrollment = whether the student takes it. */
   condition?: CourseCondition | undefined;
-  /** 「B」「B班」「Bグループ」 → "B". */
+  /** group: 「B」「B班」「Bグループ」 → "B". enrollment: not_taking | taking. */
   value: string;
   evidence: string;
 }
@@ -884,29 +888,48 @@ export class AdditionsService {
   private conditionSpec(input: SetCourseConditionInput): WriteSpec {
     const course = this.requireCourse(input.courseOfferingId);
     const condition = input.condition ?? 'group';
-    if (condition !== 'group') throw new ValidationError(`unknown condition ${String(condition)}`);
-    const value = normalizeGroupLabel(input.value);
+    if (condition !== 'group' && condition !== 'enrollment')
+      throw new ValidationError(`unknown condition ${String(condition)}`);
+    const value =
+      condition === 'group'
+        ? normalizeGroupLabel(input.value)
+        : normalizeEnrollmentDeclaration(input.value);
     if (!value)
-      throw new ValidationError('value must be a group label such as A, B, B班, Bグループ or 2');
+      throw new ValidationError(
+        condition === 'group'
+          ? 'value must be a group label such as A, B, B班, Bグループ or 2'
+          : 'value must be not_taking or taking',
+      );
     const evidence = input.evidence.trim();
-    if (!evidence) throw new ValidationError('evidence is empty: quote what the group rests on');
+    if (!evidence)
+      throw new ValidationError(
+        condition === 'group'
+          ? 'evidence is empty: quote what the group rests on'
+          : 'evidence is empty: quote what the student said about taking the course',
+      );
+    const predicate =
+      condition === 'group' ? GROUP_CONDITION_PREDICATE : ENROLLMENT_CONDITION_PREDICATE;
+    const title =
+      condition === 'group'
+        ? `${this.courseTitle(course)}: ${value}グループ`
+        : `${this.courseTitle(course)}: ${value === 'not_taking' ? '履修していない' : '履修している'}（本人）`;
     return {
       tool: 'set_course_condition',
       kind: 'condition',
       input,
       via: viaOf(input),
       course,
-      title: `${this.courseTitle(course)}: ${value}グループ`,
+      title,
       dedupeKey: `condition|${course}|${condition}|${value}`,
       dueAt: undefined,
       data: { condition, value, evidence },
       apply: (a, ref) => {
-        const f = this.putFact(a, ref, course, GROUP_CONDITION_PREDICATE, value, evidence, false);
+        const f = this.putFact(a, ref, course, predicate, value, evidence, false);
         return {
           entityIds: [course],
           ownEntityIds: [],
           factIds: [f.id],
-          stored: { predicate: GROUP_CONDITION_PREDICATE, value },
+          stored: { predicate, value },
         };
       },
     };

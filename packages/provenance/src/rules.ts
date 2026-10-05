@@ -12,6 +12,12 @@ export const AuthorityRulesSchema = z.object({
   default: z.array(z.string()).default([]),
   /** Predicates holding several independent items per subject: never a Conflict. */
   multiValued: z.array(z.string()).default([]),
+  /**
+   * Predicates whose object values carry evidence next to the value itself (a deadline's matched
+   * phrase and rule): only these fields decide whether two values are the same, so two phrasings
+   * of one due date agree instead of conflicting.
+   */
+  compareFields: z.record(z.string(), z.array(z.string())).default({}),
 });
 export type AuthorityRules = z.infer<typeof AuthorityRulesSchema>;
 
@@ -47,4 +53,18 @@ export function mergeAuthorityRules(
 /** Ordered authority list for a predicate. */
 export function authorityOrder(rules: AuthorityRules, predicate: string): string[] {
   return rules.predicates[predicate] ?? rules.default;
+}
+
+/**
+ * The part of a fact value that decides whether two values agree: the `compareFields` of the
+ * predicate for an object value (missing fields count as absent), the whole value otherwise.
+ */
+export function comparableValue(rules: AuthorityRules, predicate: string, value: unknown): unknown {
+  const fields = rules.compareFields[predicate];
+  if (!fields?.length || value === null || typeof value !== 'object' || Array.isArray(value))
+    return value;
+  const v = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const f of fields) if (v[f] !== undefined) out[f] = v[f];
+  return out;
 }

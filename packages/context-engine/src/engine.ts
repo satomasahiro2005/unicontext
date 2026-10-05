@@ -110,6 +110,8 @@ import type {
   ClassPreparationContext,
   ClassReviewContext,
   ConflictItem,
+  CourseEnrollmentView,
+  EnrollmentNote,
   CourseAssignmentItem,
   CourseContext,
   CourseFileItem,
@@ -266,6 +268,11 @@ export class ContextEngine {
     return { ...ref, offering };
   }
 
+  /**
+   * The student's enrollments as the views use them: active ones of the academic system, minus
+   * courses the student says they do not take, plus dropped ones the student says they take
+   * (condition:enrollment, task-engine enrollment-declaration.ts).
+   */
   private selfEnrollments(): Enrollment[] {
     const self = new Set(
       this.entities
@@ -273,14 +280,89 @@ export class ContextEngine {
         .filter((p) => p.isSelf)
         .map((p) => p.id),
     );
+    const schedule = this.tasks.schedule;
+    const overrides = schedule.enrollmentOverrides();
+    const notTaken = new Set(
+      overrides.filter((o) => o.declaration.value === 'not_taking').flatMap((o) => o.offering.ids),
+    );
+    const takenAgain = new Set(
+      overrides.filter((o) => o.declaration.value === 'taking').flatMap((o) => o.offering.ids),
+    );
     return this.entities
       .list('enrollment')
       .filter(
         (e) =>
-          e.status === 'active' &&
           e.role === 'student' &&
-          (self.size === 0 || self.has(e.personId)),
+          (self.size === 0 || self.has(e.personId)) &&
+          (e.status === 'active'
+            ? !notTaken.has(e.courseOfferingId)
+            : e.status === 'dropped' && takenAgain.has(e.courseOfferingId)),
       );
+  }
+
+  /** The academic enrollment and the student's declaration of one course (course view). */
+  private enrollmentView(courseOfferingId: string): CourseEnrollmentView {
+    const st = this.tasks.schedule.enrollmentStatusOf(courseOfferingId);
+    const d = st.declaration;
+    return {
+      academic: st.academic,
+      ...(d
+        ? {
+            declaration: {
+              value: d.value,
+              confirmed: d.confirmed,
+              provenance: d.provenance,
+              evidence: d.evidence,
+              source: d.source,
+              declaredAt: d.observedAt,
+            },
+          }
+        : {}),
+      taken: st.taken,
+    };
+  }
+
+  /** Every linked id of the courses the student says they do not take (the system lists them). */
+  private declaredNotTakenIds(): Set<string> {
+    return this.tasks.schedule.declaredNotTaken();
+  }
+
+  /**
+   * One line per course where the student's unconfirmed declaration and the academic system
+   * disagree about taking it (「学務では履修中、本人は履修していないと登録」). The views follow the
+   * student either way; a confirmed declaration needs no note (it is shown in the course view).
+   */
+  enrollmentNotes(): EnrollmentNote[] {
+    return this.tasks.schedule
+      .enrollmentOverrides()
+      .filter((o) => !o.declaration.confirmed)
+      .map((o) => {
+        const ref = this.courseRef(o.offering.offering.id);
+        const title = ref?.title ?? o.offering.offering.title;
+        const d = o.declaration;
+        const label = d.provenance === 'recording' ? '録音から・未確認' : 'チャットで登録・未確認';
+        const what =
+          d.value === 'not_taking'
+            ? '学務では履修中、本人は履修していないと登録'
+            : '学務では履修していない、本人は履修中と登録';
+        const shown =
+          d.value === 'not_taking' ? '表示から外しています' : '本人の授業として表示しています';
+        const source = this.refs.get(d.sourceReferenceId);
+        return {
+          course: ref ?? {
+            id: o.offering.offering.id,
+            title,
+            courseCode: o.offering.offering.courseCode,
+            linkedIds: o.offering.ids,
+          },
+          academic: o.academic,
+          declared: d.value,
+          confirmed: false,
+          ...(d.evidence ? { evidence: d.evidence } : {}),
+          note: `${title}: ${what}（${label}）。${shown}`,
+          citations: source ? [toCitation(source, this.timezone)] : [],
+        };
+      });
   }
 
   private linkedIdsOf(id: string): string[] {
@@ -746,6 +828,7 @@ export class ContextEngine {
         ...(options.courseOfferingId ? { courseOfferingId: options.courseOfferingId } : {}),
       })
       .filter((t) => !options.kinds || options.kinds.includes(t.taskKind))
+      .filter(this.takenFilter(options.courseOfferingId))
       .map((t) => this.deadlineItem(t))
       .filter((d): d is DeadlineItem => d !== undefined);
   }
@@ -973,7 +1056,7 @@ export class ContextEngine {
       predicate: c.predicate,
       detectedAt: c.detectedAt,
       candidates,
-      note: `「${label}」の${c.predicate}について情報源の間で食い違いがあります: ${candidates.map((x) => `${String(x.value)}（${x.citation?.label ?? x.source}）`).join(' / ')}`,
+      note: `「${label}」の${c.predicate}について情報源の間で食い違いがあります: ${candidates.map((x) => `${conflictValueText(x.value)}（${x.citation?.label ?? x.source}）`).join(' / ')}`,
       citations: uniqueCitations(candidates.flatMap((x) => (x.citation ? [x.citation] : []))),
     };
   }
@@ -986,9 +1069,29 @@ export class ContextEngine {
     const termIds = new Set(this.currentTermOfferings().flatMap((e) => e.ids));
     const current = termIds.size > 0 ? termIds : this.enrolledIdSet();
     const dayAgo = this.now().getTime() - DAY;
+    // A date value, or a deadline value ({ dueAt, phrase, rule }).
     const past = (v: JsonValue): boolean => {
-      const t = typeof v === 'string' ? Date.parse(v) : Number.NaN;
+      const raw =
+        typeof v === 'string'
+          ? v
+          : v && typeof v === 'object' && !Array.isArray(v) && typeof v.dueAt === 'string'
+            ? v.dueAt
+            : undefined;
+      const t = raw === undefined ? Number.NaN : Date.parse(raw);
       return !Number.isNaN(t) && t < dayAgo;
+    };
+    const valueCourse = (c: Conflict): string | undefined => {
+      for (const x of c.candidates) {
+        const v = x.value;
+        if (
+          v &&
+          typeof v === 'object' &&
+          !Array.isArray(v) &&
+          typeof v.courseOfferingId === 'string'
+        )
+          return v.courseOfferingId;
+      }
+      return undefined;
     };
     return this.resolver
       .listConflicts({ status: 'open' })
@@ -1000,7 +1103,7 @@ export class ContextEngine {
         const course =
           e?.kind === 'courseOffering' || c.subject.startsWith('courseOffering:')
             ? c.subject
-            : e?.courseOfferingId;
+            : (e?.courseOfferingId ?? valueCourse(c));
         return (
           !course || current.size === 0 || this.linkedIdsOf(course).some((id) => current.has(id))
         );
@@ -1265,6 +1368,7 @@ export class ContextEngine {
     const deadlines = this.deadlines(new Date(now.getTime() - 7 * DAY), horizon);
     const tasks = this.tasks
       .list({ statuses: OPEN_STATUSES })
+      .filter(this.takenFilter())
       .filter((t) => !t.dueAt || new Date(t.dueAt) >= new Date(now.getTime() - 7 * DAY))
       .slice(0, 30)
       .map((t) => this.taskItem(t));
@@ -1301,7 +1405,25 @@ export class ContextEngine {
       importantAnnouncements,
       preparation,
       conflicts: this.currentConflicts(),
+      ...this.enrollmentNotesField(),
     };
+  }
+
+  private enrollmentNotesField(): { enrollmentNotes?: EnrollmentNote[] } {
+    const notes = this.enrollmentNotes();
+    return notes.length ? { enrollmentNotes: notes } : {};
+  }
+
+  /**
+   * Keeps work of courses the student takes: a task of a course the student says they do not take
+   * is left out of the views (kept in the database and in that course's own view).
+   */
+  private takenFilter(scopedCourse?: string): (t: { courseOfferingId?: string }) => boolean {
+    if (scopedCourse) return () => true;
+    const out = this.declaredNotTakenIds();
+    if (out.size === 0) return () => true;
+    return (t) =>
+      !t.courseOfferingId || !this.linkedIdsOf(t.courseOfferingId).some((id) => out.has(id));
   }
 
   /** getTodayContext() → {classes, changes, deadlines, tasks, importantAnnouncements, preparation, conflicts, pacing} (§17). */
@@ -1406,12 +1528,14 @@ export class ContextEngine {
   /** The read model of the next-action engine (also used by the student-state / attention views). */
   nextActionHost(): NextActionHost {
     const enrolled = this.enrolledIdSet();
-    const dropped = new Set(
-      this.entities
+    const dropped = new Set([
+      ...this.entities
         .list('enrollment')
         .filter((e) => e.status === 'dropped' && e.role === 'student')
         .flatMap((e) => this.linkedIdsOf(e.courseOfferingId)),
-    );
+      // Courses the student says they do not take (rejected / dropped although still listed).
+      ...this.declaredNotTakenIds(),
+    ]);
     const schedule = this.tasks.schedule;
     const offerings = schedule.enrolledOfferings();
     return {
@@ -1622,6 +1746,7 @@ export class ContextEngine {
         { limit: CHANGE_LIMITS.week, mine: true },
       ),
       conflicts: this.currentConflicts(),
+      ...this.enrollmentNotesField(),
       next: summarizeNextActions(this.nextActions()),
     };
   }
@@ -1682,6 +1807,7 @@ export class ContextEngine {
           }
         : {}),
       enrolled,
+      enrollment: this.enrollmentView(c.id),
       retake: offerings.some((o) => (o.extra as { retake?: unknown } | undefined)?.retake === true),
       paceSlots: schedule.paceSlots(ids).map((x) => this.paceSlotView(x)),
       room: this.resolvedValue<string>(this.resolver.resolve(ids, 'room'), c.offering.room),
@@ -2291,4 +2417,13 @@ export class ContextEngine {
   weekdayOf(date: string): number {
     return zonedParts(parseZonedDate(date, this.timezone), this.timezone).weekday;
   }
+}
+
+/** A conflict candidate's value in one line: a deadline value by its phrase, else as JSON text. */
+function conflictValueText(v: JsonValue): string {
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    if (typeof v.phrase === 'string') return v.phrase;
+    return JSON.stringify(v);
+  }
+  return String(v);
 }

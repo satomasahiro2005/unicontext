@@ -249,3 +249,13 @@ courses of each requirement with 合格/不合格).
 The grade report (`buildGradeReport` in `@unicontext/context-engine`) is shared by
 `get_credit_summary` (local and remote MCP), `GET /api/v1/grades`, `unicontext grades` and the Web UI
 授業 page.
+
+## Registration outcomes are not in LiveCampusU
+
+At Shizuoka, whether a registration was permitted (履修の許可・不許可, lottery results, 取消) is sent
+**by email only**. LiveCampusU keeps listing a rejected course as 履修中 (timetable, schedule,
+grades in progress, graduation requirements), so the connector always emits `enrollment.status:
+active` and has nothing to parse. The student's declaration (`set_course_condition` with
+`condition: enrollment`) is the path that removes such a course from the student's views; see
+docs/ARCHITECTURE.md ("Whether the student takes a course") and
+docs/research/lcu-registration.md §9.

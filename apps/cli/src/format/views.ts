@@ -3,6 +3,7 @@ import type {
   ChangeItem,
   ClassItem,
   ConflictItem,
+  EnrollmentNote,
   DeadlineItem,
   NextAction,
   NextActionsContext,
@@ -111,8 +112,13 @@ function classColumns(ctx: CliContext, tz: string): TableColumn<ClassItem>[] {
     },
     {
       header: '状態',
-      value: (c) => resolvedText(c.status, CLASS_STATUS_LABELS),
-      style: (padded, c) => (c.cancelled ? ctx.style.red(padded) : padded),
+      value: (c) => classStateText(c),
+      style: (padded, c) =>
+        c.cancelled
+          ? ctx.style.red(padded)
+          : c.effectiveSchedule.status !== 'attending'
+            ? ctx.style.yellow(padded)
+            : padded,
     },
     { header: '根拠', value: (c) => ctx.text(citationText(c.citations, 1)) },
   ];
@@ -130,6 +136,36 @@ export function printClasses(
     return;
   }
   printTable(ctx, classColumns(ctx, tz), classes);
+  // Why a meeting is not plainly the student's (group unknown, another group's day): once per
+  // course and reason, under the table.
+  const seen = new Set<string>();
+  for (const c of classes) {
+    const e = c.effectiveSchedule;
+    if (c.cancelled || e.status === 'attending' || !e.reason) continue;
+    const key = `${c.course.id}|${e.reason}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ctx.out(ctx.style.dim(`  ※ ${ctx.text(c.course.title)}: ${ctx.text(e.reason)}`));
+  }
+}
+
+/** The class's state for the student: 休講 etc. from the sources, else the effective status. */
+export function classStateText(c: ClassItem): string {
+  if (c.cancelled || c.status.status === 'conflict')
+    return resolvedText(c.status, CLASS_STATUS_LABELS);
+  if (c.effectiveSchedule.status === 'not_attending') return '出席なし';
+  if (c.effectiveSchedule.status === 'unknown') return '未確定';
+  return resolvedText(c.status, CLASS_STATUS_LABELS);
+}
+
+/** 「履修の食い違い」: the student's unconfirmed word against the academic system, one line each. */
+function printEnrollmentNotes(ctx: CliContext, notes: readonly EnrollmentNote[] | undefined): void {
+  if (!notes?.length) return;
+  printSection(ctx, '履修の食い違い', notes.length);
+  for (const n of notes)
+    ctx.out(
+      `  ${ctx.style.yellow(ctx.text(n.note))}  ${ctx.style.dim(citationText(n.citations, 1))}`,
+    );
 }
 
 function deadlineColumns(ctx: CliContext, tz: string): TableColumn<DeadlineItem>[] {
@@ -267,6 +303,7 @@ export function printDay(
   if ('next' in b && b.next) ctx.out(ctx.style.bold(`→ ${ctx.text(b.next.line)}`));
   printSection(ctx, '授業', b.classes.length);
   printClasses(ctx, b.classes, tz, b.noClassesReason);
+  printEnrollmentNotes(ctx, b.enrollmentNotes);
   printConflicts(ctx, b.conflicts);
   printSection(ctx, '昨日からの変更', b.changes.length);
   printChanges(ctx, b.changes, tz);
@@ -305,6 +342,7 @@ export function printWeek(ctx: CliContext, b: WeekContext): void {
   printDeadlines(ctx, b.exams, tz);
   printSection(ctx, '変更', b.changes.length);
   printChanges(ctx, b.changes, tz);
+  printEnrollmentNotes(ctx, b.enrollmentNotes);
   printConflicts(ctx, b.conflicts);
 }
 

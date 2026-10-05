@@ -59,6 +59,11 @@ function TodayBody({ today }: { today: TodayContext }) {
         <span className="meta">{formatShort(today.generatedAt, tz)}時点</span>
       </p>
       <ConflictBanner count={today.conflicts.length} />
+      {today.enrollmentNotes?.map((n) => (
+        <p key={n.course.id} className="note">
+          {n.note}
+        </p>
+      ))}
       {today.next ? <NextCard next={today.next} /> : null}
 
       <Section title="今日の授業" count={classes.length}>

@@ -298,11 +298,14 @@ export class TaskEngine {
         this.clock.now().toISOString();
       const reference = new Date(refTime);
       const next = e.courseOfferingId ? this.nextClassAt(e.courseOfferingId, reference) : undefined;
-      const found = extractDeadlines(body, {
-        reference,
-        timezone: this.tz,
-        ...(next ? { nextClassAt: next } : {}),
-      });
+      const found = withoutRestatedDays(
+        extractDeadlines(body, {
+          reference,
+          timezone: this.tz,
+          ...(next ? { nextClassAt: next } : {}),
+        }),
+        this.tz,
+      );
       const ref = this.refs.forEntity(e.id)[0];
       if (!ref) continue;
       const keep = new Set<string>();
@@ -614,7 +617,7 @@ export class TaskEngine {
         clock: this.clock,
         facts: this.facts,
         refs: this.refs,
-        enrolled: () => this.schedule.enrolledOfferings(),
+        enrolled: () => this.schedule.enrolledOfferings({ raw: true }),
       });
     const now = this.clock.now().toISOString();
     const derivedIds = new Set<string>();
@@ -862,4 +865,27 @@ export class TaskEngine {
     }
     return report;
   }
+}
+
+/**
+ * One deadline stated twice in one text is one deadline: 「12:00まで」 and 「12:00が締め切り」 for the
+ * same instant keep the first match, and 「4月15日まで」 next to 「4月15日の17時00分までに」 is not
+ * a second one at 23:59 — a date-only match (end of day assumed) is dropped when the text also
+ * gives a time on that local date.
+ */
+export function withoutRestatedDays<T extends { dueAt: string; timeAssumed: boolean }>(
+  found: readonly T[],
+  timezone: string,
+): T[] {
+  const timedDays = new Set(
+    found.filter((d) => !d.timeAssumed).map((d) => zonedDateString(new Date(d.dueAt), timezone)),
+  );
+  const seen = new Set<string>();
+  return found.filter((d) => {
+    if (d.timeAssumed && timedDays.has(zonedDateString(new Date(d.dueAt), timezone))) return false;
+    const at = new Date(d.dueAt).getTime();
+    if (seen.has(String(at))) return false;
+    seen.add(String(at));
+    return true;
+  });
 }

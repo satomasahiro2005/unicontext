@@ -319,6 +319,36 @@ export interface CourseAssignmentItem extends Cited {
   sourceId: string | undefined;
 }
 
+/** Whether the student takes a course, per the academic system and per the student. */
+export interface CourseEnrollmentView {
+  academic: 'active' | 'dropped' | 'none';
+  declaration?:
+    | {
+        value: 'not_taking' | 'taking';
+        confirmed: boolean;
+        provenance: 'student' | 'chat' | 'recording';
+        evidence: string | undefined;
+        source: string;
+        declaredAt: string;
+      }
+    | undefined;
+  /** What the views use (the declaration wins over the academic status). */
+  taken: boolean;
+}
+
+/**
+ * The student's unconfirmed word and the academic system disagree about taking a course. The
+ * views follow the student; this one line says so (「学務では履修中、本人は履修していないと登録」).
+ */
+export interface EnrollmentNote extends Cited {
+  course: CourseRef;
+  academic: 'active' | 'dropped';
+  declared: 'not_taking' | 'taking';
+  confirmed: false;
+  evidence?: string;
+  note: string;
+}
+
 export interface ConflictItem extends Cited {
   id: string;
   subject: string;
@@ -412,6 +442,8 @@ export interface DayContext<V extends 'today' | 'tomorrow'> extends BundleBase<V
   importantAnnouncements: AnnouncementItem[];
   preparation: PreparationItem[];
   conflicts: ConflictItem[];
+  /** Courses the student says they (do not) take against the academic system, unconfirmed. */
+  enrollmentNotes?: EnrollmentNote[] | undefined;
   /** Current term (and half: 前半 / 後半) of the academic calendar, if the date is inside one. */
   term?: TermOfDate | undefined;
   /** Why there are no classes (学期外, 未登録, 祝日 …) when `classes` is empty. */
@@ -490,6 +522,8 @@ export interface WeekContext extends BundleBase<'week'> {
   changesTotal?: number | undefined;
   changesOmitted?: number | undefined;
   conflicts: ConflictItem[];
+  /** See DayContext.enrollmentNotes. */
+  enrollmentNotes?: EnrollmentNote[] | undefined;
   /** What to do now (next-action engine), compact. */
   next?: NextActionSummary | undefined;
 }
@@ -517,8 +551,13 @@ export interface CourseContext extends BundleBase<'course'> {
   termPart?: string | undefined;
   /** Where termPart comes from (学務情報システム per-slot text, or the syllabus 開講時期). */
   termPartCitations?: Citation[] | undefined;
-  /** The student is enrolled (the academic system lists it as theirs). */
+  /**
+   * The student takes it: the academic system lists it as theirs, unless the student says they do
+   * not take it (or the system dropped it and the student says they do) — see `enrollment`.
+   */
   enrolled: boolean;
+  /** The academic system's enrollment and the student's own declaration (condition:enrollment). */
+  enrollment?: CourseEnrollmentView | undefined;
   /** 再履修 class. */
   retake: boolean;
   /** The student's own self-study slots (pace_slots). */

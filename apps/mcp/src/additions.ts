@@ -190,14 +190,18 @@ export const addTaskShape = {
 export const setCourseConditionShape = {
   course,
   condition: z
-    .enum(['group'])
+    .enum(['group', 'enrollment'])
     .optional()
-    .describe('条件の種類（今は group = グループ・班だけ） / Condition kind (only group)'),
+    .describe(
+      '条件の種類: group = グループ・班（省略時）、enrollment = その科目を履修しているか / Condition kind: group (default) or enrollment (whether the student takes the course)',
+    ),
   value: z
     .string()
     .min(1)
     .max(20)
-    .describe('グループ名: A / B / B班 / Bグループ / 2 など / Group label'),
+    .describe(
+      'group: グループ名（A / B / B班 / Bグループ / 2 など）。enrollment: not_taking（履修していない・取り消した・履修を拒否された・抽選に落ちた）か taking（履修している） / group: group label; enrollment: not_taking or taking',
+    ),
   evidence: z
     .string()
     .min(1)
@@ -614,9 +618,9 @@ export const retractAdditionShape = {
 };
 
 const COMMON_DESC =
-  '保存先はUniContextだけで、大学のシステムには何も送らない。保存した内容はChatGPTの他の会話やClaudeなど、UniContextにつながる全てのセッションから get_today・get_week・get_deadlines・get_tasks・get_course・get_notes で見える。会話でユーザーが言った・一緒に決めたものは「チャットで登録」、講義の録音で聞いたものは「録音から」と表示される。学務情報システムやLMSの値は上書きせず、食い違うときは食い違いとして表示される（本人が確認すると本人の情報として優先される）。課題の提出状態・成績・履修は変更できない。';
+  '保存先はUniContextだけで、大学のシステムには何も送らない。保存した内容はChatGPTの他の会話やClaudeなど、UniContextにつながる全てのセッションから get_today・get_week・get_deadlines・get_tasks・get_course・get_notes で見える。会話でユーザーが言った・一緒に決めたものは「チャットで登録」、講義の録音で聞いたものは「録音から」と表示される。学務情報システムやLMSの値は上書きせず、食い違うときは食い違いとして表示される（本人が確認すると本人の情報として優先される）。課題の提出状態・成績・大学の履修登録は変更できない（本人が履修していないと言った科目を表示から外すのは set_course_condition の enrollment）。';
 const COMMON_EN =
-  'Stored only in UniContext (nothing is sent to any university system) and visible to every other session and client connected to UniContext — other ChatGPT chats, Claude — through get_today, get_week, get_deadlines, get_tasks, get_course and get_notes. Labelled 「チャットで登録」 (said or planned in a chat) or 「録音から」 (heard in a lecture recording). Never overrides LiveCampusU/LMS data — disagreements become conflicts — unless the owner confirms it. Cannot change submission/completion status, grades or enrolment.';
+  'Stored only in UniContext (nothing is sent to any university system) and visible to every other session and client connected to UniContext — other ChatGPT chats, Claude — through get_today, get_week, get_deadlines, get_tasks, get_course and get_notes. Labelled 「チャットで登録」 (said or planned in a chat) or 「録音から」 (heard in a lecture recording). Never overrides LiveCampusU/LMS data — disagreements become conflicts — unless the owner confirms it. Cannot change submission/completion status, grades or the university registration (hiding a course the student says they do not take is set_course_condition with condition=enrollment).';
 
 /** What to keep from a lecture recording (ingest_lecture and the server instructions). */
 export const RECORDING_RULES_JA =
@@ -644,8 +648,8 @@ export const WRITE_TOOLS = {
     description: `やること（期限なしも可）を登録する。ユーザーが「〜をやらなきゃ」と言ったこと、会話でユーザーと一緒に立てた勉強計画のTODOに使う。講義の録音・文字起こしで言われた、学生がやらなければならないことは ingest_lecture の tasks でまとめて保存する（1件だけならここで via=recording とし、ユーザーに確かめずに保存する）。科目に関係ないものは course を省略。期限があれば dueAt に入れる（解決した日時が返るのでユーザーに伝える）。${COMMON_DESC} / Register a to-do the student mentions or plans with you in ANY chat, so every other session sees it in get_tasks / get_today. To-dos from a lecture recording go through ingest_lecture (or here with via=recording), stored without asking. ${COMMON_EN}`,
   },
   set_course_condition: {
-    title: '科目での本人の条件（グループ・班）を登録',
-    description: `科目での本人の条件（今はグループ・班）を登録する。ユーザーが自分のグループ・班を言ったとき（「俺Bグループ」「実験はB班」）、または名簿・資料・お知らせから本人のグループが分かったときは、聞き返さずにすぐ呼ぶ。同じグループ分けの科目が複数あるとき（実験Bと実験Cなど、資料に共通と書いてあるとき）は科目ごとに呼ぶ。登録すると、グループ別の実施スケジュールがある科目の get_today・get_week・get_student_state・次にやることが本人のグループの日だけを授業として出す（他のグループの日は notAttending に理由つきで残る）。グループが未登録だとその授業は unknown（グループ次第）になる。evidence には本人の言葉や名簿の該当行をそのまま入れる。大学や配布資料の値は上書きせず、食い違うときは両方が表示される。${COMMON_DESC} / Register the student's group in a course. Call it right away, without asking back, whenever the student mentions their group / 班 or a roster or document shows it (once per course when several courses share the grouping). With the group known, today/week/state/next actions show only the student's group's meetings of courses with a group schedule (other groups' days stay in notAttending with the reason); unknown groups make such meetings 'unknown'. ${COMMON_EN}`,
+    title: '科目での本人の条件（グループ・班／履修しているか）を登録',
+    description: `科目での本人の条件を登録する。2種類ある。(1) condition=enrollment: ユーザーが科目を履修していない・やめた・履修を取り消した・履修登録を拒否された（不許可）・抽選に落ちた・もう取らないと言ったら（「実験Cは結局履修拒否された」「〇〇は切った」「あれ落選した」）、聞き返さずに value=not_taking ですぐ呼ぶ。学務情報システムに履修中と出ていても呼ぶ（履修の許可・不許可や抽選の結果はメールだけで届き、学務には出ないことが多い）。逆に、学務で履修していないことになっている科目を本人が取っていると言ったら value=taking。登録すると、その科目は get_today・get_week・get_tomorrow・次にやること・get_attention_required・締切・ペース・通知から外れる（本人が確認する前は「学務では履修中、本人は履修していないと登録」の1行が enrollmentNotes に出る）。大学の履修登録は何も変わらず、データも消えない（get_course には残り、enrollment に両方が出る）。(2) condition=group（省略時）: ユーザーが自分のグループ・班を言ったとき（「俺Bグループ」「実験はB班」）、または名簿・資料・お知らせから本人のグループが分かったときは、聞き返さずにすぐ呼ぶ。同じグループ分けの科目が複数あるとき（実験Bと実験Cなど、資料に共通と書いてあるとき）は科目ごとに呼ぶ。登録すると、グループ別の実施スケジュールがある科目の get_today・get_week・get_student_state・次にやることが本人のグループの日だけを授業として出す（他のグループの日は notAttending に理由つきで残る）。グループが未登録だとその授業は unknown（グループ次第）になる。どちらも evidence には本人の言葉や名簿の該当行をそのまま入れる。大学や配布資料の値は上書きせず、食い違うときは両方が表示される。${COMMON_DESC} / Register a personal condition of the student in a course. (1) condition=enrollment: whenever the student says they do not take a course — dropped it, withdrew, registration rejected / not permitted, lost the lottery — call it right away with value=not_taking, without asking back, even if the academic system still lists the course (registration outcomes often arrive by email only); value=taking when they take a course the system marks dropped. The course then leaves today/week/tomorrow, next actions, attention, deadlines, pace and notifications (while unconfirmed, a one-line enrollmentNotes entry says the system still lists it). The university registration is not changed and no data is deleted (get_course keeps it, with both in enrollment). (2) condition=group (default): the student's group in a course; call it right away whenever the student mentions their group / 班 or a roster or document shows it (once per course when several courses share the grouping). With the group known, today/week/state/next actions show only the student's group's meetings of courses with a group schedule (other groups' days stay in notAttending with the reason); unknown groups make such meetings 'unknown'. ${COMMON_EN}`,
   },
   add_session_rule: {
     title: 'グループ別の実施日程を登録',

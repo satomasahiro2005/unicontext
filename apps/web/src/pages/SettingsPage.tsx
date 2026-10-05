@@ -148,7 +148,7 @@ const ADDITION_KIND: Record<AdditionView['kind'], string> = {
   prep: '準備',
   note: 'メモ',
   task: 'やること',
-  condition: '本人の条件（グループ）',
+  condition: '本人の条件（グループ・履修）',
   session_rule: 'グループ別の日程',
 };
 

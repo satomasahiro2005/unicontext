@@ -320,6 +320,44 @@ describe('record tools: calls', () => {
     );
   });
 
+  it('set_course_condition enrollment=not_taking hides a course the system still lists', async () => {
+    const client = await connect(chatgpt);
+    const listed = () =>
+      uc.context.today().classes.some((c) => c.course.title === 'ソフトウェア工学');
+    expect(listed()).toBe(true);
+    const res = await call(client, 'set_course_condition', {
+      course: 'ソフトウェア工学',
+      condition: 'enrollment',
+      value: 'not_taking',
+      evidence: '本人: ソフトウェア工学は結局履修拒否された',
+    });
+    const out = res.structuredContent as Structured;
+    expect(out.status).toBe('created');
+    expect(out.addition).toMatchObject({
+      kind: 'condition',
+      status: 'unconfirmed',
+      title: 'ソフトウェア工学: 履修していない（本人）',
+    });
+    expect(out.addition.stored).toMatchObject({
+      predicate: 'condition:enrollment',
+      value: 'not_taking',
+    });
+    expect(listed()).toBe(false);
+    const view = await call(client, 'get_today', {});
+    expect(JSON.stringify(view.structuredContent)).toContain(
+      '学務では履修中、本人は履修していないと登録',
+    );
+    const bad = await call(client, 'set_course_condition', {
+      course: 'ソフトウェア工学',
+      condition: 'enrollment',
+      value: 'B',
+      evidence: 'x',
+    });
+    expect(bad.isError).toBe(true);
+    await call(client, 'retract_addition', { additionId: out.addition.id });
+    expect(listed()).toBe(true);
+  });
+
   it('local clients are identified by their MCP client name', async () => {
     const client = await connect({}, 'Claude Desktop');
     const res = await call(client, 'add_task', { course: 'ソフトウェア工学', title: '復習する' });

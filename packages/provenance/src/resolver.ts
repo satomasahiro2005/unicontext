@@ -18,7 +18,12 @@ import {
 } from '@unicontext/database';
 import { and, asc, eq } from 'drizzle-orm';
 import { factId, FactStore, type FactWithSource } from './fact-store.js';
-import { type AuthorityRules, authorityOrder, loadDefaultAuthorityRules } from './rules.js';
+import {
+  type AuthorityRules,
+  authorityOrder,
+  comparableValue,
+  loadDefaultAuthorityRules,
+} from './rules.js';
 
 export type ResolutionMethod =
   'single' | 'agreement' | 'user' | 'authority' | 'recency' | 'only_inferred';
@@ -153,14 +158,17 @@ export class ConflictResolver {
     if (direct.length === 0) return done(candidates[0] as RankedCandidate, 'only_inferred');
 
     const groups = new Map<string, RankedCandidate[]>();
+    // Two phrasings of the same value (a deadline's dueAt matched by different phrases) agree.
+    const keyOf = (c: RankedCandidate): string =>
+      stableStringify(comparableValue(this.rules, predicate, c.fact.value) as JsonValue);
     for (const c of direct) {
-      const key = stableStringify(c.fact.value);
+      const key = keyOf(c);
       groups.set(key, [...(groups.get(key) ?? []), c]);
     }
     const best = direct[0] as RankedCandidate;
     if (groups.size === 1) return done(best, direct.length === 1 ? 'single' : 'agreement');
 
-    const bestKey = stableStringify(best.fact.value);
+    const bestKey = keyOf(best);
     const bestTime = Math.max(...(groups.get(bestKey) ?? []).map(time));
     const listed = authorityOrder(this.rules, predicate).length;
     let challenger: RankedCandidate | undefined;

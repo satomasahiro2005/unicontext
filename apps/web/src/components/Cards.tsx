@@ -88,8 +88,20 @@ export function ClassCard({ item, compact = false }: { item: ClassItem; compact?
           <CourseLink course={item.course} />
         </h3>
         {item.cancelled ? <Badge tone="bad">休講</Badge> : null}
+        {!item.cancelled && item.effectiveSchedule?.status === 'unknown' ? (
+          <Badge tone="warn">未確定</Badge>
+        ) : null}
+        {!item.cancelled && item.effectiveSchedule?.status === 'not_attending' ? (
+          <Badge>出席なし</Badge>
+        ) : null}
       </header>
       {time ? <p className="meta">{time}</p> : null}
+      {!item.cancelled &&
+      item.effectiveSchedule &&
+      item.effectiveSchedule.status !== 'attending' &&
+      item.effectiveSchedule.reason ? (
+        <p className="note">{item.effectiveSchedule.reason}</p>
+      ) : null}
       <ResolvedField label="教室" value={item.room} />
       {item.status.status === 'conflict' ? (
         <ResolvedField label="状態" value={item.status} />

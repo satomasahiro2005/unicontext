@@ -56,9 +56,17 @@ predicates:
       transcript,
       student-statement,
     ]
+  # Whether the student takes a course at all, as the student says it (dropped / rejected although
+  # the academic system still lists it). Only the student declares it; the academic system's own
+  # word is the enrollment record itself, never a fact of this predicate.
+  'condition:enrollment': [transcript, student-statement]
 # Predicates whose facts are separate items rather than competing values for one slot (a lecture
 # can name several things to prepare): they are never turned into Conflicts.
 multiValued: [todo, session_rule]
+# Object values that carry evidence beside the value: only these fields decide whether two values
+# agree. A deadline matched as 「4月6日(月)12:00まで」 and 「4月6日(月)12:00が締め切り」 is one due date.
+compareFields:
+  deadline: [dueAt, courseOfferingId]
 # Used for predicates not listed above.
 default:
   [

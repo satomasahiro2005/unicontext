@@ -267,3 +267,11 @@
 2. 1 件登録したときの SC_07002B00_01 の登録済セル markup（`li.select-btn`、class、`cancel('<講義コード>')` の実引数）。
 3. 学期が 2 つ以上あるときの `change('<code>')`。
 
+---
+
+## 9. 履修の可否（許可・不許可・抽選結果）は LCU に出ない（2026-10-05）
+
+- 本人によると、後期の情報科学実験C は履修を拒否された（不許可）。その通知は**メールだけ**で届き、LiveCampusU には出ていない。
+- 同期済みのデータ（10/5 14:35 JST 取得）でも、LCU は実験C を時間割 `SC_18001B00_13`（flags は `compulsory` だけ）、スケジュール `SC_18001B00_01`、成績 `SC_10004B00_01`（includingInProgress）、卒業要件の「履修中」のどれにも載せたままだった [観測]。履修登録画面 `SC_07002B00_01` は書き込みゲートの先にあるので、connector からは読まない。
+- そのため UniContext では、本人の申告（MCP `set_course_condition` の `condition: enrollment, value: not_taking`）でその科目を本人の表示から外す。LCU を解析して自動で `dropped` にする経路は作っていない。将来、Gmail の通知を `ingest_external_signal(gmail)` で取り込めば、同じ申告を未確認・出典つきで入れられる（docs/ARCHITECTURE.md「Whether the student takes a course」）。
+

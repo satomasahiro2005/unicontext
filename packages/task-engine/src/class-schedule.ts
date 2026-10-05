@@ -33,6 +33,7 @@ import {
 } from '@unicontext/core';
 import { EntityStore, type UniContextDatabase } from '@unicontext/database';
 import { FactStore } from '@unicontext/provenance';
+import { type EnrollmentDeclaration, enrollmentDeclarations } from './enrollment-declaration.js';
 
 /** User fact (origin user) holding the weekly self-study slots of an offering. */
 export const PACE_PREDICATE = 'pace_slots';
@@ -61,6 +62,22 @@ export interface ClassScheduleOptions {
   /** Identity: canonical id and connected ids of a course offering (§14). */
   canonical?: (id: string) => string;
   expand?: (id: string) => string[];
+}
+
+/** A course whose academic enrollment status and the student's declaration disagree. */
+export interface EnrollmentOverride {
+  offering: EnrolledOffering;
+  academic: 'active' | 'dropped';
+  declaration: EnrollmentDeclaration;
+}
+
+/** Whether the student takes an offering, per the academic system and the student. */
+export interface EnrollmentStatus {
+  /** The academic system's student enrollment (none = no enrollment record at all). */
+  academic: 'active' | 'dropped' | 'none';
+  declaration?: EnrollmentDeclaration;
+  /** What the views use: the student's declaration over the academic status. */
+  taken: boolean;
 }
 
 export interface EnrolledOffering {
@@ -173,20 +190,87 @@ export class ClassSchedule {
     return offs.some((o) => o.schedule.length > 0) ? 'regular' : 'unscheduled';
   }
 
-  /** Offerings the student is enrolled in, one per canonical offering. */
-  enrolledOfferings(): EnrolledOffering[] {
+  /**
+   * Offerings the student takes, one per canonical offering: active student enrollments of the
+   * academic system with the student's own declaration applied (enrollment-declaration.ts) — a
+   * course the student says they do not take is left out, a dropped one they say they take is kept.
+   * `raw` = the academic system's list as it is (for reading synced documents, whose tables name
+   * courses the student may have dropped).
+   */
+  enrolledOfferings(options: { raw?: boolean } = {}): EnrolledOffering[] {
+    return this.enrollmentEntries(options.raw === true)
+      .filter((e) => options.raw === true || e.taken)
+      .map((e) => e.offering);
+  }
+
+  /**
+   * Courses where the student's declaration and the academic system disagree about taking it:
+   * listed as active but declared not_taking, or dropped but declared taking.
+   */
+  enrollmentOverrides(): EnrollmentOverride[] {
+    return this.enrollmentEntries(false)
+      .filter(
+        (e) => e.declaration && (e.academic === 'active') !== (e.declaration.value === 'taking'),
+      )
+      .map((e) => ({
+        offering: e.offering,
+        academic: e.academic,
+        declaration: e.declaration as EnrollmentDeclaration,
+      }));
+  }
+
+  /** Every linked id of the courses the academic system lists but the student says they do not take. */
+  declaredNotTaken(): Set<string> {
+    return new Set(
+      this.enrollmentOverrides()
+        .filter((o) => o.declaration.value === 'not_taking')
+        .flatMap((o) => o.offering.ids),
+    );
+  }
+
+  /** The academic status and the student's declaration for one offering (any linked id). */
+  enrollmentStatusOf(courseOfferingId: string): EnrollmentStatus {
+    const id = this.canonical(courseOfferingId);
+    const ids = new Set([id, ...this.expand(id), courseOfferingId]);
+    const entry = this.enrollmentEntries(false).find((e) => e.offering.ids.some((x) => ids.has(x)));
+    const declaration =
+      entry?.declaration ?? enrollmentDeclarations(this.facts, [[...ids]])[0] ?? undefined;
+    const academic = entry?.academic ?? 'none';
+    const taken =
+      declaration?.value === 'not_taking'
+        ? false
+        : declaration?.value === 'taking'
+          ? academic !== 'none'
+          : academic === 'active';
+    return { academic, ...(declaration ? { declaration } : {}), taken };
+  }
+
+  private enrollmentEntries(raw: boolean): {
+    offering: EnrolledOffering;
+    academic: 'active' | 'dropped';
+    declaration: EnrollmentDeclaration | undefined;
+    taken: boolean;
+  }[] {
     const self = new Set(
       this.entities
         .list('person')
         .filter((p) => p.isSelf)
         .map((p) => p.id),
     );
-    const out = new Map<string, EnrolledOffering>();
-    for (const e of this.entities.list('enrollment')) {
-      if (e.status !== 'active' || e.role !== 'student') continue;
-      if (self.size > 0 && !self.has(e.personId)) continue;
+    const found = new Map<string, { offering: EnrolledOffering; academic: 'active' | 'dropped' }>();
+    const enrollments = this.entities
+      .list('enrollment')
+      .filter(
+        (e) =>
+          e.role === 'student' &&
+          (e.status === 'active' || (!raw && e.status === 'dropped')) &&
+          (self.size === 0 || self.has(e.personId)),
+      )
+      // An active enrollment wins over a dropped one of the same canonical offering.
+      .sort((a, b) => Number(b.status === 'active') - Number(a.status === 'active'));
+    for (const e of enrollments) {
       const id = this.canonical(e.courseOfferingId);
-      if (out.has(id)) continue;
+      if (found.has(id)) continue;
       const ids = [...new Set([id, ...this.expand(id), e.courseOfferingId])];
       const offering =
         this.entities.getOfKind('courseOffering', id) ??
@@ -197,15 +281,29 @@ export class ClassSchedule {
         .filter((o): o is CourseOffering => o !== undefined);
       const term =
         this.termOf(offering) ?? linked.map((o) => this.termOf(o)).find((t) => t !== undefined);
-      out.set(id, {
-        offering,
-        ids,
-        scheduleType: this.scheduleTypeOf(ids),
-        term,
-        termParts: this.termPartsOf(ids),
+      found.set(id, {
+        offering: {
+          offering,
+          ids,
+          scheduleType: this.scheduleTypeOf(ids),
+          term,
+          termParts: this.termPartsOf(ids),
+        },
+        academic: e.status === 'active' ? 'active' : 'dropped',
       });
     }
-    return [...out.values()];
+    const list = [...found.values()];
+    const declarations = raw
+      ? list.map(() => undefined)
+      : enrollmentDeclarations(
+          this.facts,
+          list.map((e) => e.offering.ids),
+        );
+    return list.map((e, i) => {
+      const declaration = declarations[i];
+      const taken = declaration ? declaration.value === 'taking' : e.academic === 'active';
+      return { ...e, declaration, taken };
+    });
   }
 
   /**
@@ -463,9 +561,12 @@ export class ClassSchedule {
    */
   sessionsBetween(fromDate: string, toDate: string, courseIds?: readonly string[]): ClassSession[] {
     const wanted = courseIds ? new Set(courseIds.map((c) => this.canonical(c))) : undefined;
+    // Courses the student says they do not take: their stored meetings (休講 notices…) stay out too.
+    const notTaken = this.declaredNotTaken();
     const stored = this.entities
       .listByDateRange('classSession', 'date', fromDate, toDate)
-      .filter((s) => !wanted || wanted.has(this.canonical(s.courseOfferingId)));
+      .filter((s) => !wanted || wanted.has(this.canonical(s.courseOfferingId)))
+      .filter((s) => !notTaken.has(s.courseOfferingId));
     const keyOf = (s: ClassSession): string =>
       `${s.date}|${this.canonical(s.courseOfferingId)}|${s.sessionKind ?? 'class'}|${s.period ?? s.startsAt ?? s.id}`;
     const seen = new Map<string, ClassSession>();

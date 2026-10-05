@@ -299,3 +299,45 @@ describe('ConflictResolver', () => {
     ).toBe('chatgpt-record 00:42:18 10/1 15:00取得');
   });
 });
+
+describe('compareFields: evidence beside the value never makes a conflict', () => {
+  const notice = stableId('announcement', 'lcu', 'lottery');
+  const deadline = (dueAt: string, phrase: string) =>
+    addFact({
+      subject: notice,
+      predicate: 'deadline',
+      value: { dueAt, phrase, rule: 'absolute_date' },
+      authority: 'academic-system',
+      origin: 'extracted',
+      confidence: 0.95,
+      observedAt: '2026-04-05T08:00:00.000Z',
+    });
+
+  it('two phrasings of one due date agree (deadline compares dueAt only)', () => {
+    deadline('2026-04-06T03:00:00.000Z', '4月6日(月)12:00が締め切り');
+    deadline('2026-04-06T03:00:00.000Z', '4月6日(月)12:00まで');
+    const r = resolver.resolve(notice, 'deadline');
+    expect(r.status).toBe('resolved');
+    expect(r.method).toBe('agreement');
+    expect(resolver.detectConflicts().opened).toEqual([]);
+  });
+
+  it('different due dates still conflict', () => {
+    deadline('2026-04-24T07:30:00.000Z', '4/24(金)16:30まで');
+    deadline('2026-05-01T14:59:00.000Z', '5/1(金)まで');
+    expect(resolver.resolve(notice, 'deadline').status).toBe('conflict');
+  });
+
+  it('resolves a conflict opened before the rule existed on the next detection', () => {
+    deadline('2026-04-06T03:00:00.000Z', '4月6日(月)12:00が締め切り');
+    deadline('2026-04-06T03:00:00.000Z', '4月6日(月)12:00まで');
+    const strict = new ConflictResolver(db, {
+      clock,
+      rules: { ...loadDefaultAuthorityRules(), compareFields: {} },
+    });
+    expect(strict.detectConflicts().opened).toHaveLength(1);
+    const { resolved } = resolver.detectConflicts();
+    expect(resolved).toHaveLength(1);
+    expect(resolver.listConflicts({ status: 'open' })).toEqual([]);
+  });
+});

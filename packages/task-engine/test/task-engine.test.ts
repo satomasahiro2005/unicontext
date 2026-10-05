@@ -8,7 +8,7 @@ import {
 } from '@unicontext/database';
 import { ConflictResolver, factId } from '@unicontext/provenance';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TaskEngine } from '../src/index.js';
+import { TaskEngine, withoutRestatedDays } from '../src/index.js';
 
 let db: UniContextDatabase;
 let clock: ManualClock;
@@ -266,5 +266,20 @@ describe('TaskEngine (§19)', () => {
     engine.createManualTask({ title: '図書館で本を返す', dueAt: '2026-10-03T08:00:00Z' });
     engine.derive();
     expect(engine.list().map((t) => t.title)).toContain('図書館で本を返す');
+  });
+});
+
+describe('withoutRestatedDays', () => {
+  it('drops a date-only match when the text gives a time on the same day', () => {
+    const found = [
+      { dueAt: '2026-04-15T08:00:00.000Z', timeAssumed: false, phrase: '4月15日の17時00分までに' },
+      { dueAt: '2026-04-15T14:59:00.000Z', timeAssumed: true, phrase: '4月15日まで' },
+      { dueAt: '2026-05-01T14:59:00.000Z', timeAssumed: true, phrase: '5/1(金)まで' },
+      { dueAt: '2026-05-01T14:59:00.000Z', timeAssumed: true, phrase: '5月1日(金)〆切' },
+    ];
+    expect(withoutRestatedDays(found, 'Asia/Tokyo').map((d) => d.phrase)).toEqual([
+      '4月15日の17時00分までに',
+      '5/1(金)まで',
+    ]);
   });
 });

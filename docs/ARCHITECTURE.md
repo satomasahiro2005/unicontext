@@ -767,7 +767,7 @@ and keep the **raw** one visible.
     table appears.
 - `PersonalSchedule.apply(date, raw)` (context-engine) gives each meeting `effectiveSchedule`
   `{status: attending | not_attending | unknown, reason, room, group, sessionGroups, number,
-  topic, rule {provenance, confirmed, source, documentTitle, evidence}, conflicts, citations}` and
+topic, rule {provenance, confirmed, source, documentTitle, evidence}, conflicts, citations}` and
   `rawSchedule` (as the timetable says; absent for meetings only the group table lists, which are
   generated with the timetable's periods). Per date, rows from the best-ranked source decide
   (student > university > document > chat / recording); lower-ranked rows that disagree are listed
@@ -786,6 +786,42 @@ and keep the **raw** one visible.
   `completed` with the fact as `statusEvidenceFactId`. The title is shortened (「登録は…」 + notice
   「teams 登録について」 → 「teams 登録」, 「履修登録期限(一般): …」 → its label); the sentence stays in
   `evidence`.
+
+#### Whether the student takes a course (`condition:enrollment`, task-engine `enrollment-declaration.ts`)
+
+Registration outcomes at Shizuoka (履修の許可・不許可, 抽選の結果, 取消) reach the student **by
+email only**; LiveCampusU keeps listing a rejected course as 履修中 on every screen the connector
+reads (時間割, スケジュール, 成績 includingInProgress, 卒業要件), and the 履修登録 screen itself sits
+behind a write gate (`SC_05002B00_04/update`, docs/research/lcu-registration.md). The student's own
+word is therefore the path, not connector parsing; a future `ingest_external_signal(gmail)` could
+feed the same condition from the outcome email (unconfirmed, cited to the message).
+
+- Fact: single-valued `condition:enrollment` on the course offering, value `not_taking` |
+  `taking` (`normalizeEnrollmentDeclaration` also reads dropped / rejected / 履修拒否 / 取り消した /
+  落選 and taking / 履修中). Written by MCP `set_course_condition {condition: 'enrollment', value,
+evidence}` (addition kind `condition`, unconfirmed, retractable; `unicontext additions confirm`
+  turns it into a user fact). The tool description tells the AI to call it right away whenever the
+  student says a course was dropped / rejected / not taken, even if the system still lists it.
+- Decision (newest confirmed declaration, else the newest unconfirmed one) is applied in
+  `ClassSchedule.enrolledOfferings()` and `ContextEngine.selfEnrollments()`, so every view of the
+  student's own schedule and work follows it: today / tomorrow / week classes (no generated or
+  stored meetings), deadlines and tasks of the views, next actions and attention (`host.notTaken`),
+  deadline coverage, pace, notifications (`enrollmentOf().enrolled` is false) and conflicts of
+  current courses. `taking` brings back a course the system marks `dropped`.
+- **Confirmed vs unconfirmed.** Both decide what the views show: the student knows their own
+  registration better than a stale system, and an unconfirmed declaration that hid nothing would
+  keep showing a class the student told us they do not attend. The difference is visibility of
+  the disagreement: while unconfirmed, today / tomorrow / week carry `enrollmentNotes` with one
+  line per course (「情報科学実験C: 学務では履修中、本人は履修していないと登録（チャットで登録・
+  未確認）。表示から外しています」, cited to the chat); confirmed, the note goes away.
+- Nothing is deleted: the enrollment record, its sessions, assignments and tasks stay; the course
+  view (`get_course`) keeps the course with `enrolled` (what the views use) and `enrollment
+{academic: active | dropped | none, declaration {value, confirmed, provenance, evidence, source,
+declaredAt}, taken}`, and a course-scoped `get_deadlines` still lists its deadlines. Reading
+  synced documents (`extractSessionRuleFacts`) uses the raw list (`enrolledOfferings({raw: true})`)
+  so a table of a dropped course is never attributed to another course.
+- Precedence among declarations: a confirmed one wins over a newer unconfirmed one (as for the
+  group); the AI can retract its own unconfirmed one.
 
 #### Future: `ingest_external_signal`
 
@@ -960,7 +996,13 @@ path must go through propose → confirm → execute in the apps.
 - Predicates in use: `room`, `class_status`, `starts_at`, `assignment_due`, `exam_at`,
   `submission_status`, `grade`, `grade_letter` (auto), `deadline` (task-engine extractor), `todo`
   (things to do an AI client heard in a lecture; multi-valued, never a Conflict — rules
-  `multiValued`). New
+  `multiValued`), `condition:group`, `condition:enrollment` (the student's own conditions in a
+  course), `session_rule` (multi-valued). Rules `compareFields` name the fields of an object value
+  that decide agreement: `deadline: [dueAt, courseOfferingId]`, so two phrasings of one due date
+  (「12:00まで」 / 「12:00が締め切り」) never conflict; the extractor also keeps one fact per instant
+  per text and drops a date-only match when the text gives a time on that day
+  (`withoutRestatedDays`). Conflicts whose dated values are all more than a day past, or about a
+  course outside the current term, stay out of today / week (still in `get_conflicts`). New
   predicates need no schema change; add them to the rules YAML when authority matters.
 - Authorities: `academic-system`, `submission-system`, `instructor-announcement`, `syllabus`,
   `lms`, `calendar`, `collaboration`, `discussion`, `transcript`, `local-file`, `user`.

@@ -13,6 +13,8 @@ import type {
   WeekContext,
 } from '@unicontext/daemon/api-types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { ClassItem } from '@unicontext/context-engine';
+import { classStateText } from '../src/format/views.js';
 import { exec, json, sharedDevRuntime, type SharedRuntime } from './helpers.js';
 
 let shared: SharedRuntime;
@@ -348,5 +350,21 @@ describe('unfinished work of terms that have ended (synthetic Teams assignments)
     expect(human.code).toBe(0);
     expect(human.stdout).toContain('古い課題');
     expect(human.stdout).toContain('終了した学期');
+  });
+});
+
+describe('class state column', () => {
+  const item = (status: 'attending' | 'not_attending' | 'unknown', cancelled = false) =>
+    ({
+      cancelled,
+      status: { status: 'resolved', value: cancelled ? 'cancelled' : 'scheduled', candidates: [] },
+      effectiveSchedule: { status, reason: 'グループ次第', citations: [] },
+    }) as unknown as ClassItem;
+
+  it('shows the effective status, not 通常, when the meeting is not plainly the student’s', () => {
+    expect(classStateText(item('attending'))).toBe('通常');
+    expect(classStateText(item('unknown'))).toBe('未確定');
+    expect(classStateText(item('not_attending'))).toBe('出席なし');
+    expect(classStateText(item('unknown', true))).toBe('休講');
   });
 });

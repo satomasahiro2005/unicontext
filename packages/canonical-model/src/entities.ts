@@ -81,13 +81,46 @@ export type TermSlotsValue = z.infer<typeof TermSlotsValueSchema>;
 /**
  * Personal conditions of the student in a course (§17 effective schedule). One single-valued fact
  * predicate per condition on the course offering: `condition:group` = the group / 班 the student
- * belongs to ("B"). Sources: the university (authoritative), a document or post (extracted), the
- * student in a chat or a lecture recording (MCP additions, extracted until confirmed).
+ * belongs to ("B"); `condition:enrollment` = whether the student takes the course at all, as the
+ * student says it (`not_taking`: dropped / rejected / withdrawn although the academic system still
+ * lists it; `taking`: takes it although the system says dropped). Sources: the university
+ * (authoritative), a document or post (extracted), the student in a chat or a lecture recording
+ * (MCP additions, extracted until confirmed).
  */
-export const COURSE_CONDITIONS = ['group'] as const;
+export const COURSE_CONDITIONS = ['group', 'enrollment'] as const;
 export type CourseCondition = (typeof COURSE_CONDITIONS)[number];
 export const CONDITION_PREDICATE_PREFIX = 'condition:';
 export const GROUP_CONDITION_PREDICATE = `${CONDITION_PREDICATE_PREFIX}group`;
+export const ENROLLMENT_CONDITION_PREDICATE = `${CONDITION_PREDICATE_PREFIX}enrollment`;
+export const ENROLLMENT_DECLARATIONS = ['not_taking', 'taking'] as const;
+export type EnrollmentDeclarationValue = (typeof ENROLLMENT_DECLARATIONS)[number];
+
+/**
+ * Normalizes what the student says about taking a course to `not_taking` / `taking`; undefined if
+ * it is neither. Accepts the values themselves and plain words (dropped, rejected, 履修していない,
+ * 履修拒否, 取り消し, 落選 / taking, enrolled, 履修中, 履修している).
+ */
+export function normalizeEnrollmentDeclaration(s: string): EnrollmentDeclarationValue | undefined {
+  const t = s
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (
+    /^(not_taking|not_enrolled|dropped|withdrawn|rejected|denied|cancel(?:l)?ed|no|false)$/.test(t)
+  )
+    return 'not_taking';
+  if (/^(taking|enrolled|active|yes|true)$/.test(t)) return 'taking';
+  if (
+    /(履修し(?:てい)?ない|取らない|とらない|拒否|不許可|却下|取り?消|取消|辞退|落選|やめ|辞め|切った|外れ)/.test(
+      t,
+    )
+  )
+    return 'not_taking';
+  if (/(履修中|履修している|履修する|取っている|とっている|受講中|受講している)/.test(t))
+    return 'taking';
+  return undefined;
+}
 export function conditionPredicate(name: CourseCondition): string {
   return `${CONDITION_PREDICATE_PREFIX}${name}`;
 }
