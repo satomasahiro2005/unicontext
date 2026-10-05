@@ -21,8 +21,10 @@ integrations/chatgpt/
 │   │   └── student-briefing/   what a scheduled run does and when it stays silent
 │   └── assets/                 logo.png (512), icon.svg, icon-dark.svg (from assets/brand)
 ├── tasks/
-│   ├── watcher.ja.txt          hourly 学生生活ウォッチャー prompt
-│   └── morning.ja.txt          07:30 起きたらやること prompt
+│   ├── morning.ja.txt          07:30 今日の生活ブリーフ
+│   ├── watcher.ja.txt          hourly 今やることウォッチ
+│   ├── evening.ja.txt          20:00 明日の生活準備
+│   └── weekly.ja.txt           Sunday 21:00 週間レビュー
 ├── custom-instructions.ja.txt  the same rules for ChatGPT's custom instructions (≤1500 chars)
 └── scripts/plugin.mjs          check / pack (no dependencies)
 ```
@@ -91,44 +93,57 @@ chat. After changing skills: rebuild the ZIP and upload it again, or ask Plugin 
 
 ## 3. Create the scheduled tasks
 
-Plus allows 5 active tasks with an hourly minimum, so UniContext uses two. Create them in
-**Work** on the web (documented to use plugins in scheduled runs), or in the mobile app if you
-want phone pushes (the help center says mobile push needs the task to be created in a supported
-mobile app, with notification permission granted). Settings → Notifications → tasks: **Push**
-on (email optional).
+The tasks look after the student's whole life, not only university: ChatGPT is the
+orchestrator and UniContext is one source next to Google Calendar, Gmail, ChatGPT's own memory
+of what the student decided, and (when it matters) the web for weather and transport.
+UniContext's instructions stay out of unrelated chats; being proactive is the tasks' job.
 
-For each task: start a new Work chat, select UniContext with `@`, and send:
+Tasks are split by moment of the day, not by source. Plus allows 5 active tasks with an hourly
+minimum; these use four. Create them in **Work** on the web (documented to use plugins in
+scheduled runs), or in the mobile app if you want phone pushes (the help center says mobile push
+needs the task to be created in a supported mobile app, with notification permission granted).
+Settings → Notifications → tasks: **Push** on (email optional).
 
-| Task                 | What to send                                                                                                                        |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| 学生生活ウォッチャー | 「次の内容を毎時（毎時0分）に実行する定期タスクを作って。毎回新しいチャットで実行して。」 + the full text of `tasks/watcher.ja.txt` |
-| 起きたらやること     | 「次の内容を毎日7:30に実行する定期タスクを作って。毎回新しいチャットで実行して。」 + the full text of `tasks/morning.ja.txt`        |
+For each task: start a new Work chat, select UniContext with `@`, and send the line below plus
+the full text of the file:
 
-Open **Scheduled** and check each task's schedule, time zone (Asia/Tokyo) and that the prompt
-was kept in full. If the task's model is GPT-5.5, switch it (GPT-5.5 leaves ChatGPT on
-2026-10-14).
+| Task               | Schedule      | What to send                                                                      |
+| ------------------ | ------------- | --------------------------------------------------------------------------------- |
+| 今日の生活ブリーフ | daily 07:30   | 「次の内容を毎日7:30に実行する定期タスクを作って。」 + `tasks/morning.ja.txt`     |
+| 今やることウォッチ | hourly        | 「次の内容を毎時0分に実行する定期タスクを作って。」 + `tasks/watcher.ja.txt`      |
+| 明日の生活準備     | daily 20:00   | 「次の内容を毎日20:00に実行する定期タスクを作って。」 + `tasks/evening.ja.txt`    |
+| 週間レビュー       | Sundays 21:00 | 「次の内容を毎週日曜21:00に実行する定期タスクを作って。」 + `tasks/weekly.ja.txt` |
 
-Both prompts:
+If you already created the older university-only tasks, edit them in **Scheduled** and replace
+their prompts (大学生活 朝ブリーフ → 今日の生活ブリーフ, 重要変更ウォッチ → 今やることウォッチ,
+明日の準備 → 明日の生活準備), then add 週間レビュー. Check each task's schedule, time zone
+(Asia/Tokyo) and that the prompt was kept in full. If the task's model is GPT-5.5, switch it
+(GPT-5.5 leaves ChatGPT on 2026-10-14).
 
-- call `get_attention_required` / `get_student_state` first, fall back to `get_briefing` and
-  then to `get_today` / `get_deadlines` / `get_recent_changes` / `get_tasks`, so they work
-  before and after the new tools land;
-- use read-only tools only (a write waits for approval and pauses the task), and never store
-  anything found in Gmail or Google Calendar in UniContext (see §3.1);
-- the morning task answers in this order: one single immediate action on the first line, then
-  「まず今やること」 / 「時間が決まっている今日の予定」 / 「今日中に終えること」 / 「近いうちに注意すること」
-  (big work broken into steps that start in five minutes), and exactly 「通知なし」 on a day with
-  no class, appointment or urgent matter;
-- the watcher notifies only when waiting for the next normal check (the next morning briefing)
-  would hurt, in 1-3 sentences per item (what happened, when, what to do now), at most 4 items,
-  and outputs nothing at all when there is nothing (not even 「通知なし」). It stays quiet
-  0:00-6:59 except for a deadline within 3 hours or a same-day 休講/教室変更;
-- do not repeat an item already notified unless it escalated, changed, or reached a stage that
-  is still not acted on; the same event seen in several sources (a 休講 in UniContext and in
-  Gmail) is one notification.
+All four prompts:
 
-The prompts have no documented length limit, but they are pasted into the task box, so keep
-them compact (the watcher is about 1,500 characters, the morning one about 1,100).
+- are read-only everywhere: no UniContext write tools (a write waits for approval and pauses the
+  task), and Gmail / Calendar are only read, never marked read, answered, changed, or stored in
+  UniContext (see §3.1);
+- use UniContext's effectiveSchedule (the student's group, dropped courses) and never invent
+  deadlines; on conflicts they show both values with sources; they tell 「情報がない」 from
+  「取得できていない」.
+
+Per task:
+
+- **今日の生活ブリーフ** merges classes, appointments, mail and the student's own plans into one
+  time-ordered flow for the day (例: 10:20 DB → 資料確認 → 14:00 面談 → 23:59 課題 → 帰りに買い物),
+  one immediate action on the first line, then 「まず今やること」 / 「時間が決まっている今日の予定」 /
+  「今日中に終えること」 / 「近いうちに注意すること」; 「通知なし」 only on a day with nothing at all.
+- **今やることウォッチ** judges not only new information but known items that became urgent with
+  time (a 23:59 assignment still open at 22:00), always checks unfinished same-day deadlines in
+  the 23:00 run, stays quiet 0:00-7:59 except for deadlines within 3 hours and same-day
+  休講/教室変更, merges one event seen in several sources, re-notifies only on escalation or a new
+  stage, and outputs nothing at all when nothing would hurt by waiting.
+- **明日の生活準備** closes the day: unfinished same-day deadlines first, then what to do tonight,
+  then tomorrow's flow (classes, part-time work, interviews, what to bring, when to leave).
+- **週間レビュー** finds next week's risky days (deadlines piling up, no free time, an exam with
+  another deadline the day before) and assigns big work to free slots.
 
 ### 3.1 Gmail and Google Calendar (read-only)
 

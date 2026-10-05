@@ -105,7 +105,7 @@ describe('ChatGPT plugin package', () => {
   });
 
   it('keeps the scheduled task prompts silent by default and read-only', () => {
-    for (const task of ['watcher.ja.txt', 'morning.ja.txt']) {
+    for (const task of ['watcher.ja.txt', 'morning.ja.txt', 'evening.ja.txt', 'weekly.ja.txt']) {
       const text = readFileSync(join(BASE, 'tasks', task), 'utf8');
       expect(text).toContain('書き込み');
       // Gmail / Google Calendar are read only and never stored in UniContext.
