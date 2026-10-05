@@ -187,6 +187,94 @@ export const addTaskShape = {
   idempotencyKey,
 };
 
+export const setCourseConditionShape = {
+  course,
+  condition: z
+    .enum(['group'])
+    .optional()
+    .describe('条件の種類（今は group = グループ・班だけ） / Condition kind (only group)'),
+  value: z
+    .string()
+    .min(1)
+    .max(20)
+    .describe('グループ名: A / B / B班 / Bグループ / 2 など / Group label'),
+  evidence: z
+    .string()
+    .min(1)
+    .max(L.evidence)
+    .describe(
+      '根拠をそのまま引用：本人の言葉（「俺Bグループ」）、名簿・資料の該当行 / Verbatim quote: the student’s words or the roster / document line',
+    ),
+  via,
+  lectureDate,
+  recordingTimestamp,
+  source,
+  idempotencyKey,
+};
+
+export const addSessionRuleShape = {
+  course,
+  sessions: z
+    .array(
+      z.object({
+        date: localDate.describe('実施日 YYYY-MM-DD / Date'),
+        group: z
+          .string()
+          .min(1)
+          .max(20)
+          .optional()
+          .describe('その日に実施するグループ（A / B）。全員休みの日は省略して noClass / Group'),
+        noClass: z
+          .boolean()
+          .optional()
+          .describe('true = その日は誰も授業がない（休講・祝日） / Nobody meets that day'),
+        periods: z
+          .array(z.number().int().min(1).max(10))
+          .max(10)
+          .optional()
+          .describe('時限（省略時は時間割の時限） / Periods (default: the timetable’s)'),
+        startTime: z
+          .string()
+          .regex(/^\d{2}:\d{2}$/)
+          .optional()
+          .describe('開始 HH:MM / Start'),
+        endTime: z
+          .string()
+          .regex(/^\d{2}:\d{2}$/)
+          .optional()
+          .describe('終了 HH:MM / End'),
+        room: z.string().max(100).optional().describe('教室 / Room'),
+        number: z
+          .number()
+          .int()
+          .min(1)
+          .max(99)
+          .optional()
+          .describe('第何回（#03 → 3） / Meeting number'),
+        topic: z.string().max(200).optional().describe('内容 / Topic'),
+        note: z.string().max(200).optional().describe('備考（月曜授業 など） / Note'),
+      }),
+    )
+    .min(1)
+    .max(60)
+    .describe('日付ごとの実施グループ（表の行をそのまま） / One row per date of the table'),
+  evidence: z
+    .string()
+    .min(1)
+    .max(L.evidence)
+    .describe('表・文の該当部分をそのまま引用 / Verbatim quote of the table or sentence'),
+  sourceDocument: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      '表がある資料・投稿の題（2026実験Bスケジュール_配布.pdf など） / Title of the document',
+    ),
+  via,
+  source,
+  idempotencyKey,
+};
+
 export const getNotesShape = {
   course: optionalCourse.describe('科目で絞る / Only this course'),
   personal: z
@@ -554,6 +642,14 @@ export const WRITE_TOOLS = {
   add_task: {
     title: 'やることを登録',
     description: `やること（期限なしも可）を登録する。ユーザーが「〜をやらなきゃ」と言ったこと、会話でユーザーと一緒に立てた勉強計画のTODOに使う。講義の録音・文字起こしで言われた、学生がやらなければならないことは ingest_lecture の tasks でまとめて保存する（1件だけならここで via=recording とし、ユーザーに確かめずに保存する）。科目に関係ないものは course を省略。期限があれば dueAt に入れる（解決した日時が返るのでユーザーに伝える）。${COMMON_DESC} / Register a to-do the student mentions or plans with you in ANY chat, so every other session sees it in get_tasks / get_today. To-dos from a lecture recording go through ingest_lecture (or here with via=recording), stored without asking. ${COMMON_EN}`,
+  },
+  set_course_condition: {
+    title: '科目での本人の条件（グループ・班）を登録',
+    description: `科目での本人の条件（今はグループ・班）を登録する。ユーザーが自分のグループ・班を言ったとき（「俺Bグループ」「実験はB班」）、または名簿・資料・お知らせから本人のグループが分かったときは、聞き返さずにすぐ呼ぶ。同じグループ分けの科目が複数あるとき（実験Bと実験Cなど、資料に共通と書いてあるとき）は科目ごとに呼ぶ。登録すると、グループ別の実施スケジュールがある科目の get_today・get_week・get_student_state・次にやることが本人のグループの日だけを授業として出す（他のグループの日は notAttending に理由つきで残る）。グループが未登録だとその授業は unknown（グループ次第）になる。evidence には本人の言葉や名簿の該当行をそのまま入れる。大学や配布資料の値は上書きせず、食い違うときは両方が表示される。${COMMON_DESC} / Register the student's group in a course. Call it right away, without asking back, whenever the student mentions their group / 班 or a roster or document shows it (once per course when several courses share the grouping). With the group known, today/week/state/next actions show only the student's group's meetings of courses with a group schedule (other groups' days stay in notAttending with the reason); unknown groups make such meetings 'unknown'. ${COMMON_EN}`,
+  },
+  add_session_rule: {
+    title: 'グループ別の実施日程を登録',
+    description: `グループ別の実施日程（どの日・時限・教室がどのグループか）を科目に登録する。会話・配布資料・お知らせにグループ別の日程表（「10/02(金) B 科学実験室 #01」「10/05(月) A C&C #01」のような表）が出てきて、get_today などの授業がまだその日程を反映していない（effectiveSchedule に rule がない）ときは、聞き返さずにすぐ呼ぶ。表の行を日付ごとにそのまま sessions に入れる（祝日・休講の行は noClass: true）。時限が表にないときは省略する（時間割の時限が使われる）。UniContextが同期した資料から表を読めた場合は自動で反映されるので不要。evidence には表の該当部分を、sourceDocument には資料の題を入れる。大学のシステムの値は上書きせず、時間割の元の値は rawSchedule に残る。${COMMON_DESC} / Register a group schedule (dates, periods, rooms per group) for a course. Call it right away, without asking, when a date × group table appears in the chat, a document or a notice and the class views do not reflect it yet (no effectiveSchedule.rule). One row per date as in the table (holidays / 休講 rows: noClass true); omit periods when the table has none. Tables in documents UniContext synced are applied automatically. ${COMMON_EN}`,
   },
   list_my_additions: {
     title: '自分が追加した内容',

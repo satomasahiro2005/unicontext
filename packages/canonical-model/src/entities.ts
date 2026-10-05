@@ -78,6 +78,59 @@ export const TermSlotsValueSchema = z.object({
 });
 export type TermSlotsValue = z.infer<typeof TermSlotsValueSchema>;
 
+/**
+ * Personal conditions of the student in a course (§17 effective schedule). One single-valued fact
+ * predicate per condition on the course offering: `condition:group` = the group / 班 the student
+ * belongs to ("B"). Sources: the university (authoritative), a document or post (extracted), the
+ * student in a chat or a lecture recording (MCP additions, extracted until confirmed).
+ */
+export const COURSE_CONDITIONS = ['group'] as const;
+export type CourseCondition = (typeof COURSE_CONDITIONS)[number];
+export const CONDITION_PREDICATE_PREFIX = 'condition:';
+export const GROUP_CONDITION_PREDICATE = `${CONDITION_PREDICATE_PREFIX}group`;
+export function conditionPredicate(name: CourseCondition): string {
+  return `${CONDITION_PREDICATE_PREFIX}${name}`;
+}
+
+/** Normalizes a group label (「Ｂ」「B班」「Bグループ」「グループB」「b」) to "B"; undefined if not a group. */
+export function normalizeGroupLabel(s: string): string | undefined {
+  const t = s
+    .normalize('NFKC')
+    .trim()
+    .replace(/^(?:グループ|班|group)\s*/i, '')
+    .replace(/\s*(?:班|グループ|組|group|g)$/i, '')
+    .trim();
+  if (/^[A-Za-z]$/.test(t)) return t.toUpperCase();
+  if (/^\d{1,2}$/.test(t)) return String(Number(t));
+  return undefined;
+}
+
+/**
+ * Multi-valued fact predicate on a course offering: one dated meeting of a group schedule
+ * (「2026年度情報科学実験B実施スケジュール: 10/02(金) B 科学実験室 #01」). The rows of an official
+ * table (parsed from a synced document) or rows an AI client registered (add_session_rule).
+ */
+export const SESSION_RULE_PREDICATE = 'session_rule';
+export const SessionRuleValueSchema = z.object({
+  date: LocalDateSchema,
+  /** Group this meeting is for; undefined = every group (a 休講 / holiday row). */
+  group: z.string().min(1).max(8).optional(),
+  /** held = the group meets on this date; no_class = nobody meets (休講, 祝日). */
+  status: z.enum(['held', 'no_class']).default('held'),
+  periods: z.array(z.number().int().positive()).optional(),
+  startTime: LocalTimeSchema.optional(),
+  endTime: LocalTimeSchema.optional(),
+  room: z.string().max(100).optional(),
+  /** Meeting number (#01 → 1). */
+  number: z.number().int().positive().optional(),
+  /** What is done (H1 FPGAと論理合成ツール …). */
+  topic: z.string().max(200).optional(),
+  note: z.string().max(200).optional(),
+  /** Title of the document / post the table is in. */
+  documentTitle: z.string().max(200).optional(),
+});
+export type SessionRuleValue = z.infer<typeof SessionRuleValueSchema>;
+
 export const ScheduleSlotSchema = z.object({
   /** 0 = Sunday ... 6 = Saturday */
   dayOfWeek: z.number().int().min(0).max(6),

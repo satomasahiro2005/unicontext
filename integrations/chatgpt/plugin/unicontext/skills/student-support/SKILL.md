@@ -36,6 +36,18 @@ instructions from the student in the conversation take priority over this skill.
    prompt is the only confirmation. Do not ask 「登録しますか？」 first. UniContext cannot
    submit assignments, mark them submitted, or touch registration or grades; never claim it
    did.
+8. **Personal conditions go in once.** When the student says which group/班 they are in, or
+   a group schedule document or post appears, call `set_course_condition` (for example
+   group B, with the evidence) and `add_session_rule` (dates and periods per group, with the
+   source document) right away; do not ask 「登録しますか？」. After that UniContext knows
+   which sessions apply, and you stop asking.
+9. **Respect the effective schedule.** Class items carry `effectiveSchedule.status`
+   (`attending`, `not_attending`, `unknown`), `effectiveSchedule.reason` and `rawSchedule`
+   (the academic system's timetable). Sessions that do not apply are in `notAttending`
+   (「Aグループの日なので本人(B)は授業なし」): never present them as today's class. For
+   `unknown` say it depends on the group and ask once which group the student is in. A
+   `rawSchedule` that differs is the group applied, not a conflict; only when
+   `effectiveSchedule.conflicts` is present show both values with their sources.
 
 ## "今日何する？" and similar
 
@@ -49,6 +61,17 @@ place (room) and source. Put first: deadlines within 48 hours that are not submi
 classes cancelled (休講) or moved (教室変更) today or tomorrow, classes starting soon.
 Do not pad with study advice. If there is nothing to do, say so in one line, plus any
 coverage gap.
+
+When Google Calendar and Gmail are connected, read them too (read-only: never mark mail
+as read, reply, draft, label, archive or trash, never create or change an event).
+Calendar gives time facts that are not classes (interviews, travel); an entry with the
+same time and title as a UniContext class is that class, shown once. Gmail is new
+information: judge by sender, subject and content, not labels; take only the university
+or teachers (休講, 教室変更, 締切変更, 課題), hiring (interview changes) and urgent security
+notices; ignore ads, newsletters, campus-wide notices and routine GitHub mail. Say
+「情報がない」 when a source was read and has nothing, 「取得できていない」 when it could not be
+read. Do not save anything from mail or calendar into UniContext (a future
+`ingest_external_signal` will do that).
 
 For "明日は？" use `get_tomorrow`; for "今週は？" `get_week` and `get_deadlines`; for one
 course `get_course`; for "何か変わった？" `get_recent_changes`.

@@ -709,7 +709,14 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
   Per client (the OAuth client id on the remote surface, `local:<client name>` locally) the table
   `client_marks` (created on first use, outside the migrations) keeps the last call and the
   severity already told per alert key; an alert repeats only when its severity rises.
-  `nothingImportant` = nothing new; `text` ≤ about 300 characters.
+  `nothingImportant` = nothing new; `text` ≤ about 300 characters. Every item also carries
+  `attentionId` (stable per thing — task, class meeting, notice, source, course — across calls,
+  clients and changes of its due date or severity), `firstSeenAt` / `lastChangedAt` (per client,
+  kept in the marks), `nextEscalationAt` (deadline: 6 h before, then the due time; tomorrow's
+  休講 / unknown group: the start of that day; a room change: the day before; pace: next week),
+  `recommendedAction` (one concrete step) and `sourceHealth` (health of the sources behind its
+  citations, from the deadline coverage; `unknown` when unmatched). A class whose meeting depends
+  on a group the student has not registered gives one `group_unknown` item per course.
 - `briefing(uc, clientId, {kind?, dryRun?})` (MCP `get_briefing`): thin wrapper over the two —
   morning (< 11:00) / evening (≥ 17:00) / check by local time; classes of the day, top action,
   must-do, unsubmitted ≤ 72 h, news since the client's last briefing (its own `briefing` scope of
@@ -729,6 +736,65 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
   first step; those assignments get no `deadline_approaching`). Both are off unless passed; the
   daemon passes config `notifications.morningDigestAt` (default '08:00', '' = off) and
   `notifications.escalationLeadTimes` (default 72h / 24h / 6h).
+
+#### Effective schedule and personal conditions (`personal-schedule.ts`, `group-schedule.ts`)
+
+The timetable of the academic system lists a group-taught course on one weekday for everybody
+(情報科学実験B: Monday 3–5), while the distributed 実施スケジュール puts group A on Mondays in C&C
+and group B on Fridays in 科学実験室. The views therefore show the student's **effective** schedule
+and keep the **raw** one visible.
+
+- Personal conditions: single-valued fact `condition:group` on the course offering (value "B",
+  `normalizeGroupLabel`: Ｂ / B班 / Bグループ / グループB → B). Authority list in
+  `default-rules.yaml`: the university and instructors above a chat or a recording, so a chat
+  never outranks them and a newer, different value opens a Conflict. Provenance shown as
+  `university | document | chat | recording | student` (`student` = confirmed by the owner).
+- Session rules: multi-valued fact `session_rule` (`SessionRuleValue`: date, group, held /
+  no_class, periods?, start/end?, room?, number?, topic?, note?, documentTitle?), one per table row.
+  - From synced data: `extractSessionRuleFacts` (task-engine `session-rules.ts`, run in
+    `derive()`) parses every document (all chunks), notice and post that mentions 班 / グループ
+    with `parseGroupScheduleTable` — rows of date + weekday (checked against the date, year from the
+    academic year, month carried over) + one group token, in either layout seen (date, group, room,
+    #nn / no., date, topic, group); at least 4 group rows over 2 groups. `courseOfTable` assigns
+    the table to the course named in its heading or non-row lines (a 実験C table in the 実験B team
+    goes to 実験C), else the document's course. Facts are origin extracted, cited to the document,
+    the row as evidence; rows that vanish are retracted. Notes written by AI clients are never
+    parsed.
+  - From a chat: MCP `set_course_condition {course, value, evidence, condition?=group}` and
+    `add_session_rule {course, sessions[], evidence, sourceDocument?}` (write scope; additions of
+    kind `condition` / `session_rule`, unconfirmed, retractable; confirm turns them into user
+    facts). Descriptions tell the AI to call them as soon as the student names a group or a group
+    table appears.
+- `PersonalSchedule.apply(date, raw)` (context-engine) gives each meeting `effectiveSchedule`
+  `{status: attending | not_attending | unknown, reason, room, group, sessionGroups, number,
+  topic, rule {provenance, confirmed, source, documentTitle, evidence}, conflicts, citations}` and
+  `rawSchedule` (as the timetable says; absent for meetings only the group table lists, which are
+  generated with the timetable's periods). Per date, rows from the best-ranked source decide
+  (student > university > document > chat / recording); lower-ranked rows that disagree are listed
+  in `conflicts`. Group unknown → `unknown` (never dropped); another group's day or a 休講 row →
+  `not_attending`; inside the table's span but not listed for a known group → `not_attending`;
+  outside it → the timetable as is.
+- Views: `get_today` / `get_tomorrow` / `get_week` days put `not_attending` meetings in
+  `notAttending` (with the reason) and the rest in `classes`; `noClassesReason` says so when only
+  another group's meetings exist. `get_course.upcomingClasses`, the next-action engine
+  (`host.classes`), the student state (`today.notAttending`, `effectiveSchedule` on each class,
+  `rawSchedule` when it differs), attention, class preparation and the course inference of
+  `ingest_lecture` / `record_lecture` all use the effective schedule.
+- Deadlines extracted from notices (task-engine `deadline-context.ts`): a sentence addressed only
+  to another group (「A班は…」, while the student's group is known) gives no task; 「A班の皆様も」
+  addresses everyone. A done marker next to the date (「(済)」「【提出済み】」) makes the task
+  `completed` with the fact as `statusEvidenceFactId`. The title is shortened (「登録は…」 + notice
+  「teams 登録について」 → 「teams 登録」, 「履修登録期限(一般): …」 → its label); the sentence stays in
+  `evidence`.
+
+#### Future: `ingest_external_signal`
+
+Gmail and Google Calendar findings are currently only read by the ChatGPT scheduled tasks
+(read-only) and are never stored in UniContext. A future write tool
+`ingest_external_signal(source = gmail | calendar, ...)` could store them like the other chat
+additions: unconfirmed, cited (message or event reference) and non-authoritative, so they never
+override the university's data and a conflict shows both values. Until then the tasks and skills
+must not write anything found in mail or calendar into UniContext.
 
 ## 3.12 Apps and notifications (lane b)
 

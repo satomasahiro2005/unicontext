@@ -232,10 +232,11 @@ describe('TaskEngine (§19)', () => {
       importance: 'high',
     });
     engine.derive();
+    // Title and the sentence it came from (the title may be the short label 「履修登録期限(一般)」).
     const titles = engine
       .list({ statuses: ['pending'] })
       .filter((t) => t.taskKind === 'extracted')
-      .map((t) => t.title);
+      .map((t) => `${t.title}|${t.evidence ?? ''}`);
     expect(titles).toHaveLength(2);
     expect(titles.some((t) => t.includes('10月7日'))).toBe(true);
     expect(titles.some((t) => t.includes('9月30日'))).toBe(true);
@@ -251,7 +252,7 @@ describe('TaskEngine (§19)', () => {
     const pending = engine
       .list({ statuses: ['pending'] })
       .filter((t) => t.taskKind === 'extracted');
-    expect(pending.map((t) => t.title)).toEqual([expect.stringContaining('9月30日')]);
+    expect(pending.map((t) => t.evidence)).toEqual([expect.stringContaining('9月30日')]);
   });
 
   it('cancels derived tasks whose assignment disappeared', () => {

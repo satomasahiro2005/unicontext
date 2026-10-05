@@ -5,6 +5,8 @@ scheduled-task prompts and custom instructions that make ChatGPT check UniContex
 student's behalf.
 
 - Install and set up: [docs/chatgpt-plugin.md](../../docs/chatgpt-plugin.md)
+- The scheduled tasks also read Google Calendar and Gmail when those connectors are available,
+  strictly read-only; nothing found there is stored in UniContext.
 - Why it is built this way: [docs/research/chatgpt-plugin-tasks.md](../../docs/research/chatgpt-plugin-tasks.md)
 
 ```

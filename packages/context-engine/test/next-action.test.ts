@@ -195,6 +195,30 @@ describe('student state, attention and briefing', () => {
     expect(third.text).toContain('【締切間近】');
   });
 
+  it('gives every item a stable id, when it was first seen and changed, and what comes next', () => {
+    clock.set('2026-10-05T10:00:00.000Z'); // the lesson is due in 22 hours
+    const [first] = attentionRequired(uc, 'chatgpt-a').items;
+    expect(first?.attentionId).toMatch(/^attention:[0-9a-f]{24}$/);
+    expect(first?.firstSeenAt).toBe('2026-10-05T10:00:00.000Z');
+    expect(first?.lastChangedAt).toBe('2026-10-05T10:00:00.000Z');
+    // Becomes critical 6 hours before the deadline (10/6 17:00 JST).
+    expect(first?.nextEscalationAt).toBe('2026-10-06T02:00:00.000Z');
+    expect(first?.recommendedAction).toBe(
+      '「Lesson 3: SQL演習」をEdStemで提出する（締切10/6 17:00）',
+    );
+    expect(first?.sourceHealth.map((h) => h.sourceId)).toContain('edstem');
+
+    clock.set('2026-10-06T03:00:00.000Z'); // 5 hours left: critical
+    const [later] = attentionRequired(uc, 'chatgpt-a').items;
+    expect(later?.attentionId).toBe(first?.attentionId);
+    expect(later?.firstSeenAt).toBe('2026-10-05T10:00:00.000Z');
+    expect(later?.lastChangedAt).toBe('2026-10-06T03:00:00.000Z');
+    expect(later?.nextEscalationAt).toBe('2026-10-06T08:00:00.000Z');
+    // Another client sees the same id.
+    const [other] = attentionRequired(uc, 'claude-b', { dryRun: true }).items;
+    expect(other?.attentionId).toBe(first?.attentionId);
+  });
+
   it('warns about a class starting within the hour, with its room', () => {
     clock.set('2026-10-06T00:50:00.000Z'); // Tue 09:50, ネットワーク 2限 10:20
     const r = attentionRequired(uc, 'watcher', { dryRun: true });

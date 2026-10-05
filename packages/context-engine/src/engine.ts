@@ -62,6 +62,7 @@ import {
   uniqueCitations,
 } from '@unicontext/provenance';
 import type { SearchService } from '@unicontext/search';
+import { PersonalSchedule, type PersonalSession } from './personal-schedule.js';
 import {
   type EnrolledOffering,
   formatPaceSlot,
@@ -438,7 +439,7 @@ export class ContextEngine {
     };
   }
 
-  classItem(session: ClassSession): ClassItem {
+  classItem(session: ClassSession, personal?: PersonalSession): ClassItem {
     const course = this.courseRef(session.courseOfferingId) ?? {
       id: session.courseOfferingId,
       title: session.courseOfferingId,
@@ -449,10 +450,33 @@ export class ContextEngine {
       ? new Date(session.startsAt)
       : new Date(parseZonedDate(session.date, this.timezone).getTime() + 12 * 3_600_000);
     const subjects = [session.id, ...course.linkedIds];
-    const room = this.resolvedValue<string>(
+    const effectiveRoom = personal?.effective.room;
+    const roomRes = this.resolvedValue<string>(
       this.resolver.resolve(subjects, 'room', { at }),
       session.room,
     );
+    // The group schedule names the room of the student's group (科学実験室 / C&C): it wins over
+    // the timetable's 「情報科学科実習室1 他」, which stays in the candidates and in rawSchedule.
+    const room: ResolvedValue<string> =
+      personal && effectiveRoom && roomRes.status !== 'conflict'
+        ? {
+            value: effectiveRoom,
+            status: 'resolved',
+            origin: personal.effective.rule?.confirmed ? 'user' : 'extracted',
+            method: 'group_schedule',
+            candidates: [
+              {
+                value: effectiveRoom,
+                origin: 'extracted',
+                authority: personal.effective.rule?.provenance ?? 'document',
+                source: personal.effective.rule?.source ?? 'group schedule',
+                observedAt: this.now().toISOString(),
+                citation: personal.effective.citations[0],
+              },
+              ...roomRes.candidates,
+            ],
+          }
+        : roomRes;
     const status = this.resolvedValue<string>(
       this.resolver.resolve([session.id], 'class_status', { at }),
       session.status,
@@ -482,6 +506,32 @@ export class ContextEngine {
     const summary = selfStudy
       ? `${formatDateJa(parseZonedDate(session.date, this.timezone), this.timezone)} ${time} ${course.title}（自習・本人が設定した時間）`
       : `${formatDateJa(parseZonedDate(session.date, this.timezone), this.timezone)} ${time} ${course.title}${halfOnly ? `［${termPart}のみ］` : ''}${cancelled ? '（休講）' : ''} / 教室: ${this.describeValue(room)}`;
+    const eff = personal?.effective;
+    const attendanceNote =
+      eff?.status === 'not_attending'
+        ? `［本人は出席なし: ${eff.reason ?? ''}］`
+        : eff?.status === 'unknown'
+          ? `［要確認: ${eff.reason ?? 'グループによる'}］`
+          : eff?.reason
+            ? `［${eff.reason}］`
+            : '';
+    const effectiveSchedule: ClassItem['effectiveSchedule'] = {
+      status: eff?.status ?? 'attending',
+      ...(eff?.reason ? { reason: eff.reason } : {}),
+      date: session.date,
+      period: session.period,
+      startsAt: session.startsAt,
+      endsAt: session.endsAt,
+      room: typeof room.value === 'string' ? room.value : undefined,
+      ...(eff?.group ? { group: eff.group } : {}),
+      ...(eff?.sessionGroups ? { sessionGroups: eff.sessionGroups } : {}),
+      ...(eff?.number ? { number: eff.number } : {}),
+      ...(eff?.topic ? { topic: eff.topic } : {}),
+      ...(eff?.rule ? { rule: eff.rule } : {}),
+      ...(eff?.conflicts?.length ? { conflicts: eff.conflicts } : {}),
+      citations: eff?.citations ?? [],
+    };
+    const raw = personal ? personal.raw : this.rawOf(session);
     return {
       sessionId: session.id,
       course,
@@ -495,12 +545,91 @@ export class ContextEngine {
       note: session.note,
       sessionKind: selfStudy ? 'self_study' : 'class',
       ...(termPart ? { termPart } : {}),
-      summary,
+      summary: `${summary}${attendanceNote}`,
+      ...(raw ? { rawSchedule: raw } : {}),
+      effectiveSchedule,
       citations: uniqueCitations([
         ...this.citationsFor([session.id]),
         ...room.candidates.flatMap((c) => (c.citation ? [c.citation] : [])),
+        ...effectiveSchedule.citations,
       ]),
     };
+  }
+
+  private rawOf(s: ClassSession): ClassItem['rawSchedule'] {
+    return {
+      date: s.date,
+      period: s.period,
+      startsAt: s.startsAt,
+      endsAt: s.endsAt,
+      room: s.room,
+      source:
+        s.sessionKind === 'self_study'
+          ? '本人が設定した自習時間'
+          : '学務情報システムの時間割・お知らせ',
+    };
+  }
+
+  /** The student's personal conditions and group schedules, read fresh (one per view call). */
+  personalSchedule(): PersonalSchedule {
+    const schedule = this.tasks.schedule;
+    return new PersonalSchedule({
+      resolver: this.resolver,
+      schedule,
+      timezone: this.timezone,
+      canonical: (id) => this.identity.canonical(id),
+      expand: (id) => this.identity.expand(id),
+      enrolled: () =>
+        schedule
+          .enrolledOfferings()
+          .map((e) => ({ id: this.identity.canonical(e.offering.id), ids: e.ids })),
+    });
+  }
+
+  /**
+   * Every meeting of a local date as the student sees it (effective schedule): timetable sessions
+   * with their attendance status, plus meetings only the group schedule lists. Sorted by time.
+   */
+  classesOn(date: string, personal: PersonalSchedule = this.personalSchedule()): ClassItem[] {
+    const enrolled = this.enrolledIdSet();
+    const startOf = (p: PersonalSession): string =>
+      p.session.startsAt ??
+      (p.session.period
+        ? this.tasks.schedule.slotTimes(p.session.date, { period: p.session.period }).startsAt
+        : undefined) ??
+      '~';
+    return personal
+      .apply(date, this.tasks.schedule.sessionsOn(date))
+      .filter((p) => !this.isCatalogOnly(p.session.courseOfferingId, enrolled))
+      .sort(
+        (a, b) =>
+          startOf(a).localeCompare(startOf(b)) ||
+          (a.session.period ?? 99) - (b.session.period ?? 99),
+      )
+      .map((p) => this.classItem(p.session, p));
+  }
+
+  /** The student's meetings of a date as sessions (attending / unknown; another group's day left out). */
+  effectiveSessionsOn(date: string): ClassSession[] {
+    return this.personalSchedule()
+      .apply(date, this.tasks.schedule.sessionsOn(date))
+      .filter((p) => p.effective.status !== 'not_attending')
+      .map((p) => p.session);
+  }
+
+  /** classesOn split: the student's meetings (attending / unknown) and the others. */
+  private splitClasses(items: ClassItem[]): { classes: ClassItem[]; notAttending: ClassItem[] } {
+    return {
+      classes: items.filter((c) => c.effectiveSchedule.status !== 'not_attending'),
+      notAttending: items.filter((c) => c.effectiveSchedule.status === 'not_attending'),
+    };
+  }
+
+  /** Why a day has no meetings for the student when the timetable lists some (another group's day). */
+  private notAttendingReason(notAttending: ClassItem[]): string | undefined {
+    const first = notAttending[0];
+    if (!first) return undefined;
+    return `時間割上の授業はあるが本人は出席なし（${first.course.title}: ${first.effectiveSchedule.reason ?? ''}）`;
   }
 
   /**
@@ -1126,7 +1255,7 @@ export class ContextEngine {
     const now = this.now();
     const dayStart = addZonedDays(startOfZonedDay(now, this.timezone), offset, this.timezone);
     const date = zonedDateString(dayStart, this.timezone);
-    const classes = this.sessionsOn(date).map((s) => this.classItem(s));
+    const { classes, notAttending } = this.splitClasses(this.classesOn(date));
     const since = addZonedDays(startOfZonedDay(now, this.timezone), -1, this.timezone);
     const changes = this.changeDigest(this.changes.list({ since: since.toISOString() }), {
       limit: CHANGE_LIMITS.day,
@@ -1155,13 +1284,17 @@ export class ContextEngine {
       .filter((c) => !prepared.has(c.course.id) && Boolean(prepared.add(c.course.id)))
       .map((c) => this.preparationFor(c));
     const term = this.termOfDate(date);
-    const reason = classes.length === 0 ? this.tasks.schedule.noClassesReason(date) : undefined;
+    const reason =
+      classes.length === 0
+        ? (this.notAttendingReason(notAttending) ?? this.tasks.schedule.noClassesReason(date))
+        : undefined;
     return {
       ...this.base(view),
       date,
       ...(term ? { term } : {}),
       ...(reason ? { noClassesReason: reason } : {}),
       classes,
+      ...(notAttending.length ? { notAttending } : {}),
       ...changes,
       deadlines,
       tasks,
@@ -1306,9 +1439,15 @@ export class ContextEngine {
         return !schedule.runsOn(e, date) && schedule.currentHalf(date)?.half === '後半';
       },
       classes: (from, to) => {
+        // The student's meetings only (another group's day is not a class to go to).
+        const personal = this.personalSchedule();
         const out: ClassItem[] = [];
         for (let d = from; d <= to; d = addLocalDays(d, 1))
-          out.push(...this.sessionsOn(d).map((s) => this.classItem(s)));
+          out.push(
+            ...this.classesOn(d, personal).filter(
+              (c) => c.effectiveSchedule.status !== 'not_attending',
+            ),
+          );
         return out;
       },
       preparation: (item) => this.preparationFor(item),
@@ -1449,11 +1588,20 @@ export class ContextEngine {
     const now = this.now();
     const from = startOfZonedWeek(now, this.timezone);
     const to = addZonedDays(from, 7, this.timezone);
+    const personal = this.personalSchedule();
     const days = Array.from({ length: 7 }, (_, i) => {
       const date = zonedDateString(addZonedDays(from, i, this.timezone), this.timezone);
-      const classes = this.sessionsOn(date).map((s) => this.classItem(s));
-      const reason = classes.length === 0 ? this.tasks.schedule.noClassesReason(date) : undefined;
-      return { date, classes, ...(reason ? { noClassesReason: reason } : {}) };
+      const { classes, notAttending } = this.splitClasses(this.classesOn(date, personal));
+      const reason =
+        classes.length === 0
+          ? (this.notAttendingReason(notAttending) ?? this.tasks.schedule.noClassesReason(date))
+          : undefined;
+      return {
+        date,
+        classes,
+        ...(reason ? { noClassesReason: reason } : {}),
+        ...(notAttending.length ? { notAttending } : {}),
+      };
     });
     const term = this.termOfDate(
       zonedDateString(now, this.timezone),
@@ -1486,14 +1634,7 @@ export class ContextEngine {
       .map((id) => this.entities.getOfKind('courseOffering', id))
       .filter((o): o is CourseOffering => o !== undefined);
     const today = zonedDateString(now, this.timezone);
-    const sessions = this.tasks.schedule
-      .sessionsBetween(
-        today,
-        zonedDateString(addZonedDays(now, 120, this.timezone), this.timezone),
-        [c.id],
-      )
-      .slice(0, 5)
-      .map((s) => this.classItem(s));
+    const sessions = this.upcomingClassesOf(c.id, today, 120, 5);
     const schedule = this.tasks.schedule;
     const scheduleType = schedule.scheduleTypeOf(ids);
     const termOffering =
@@ -1703,6 +1844,35 @@ export class ContextEngine {
     };
   }
 
+  /**
+   * The next `limit` meetings of one course for the student (effective schedule: another group's
+   * days left out, group-schedule meetings included) within `days` days from `from`.
+   */
+  private upcomingClassesOf(
+    courseId: string,
+    from: string,
+    days: number,
+    limit: number,
+  ): ClassItem[] {
+    const ids = new Set(this.linkedIdsOf(courseId));
+    const personal = this.personalSchedule();
+    if (!personal.coursesWithRules().some((id) => ids.has(id)))
+      return this.tasks.schedule
+        .sessionsBetween(from, addLocalDays(from, days), [courseId])
+        .slice(0, limit)
+        .map((s) => this.classItem(s));
+    const out: ClassItem[] = [];
+    for (let i = 0, d = from; i < days && out.length < limit; i++, d = addLocalDays(d, 1))
+      for (const c of this.classesOn(d, personal))
+        if (
+          ids.has(c.course.id) &&
+          c.effectiveSchedule.status !== 'not_attending' &&
+          out.length < limit
+        )
+          out.push(c);
+    return out;
+  }
+
   private nextSession(courseIds: readonly string[], after: Date): ClassSession | undefined {
     return this.entities
       .list('classSession', { where: { courseOfferingId: courseIds }, orderBy: 'date' })
@@ -1719,26 +1889,42 @@ export class ContextEngine {
     sessionId?: string;
     courseOfferingId?: string;
   }): ClassPreparationContext {
-    let session: ClassSession | undefined;
-    if (options.sessionId) session = this.entities.getOfKind('classSession', options.sessionId);
-    else if (options.courseOfferingId)
-      session = this.nextSession(this.identity.expand(options.courseOfferingId), this.now());
-    else
-      session =
-        this.sessionsOn(zonedDateString(this.now(), this.timezone)).find(
-          (s) => !s.endsAt || new Date(s.endsAt) > this.now(),
-        ) ?? this.nextAnySession();
-    if (!session)
+    let item: ClassItem | undefined;
+    if (options.sessionId) {
+      const s = this.entities.getOfKind('classSession', options.sessionId);
+      item = s ? this.classItem(s) : undefined;
+    } else if (options.courseOfferingId) {
+      const today = zonedDateString(this.now(), this.timezone);
+      // The student's next meeting (effective schedule), else the next stored session.
+      item = this.upcomingClassesOf(options.courseOfferingId, today, 60, 3).find(
+        (c) => !c.endsAt || new Date(c.endsAt) > this.now(),
+      );
+      if (!item) {
+        const s = this.nextSession(this.identity.expand(options.courseOfferingId), this.now());
+        item = s ? this.classItem(s) : undefined;
+      }
+    } else {
+      item = this.classesOn(zonedDateString(this.now(), this.timezone)).find(
+        (c) =>
+          c.effectiveSchedule.status !== 'not_attending' &&
+          (!c.endsAt || new Date(c.endsAt) > this.now()),
+      );
+      if (!item) {
+        const s = this.nextAnySession();
+        item = s ? this.classItem(s) : undefined;
+      }
+    }
+    if (!item)
       return {
         ...this.base('class-preparation'),
         session: undefined,
         preparation: undefined,
         previousLecture: undefined,
       };
-    const item = this.classItem(session);
+    const date = item.date;
     const prev = this.entities
       .list('lecture', { where: { courseOfferingId: item.course.linkedIds }, orderBy: 'date' })
-      .filter((l) => l.date < session.date)
+      .filter((l) => l.date < date)
       .pop();
     return {
       ...this.base('class-preparation'),

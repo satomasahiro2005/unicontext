@@ -43,6 +43,8 @@ import {
   type AdditionClient,
   addDeadlineShape,
   addNoteShape,
+  addSessionRuleShape,
+  setCourseConditionShape,
   addTaskShape,
   compactAddition,
   courseIdForWrite,
@@ -961,7 +963,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
     (a) => {
       const r = searchVpnFiles(
         uc,
-        opt({ query: a.query, year: a.year, course: a.course, root: a.root, source: a.source, limit: a.limit }),
+        opt({
+          query: a.query,
+          year: a.year,
+          course: a.course,
+          root: a.root,
+          source: a.source,
+          limit: a.limit,
+        }),
       );
       return { data: { ...r, citations: vpnCitations(r.files.map((f) => f.id)) } };
     },
@@ -1211,6 +1220,44 @@ export function createMcpServer(deps: McpDeps): McpServer {
         idempotencyKey: a.idempotencyKey,
       }),
     ),
+  );
+
+  writeTool(
+    'set_course_condition',
+    { outputShape: WRITE_RESULT_SHAPE },
+    setCourseConditionShape,
+    async (a) =>
+      written(
+        await uc.additions.setCourseCondition(caller(), {
+          courseOfferingId: courseIdForWrite(uc, a.course),
+          condition: a.condition,
+          value: a.value,
+          evidence: a.evidence,
+          via: a.via,
+          lectureDate: a.lectureDate,
+          recordingTimestamp: a.recordingTimestamp,
+          source: a.source,
+          idempotencyKey: a.idempotencyKey,
+        }),
+      ),
+  );
+
+  writeTool(
+    'add_session_rule',
+    { outputShape: WRITE_RESULT_SHAPE },
+    addSessionRuleShape,
+    async (a) =>
+      written(
+        await uc.additions.addSessionRule(caller(), {
+          courseOfferingId: courseIdForWrite(uc, a.course),
+          sessions: a.sessions,
+          evidence: a.evidence,
+          sourceDocument: a.sourceDocument,
+          via: a.via,
+          source: a.source,
+          idempotencyKey: a.idempotencyKey,
+        }),
+      ),
   );
 
   writeTool(

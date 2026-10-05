@@ -281,6 +281,7 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
     tasks,
     courseTitle: (id) => context.courseRef(id)?.title,
     runPipeline,
+    sessionsOn: (date) => context.effectiveSessionsOn(date),
   });
 
   engine.addPostProcessor({

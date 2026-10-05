@@ -76,7 +76,7 @@ describe('authority rules (§12)', () => {
       'transcript',
       'student-statement',
     ]);
-    expect(r.multiValued).toEqual(['todo']);
+    expect(r.multiValued).toEqual(['todo', 'session_rule']);
   });
   it('parses and merges overrides', () => {
     const r = mergeAuthorityRules(loadDefaultAuthorityRules(), {

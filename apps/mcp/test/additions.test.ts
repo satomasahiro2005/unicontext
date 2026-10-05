@@ -27,6 +27,8 @@ const WRITE_TOOL_NAMES = [
   'add_deadline',
   'add_note',
   'add_task',
+  'set_course_condition',
+  'add_session_rule',
   'list_my_additions',
   'retract_addition',
 ];
@@ -270,6 +272,52 @@ describe('record tools: calls', () => {
     const retracted = await call(client, 'retract_addition', { additionId: taskOut.addition.id });
     expect((retracted.structuredContent as Structured).status).toBe('retracted');
     expect(uc.tasks.get(taskOut.addition.stored.taskId as string)?.status).toBe('cancelled');
+  });
+
+  it('set_course_condition and add_session_rule store the group and its schedule', async () => {
+    const client = await connect(chatgpt);
+    const cond = await call(client, 'set_course_condition', {
+      course: 'ソフトウェア工学',
+      value: 'B班',
+      evidence: '演習はB班です',
+    });
+    const condOut = cond.structuredContent as Structured;
+    expect(condOut.status).toBe('created');
+    expect(condOut.addition).toMatchObject({ kind: 'condition', tool: 'set_course_condition' });
+    expect(condOut.addition.stored).toMatchObject({ value: 'B' });
+    const rule = await call(client, 'add_session_rule', {
+      course: 'ソフトウェア工学',
+      sessions: [
+        { date: '2026-11-16', group: 'A', room: '演習室1' },
+        { date: '2026-11-20', group: 'B', room: '演習室2', periods: [2] },
+      ],
+      evidence: '11/16(月) A 演習室1 / 11/20(金) B 演習室2',
+      sourceDocument: '演習スケジュール.pdf',
+    });
+    expect((rule.structuredContent as Structured).addition.kind).toBe('session_rule');
+    // Monday is group A's: not the student's class today; Friday the 20th is.
+    const today = uc.context.today();
+    expect(today.classes.some((c) => c.course.title === 'ソフトウェア工学')).toBe(false);
+    expect(today.notAttending?.[0]?.effectiveSchedule.reason).toContain('Aグループの実施日');
+    const fri = uc.context
+      .classesOn('2026-11-20')
+      .filter((c) => c.course.title === 'ソフトウェア工学');
+    expect(
+      fri.map((c) => [c.period, c.effectiveSchedule.status, c.effectiveSchedule.room]),
+    ).toEqual([[2, 'attending', '演習室2']]);
+    const bad = await call(client, 'set_course_condition', {
+      course: 'ソフトウェア工学',
+      value: '前半',
+      evidence: 'x',
+    });
+    expect(bad.isError).toBe(true);
+    for (const r of [rule, cond])
+      await call(client, 'retract_addition', {
+        additionId: (r.structuredContent as Structured).addition.id,
+      });
+    expect(uc.context.today().classes.some((c) => c.course.title === 'ソフトウェア工学')).toBe(
+      true,
+    );
   });
 
   it('local clients are identified by their MCP client name', async () => {

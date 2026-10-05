@@ -4,6 +4,7 @@ import {
   type EntityId,
   type Exam,
   type Fact,
+  GROUP_CONDITION_PREDICATE,
   type Material,
   type Message,
   stableId,
@@ -38,7 +39,9 @@ import {
 import { type ConflictResolver, factId, FactStore } from '@unicontext/provenance';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { ClassSchedule } from './class-schedule.js';
+import { doneMarker, groupAddress, shortDeadlineTitle } from './deadline-context.js';
 import { extractDeadlines } from './deadline-extractor.js';
+import { extractSessionRuleFacts } from './session-rules.js';
 import { paceStatus, type PaceStatus, weekStartOf, weekStartOfDue } from './pace.js';
 
 export const DEADLINE_PREDICATE = 'deadline';
@@ -430,6 +433,24 @@ export class TaskEngine {
   }
 
   /** `expired_past_term` for system-owned open work of an ended term; otherwise `status` as is. */
+  /**
+   * The student's group / 班 in a course (condition:group over every linked offering), when the
+   * sources agree on one value; undefined when unknown or the sources disagree.
+   */
+  personalGroup(courseOfferingId: string): string | undefined {
+    if (!this.resolver) return undefined;
+    const r = this.resolver.resolve(this.expandCourse(courseOfferingId), GROUP_CONDITION_PREDICATE);
+    return r.status === 'resolved' && typeof r.value === 'string' ? r.value : undefined;
+  }
+
+  private courseTitleOf(courseOfferingId: string): string | undefined {
+    for (const id of this.expandCourse(courseOfferingId)) {
+      const o = this.entities.getOfKind('courseOffering', id);
+      if (o?.title) return o.title;
+    }
+    return undefined;
+  }
+
   private expireIfPast(
     status: TaskStatus,
     prev: Task | undefined,
@@ -586,7 +607,15 @@ export class TaskEngine {
   /** Recompute all derived tasks. User-set statuses are preserved. */
   derive(): DeriveReport {
     const report: DeriveReport = { created: 0, updated: 0, cancelled: 0, extractedFacts: 0 };
-    report.extractedFacts = this.extractDeadlineFacts();
+    report.extractedFacts =
+      this.extractDeadlineFacts() +
+      extractSessionRuleFacts({
+        db: this.db,
+        clock: this.clock,
+        facts: this.facts,
+        refs: this.refs,
+        enrolled: () => this.schedule.enrolledOfferings(),
+      });
     const now = this.clock.now().toISOString();
     const derivedIds = new Set<string>();
     const count = (s: 'created' | 'updated' | 'unchanged'): void => {
@@ -726,17 +755,41 @@ export class TaskEngine {
         if (kind === 'informational') continue;
         if (kind === 'general' && Date.parse(v.dueAt) < this.clock.now().getTime()) continue;
       }
-      derivedIds.add(id);
       const evidence = f.evidence ?? v.phrase ?? '';
+      // Addressed to another group / 班 only (「A班は…」) while the student's group is known: not
+      // the student's deadline. 「A班の皆様も」 addresses everyone, the named group as well.
+      const address = groupAddress(evidence);
+      const group = course ? this.personalGroup(course) : undefined;
+      if (!userTouched && address?.exclusive && group && !address.groups.includes(group)) continue;
+      derivedIds.add(id);
+      // 「(済)」 printed next to the date: already done (the sentence is the evidence).
+      const done = doneMarker(evidence);
+      const source = this.entities.get(f.subject) as { title?: string } | undefined;
+      const short = shortDeadlineTitle(
+        evidence,
+        typeof source?.title === 'string' ? source.title : undefined,
+        course ? this.courseTitleOf(course) : undefined,
+      );
+      const base = revived(prev);
+      const status: TaskStatus =
+        prev?.statusSetBy === 'user'
+          ? prev.status
+          : done
+            ? 'completed'
+            : base === 'completed' && prev?.statusSetBy === 'system'
+              ? 'pending'
+              : base;
       count(
         this.save({
           id,
-          title: evidence.length > 60 ? `${evidence.slice(0, 60)}…` : evidence || '期限のある作業',
+          title:
+            short ??
+            (evidence.length > 60 ? `${evidence.slice(0, 60)}…` : evidence || '期限のある作業'),
           ...(course ? { courseOfferingId: course as Task['courseOfferingId'] } : {}),
           sourceFactIds: [f.id],
           dueAt: v.dueAt,
           // A deadline heard in a notice or post of an ended term is no longer actionable.
-          status: this.expireIfPast(revived(prev), prev, {
+          status: this.expireIfPast(status, prev, {
             ...(course ? { courseOfferingId: course } : {}),
             dueAt: v.dueAt,
           }),
@@ -744,6 +797,9 @@ export class TaskEngine {
           taskKind: 'extracted',
           origin: 'extracted',
           statusSetBy: prev?.statusSetBy ?? 'system',
+          ...(done && prev?.statusSetBy !== 'user'
+            ? { statusEvidenceFactId: f.id as Task['statusEvidenceFactId'] }
+            : {}),
           evidence,
           ...(prev?.notes ? { notes: prev.notes } : {}),
           createdAt: prev?.createdAt ?? now,

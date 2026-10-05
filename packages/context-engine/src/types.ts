@@ -79,6 +79,74 @@ export interface ClassItem extends Cited {
   termPart?: string | undefined;
   /** One-line explanation with the source, e.g. "2限 データベースシステム論 / 教室: 21教室（根拠: 学務情報システム 10/1 09:42取得）". */
   summary: string;
+  /**
+   * The meeting as the academic system's timetable (and its notices) says it, before the
+   * student's personal conditions. Undefined when the meeting exists only in a group schedule
+   * (a B-group Friday of a course the timetable lists on Monday).
+   */
+  rawSchedule?: RawSchedule | undefined;
+  /** The meeting for this student, after personal conditions (group …). */
+  effectiveSchedule: EffectiveSchedule;
+}
+
+export interface RawSchedule {
+  date: string;
+  period: number | undefined;
+  startsAt: string | undefined;
+  endsAt: string | undefined;
+  room: string | undefined;
+  /** 「学務情報システムの時間割」 or the stored session's source. */
+  source: string;
+}
+
+/** Whether the student attends a meeting: attending, not_attending (another group's day), unknown. */
+export type AttendanceStatus = 'attending' | 'not_attending' | 'unknown';
+
+/**
+ * Where a personal condition or a group schedule comes from: university = the academic system,
+ * document = a synced document / post (配布スケジュール), chat = the student said it in a chat,
+ * recording = heard in a lecture recording, student = confirmed by the student.
+ */
+export type ConditionProvenance = 'university' | 'document' | 'chat' | 'recording' | 'student';
+
+export interface ConditionValueView {
+  value: string;
+  provenance: ConditionProvenance;
+  /** Confirmed by the student (or stated by the university). */
+  confirmed: boolean;
+  source: string;
+  evidence: string | undefined;
+}
+
+export interface EffectiveSchedule {
+  status: AttendanceStatus;
+  /** Why (「Aグループの実施日（本人はBグループ）」); absent when no personal condition applies. */
+  reason?: string | undefined;
+  date: string;
+  period: number | undefined;
+  startsAt: string | undefined;
+  endsAt: string | undefined;
+  room: string | undefined;
+  /** The student's group the decision used (unknown → absent). */
+  group?: ConditionValueView | undefined;
+  /** Groups the schedule assigns this date to. */
+  sessionGroups?: string[] | undefined;
+  /** Meeting number in the group schedule (#03 → 3). */
+  number?: number | undefined;
+  topic?: string | undefined;
+  /** Where the date rule comes from and the table line. */
+  rule?:
+    | {
+        provenance: ConditionProvenance;
+        confirmed: boolean;
+        source: string;
+        documentTitle: string | undefined;
+        evidence: string | undefined;
+      }
+    | undefined;
+  /** Sources that disagree about the group or the date (both are shown, none is picked silently). */
+  conflicts?: { about: 'group' | 'session_rule'; values: { value: string; source: string }[] }[];
+  citations: Citation[];
 }
 
 /**
@@ -348,6 +416,11 @@ export interface DayContext<V extends 'today' | 'tomorrow'> extends BundleBase<V
   term?: TermOfDate | undefined;
   /** Why there are no classes (学期外, 未登録, 祝日 …) when `classes` is empty. */
   noClassesReason?: string | undefined;
+  /**
+   * Meetings the timetable lists on this date that are not the student's (another group's day,
+   * a 休講 of the group schedule), with the reason: shown, never silently dropped.
+   */
+  notAttending?: ClassItem[] | undefined;
 }
 /** The student's own weekly self-study slot of an offering (自習), as stored and as text. */
 export interface PaceSlotView {
@@ -401,7 +474,13 @@ export type TomorrowContext = DayContext<'tomorrow'>;
 export interface WeekContext extends BundleBase<'week'> {
   from: string;
   to: string;
-  days: { date: string; classes: ClassItem[]; noClassesReason?: string | undefined }[];
+  days: {
+    date: string;
+    classes: ClassItem[];
+    noClassesReason?: string | undefined;
+    /** Timetable meetings of the day that are not the student's (see DayContext.notAttending). */
+    notAttending?: ClassItem[] | undefined;
+  }[];
   term?: TermOfDate | undefined;
   deadlines: DeadlineItem[];
   exams: DeadlineItem[];
