@@ -9,6 +9,7 @@ import type {
   TaskStatus,
 } from '@unicontext/canonical-model';
 import type { Citation } from '@unicontext/provenance';
+import type { DeadlineCoverage } from './coverage.js';
 
 export type { Citation } from '@unicontext/provenance';
 
@@ -389,6 +390,8 @@ export interface PaceOverview {
 export interface TodayContext extends DayContext<'today'> {
   /** Offerings the student is behind in; empty when on track. */
   pacing: PaceItem[];
+  /** Which sources the deadlines come from and what is missing (never read "none" as "no deadline"). */
+  coverage: DeadlineCoverage;
 }
 export type TomorrowContext = DayContext<'tomorrow'>;
 
@@ -399,6 +402,7 @@ export interface WeekContext extends BundleBase<'week'> {
   term?: TermOfDate | undefined;
   deadlines: DeadlineItem[];
   exams: DeadlineItem[];
+  coverage: DeadlineCoverage;
   changes: ChangeItem[];
   /** Relevant changes before the cap / how many of them are not listed (see ChangeDigest). */
   changesTotal?: number | undefined;
@@ -440,6 +444,8 @@ export interface CourseContext extends BundleBase<'course'> {
   upcomingClasses: ClassItem[];
   recentLectures: LectureBundle[];
   deadlines: DeadlineItem[];
+  /** Which sources this course's deadlines come from and what is missing. */
+  coverage: DeadlineCoverage;
   announcements: AnnouncementItem[];
   materials: MaterialItem[];
   /** Newest 20 posts (announcements and messages) of thread-based platforms for the course. */
@@ -484,6 +490,7 @@ export interface CourseFilesContext extends BundleBase<'course-files'> {
 export interface DeadlineContext extends BundleBase<'deadline'> {
   overdue: DeadlineItem[];
   upcoming: DeadlineItem[];
+  coverage: DeadlineCoverage;
 }
 
 export interface ChangesContext extends BundleBase<'changes'> {

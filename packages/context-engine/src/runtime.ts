@@ -1,4 +1,5 @@
 import {
+  ADDITIONS_SOURCE_ID,
   type ChangeEvent,
   type Conflict,
   entityLabel,
@@ -34,7 +35,9 @@ import {
 import { type EmbeddingIndex, SearchService } from '@unicontext/search';
 import { type SyncEventBus, SyncEngine, SyncScheduler } from '@unicontext/sync-engine';
 import { TaskEngine } from '@unicontext/task-engine';
+import type { ConnectorMetadata } from '@unicontext/connector-sdk';
 import { AdditionsService } from './additions.js';
+import type { CoverageSourceInput } from './coverage.js';
 import { ContextEngine } from './engine.js';
 
 export interface UniContextOptions {
@@ -170,8 +173,42 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
         return false;
       }
     },
+    coverageSources: () => coverageSources(),
     ...(profile ? { profile } : {}),
   });
+  // Deadline coverage (coverage.ts): every source known to the raw store, with the capabilities of
+  // its loaded connector (none when it failed to load) and its health. A source counts as stale after
+  // three missed scheduled runs (at least 6 h; 24 h without a schedule).
+  const coverageSources = (): CoverageSourceInput[] => {
+    const stores = sync.stores;
+    const intervals = new Map(scheduler.status().map((x) => [x.sourceId, x.intervalMs]));
+    return stores.raw
+      .listSources()
+      .filter((s) => s.id !== ADDITIONS_SOURCE_ID)
+      .map((s) => {
+        let meta: ConnectorMetadata | undefined;
+        let label: string | undefined;
+        try {
+          const reg = sync.getSource(s.id);
+          meta = reg.metadata;
+          label = reg.sourceLabel ?? reg.metadata.sourceLabel;
+        } catch {
+          meta = undefined;
+        }
+        const h = stores.health.get(s.id);
+        const interval = intervals.get(s.id);
+        return {
+          sourceId: s.id,
+          label: label ?? s.displayName ?? s.id,
+          capabilities: meta?.capabilities,
+          authority: meta?.defaultAuthority,
+          referenceOnly: meta?.referenceOnly === true,
+          state: h?.state,
+          lastSuccessAt: h?.lastSuccessAt,
+          staleAfterMs: interval ? Math.max(3 * interval, 6 * 60 * 60 * 1000) : undefined,
+        };
+      });
+  };
   const entities = new EntityStore(database, { clock });
   const changes = new ChangeEventStore(database);
 

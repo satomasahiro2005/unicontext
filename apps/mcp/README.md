@@ -101,6 +101,20 @@ title / course code (resolved through identity links to the canonical course).
 | `open_announcement`  | `ids` (1–10 `announcement:…`)                                                                                                                                                                                                          | fetches the bodies of unread LiveCampusU notices through the daemon (`McpDeps.openAnnouncements`); marks them read in LiveCampusU (irreversible: `destructiveHint`, `openWorldHint`); UniContext keeps them unread until read there |
 | `retract_addition`   | `additionId`                                                                                                                                                                                                                           | removes one of the client's own unconfirmed additions                                                                                                                                                                               |
 
+### Deadline coverage
+
+`get_deadlines`, `get_today`, `get_week` and `get_course` return `coverage`: the sources the
+deadlines come from (`sources[]`: label, what each feeds — 課題, 試験, 予定, お知らせ／投稿の文中の締切
+— and its health `ok` / `auth_required` / `stale` / `failing` / `never_synced`), the known `gaps`
+(a deadline source that is down or stale; a course that also lives on a platform whose assignments
+are not synced, e.g. Microsoft 365; open assignments without a due date, 期限不明) and `complete`.
+A source is stale after three missed scheduled runs (at least 6 h; 24 h without a schedule). For
+`get_course` only the course's own sources count. When `complete` is false the answer hint spells
+out the gaps. The server instructions (local, remote read-only and remote write) tell the AI that a
+deadline missing from UniContext is not "no deadline": say when coverage is incomplete, treat
+unknown deadlines as possibly imminent, name where to check, and never claim 「期限はない」「余裕
+がある」 without complete coverage.
+
 ### Record tools (§11, §19–22, §47–49, §74)
 
 `record_lecture`, `add_deadline`, `add_note`, `add_task`, `list_my_additions` and

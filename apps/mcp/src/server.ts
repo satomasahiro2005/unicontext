@@ -22,6 +22,7 @@ import {
   PACE_PREDICATE,
   type ContextViewName,
   type UniContext,
+  type DeadlineCoverage,
 } from '@unicontext/context-engine';
 import {
   errorMessage,
@@ -153,13 +154,30 @@ export const DOCUMENT_EXCERPT_LIMIT = 8000;
 export const HOW_TO_CONFIRM =
   'unicontext confirm <id> を実行するか Web UI の確認待ちで承認してください';
 
+/**
+ * Answer hint for a view with deadline coverage: an incomplete coverage is spelled out (the AI
+ * must not read an empty list as "no deadline"); a complete one gets a one-line reminder.
+ */
+export function coverageHint(data: unknown): string | undefined {
+  const cov = (data as { coverage?: DeadlineCoverage } | undefined)?.coverage;
+  if (!cov) return undefined;
+  if (cov.complete) return '締切の一覧に無いことは、締切が無いことを意味しません。';
+  const more = cov.gaps.length > 3 ? ` ほか${cov.gaps.length - 3}件（coverage.gaps）。` : '';
+  return `締切の取得に欠けがあります: ${cov.gaps
+    .slice(0, 3)
+    .map((g) => g.detail)
+    .join(' ')}${more} 「締切はない」「余裕がある」とは言わないでください。`;
+}
+
 export const SERVER_INSTRUCTIONS = [
   'UniContext は学生本人の大学情報（時間割・課題・お知らせ・講義録など）を、情報源つきで返します。',
   '回答するときは、各結果の citations / answerHint に従い「根拠: 学務情報システム 10/1 09:42取得」のように必ず出典を添えてください。',
   'conflicts が空でないときは、情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典をユーザーに伝えてください。',
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
+  '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、分からない締切はすぐ来るかもしれないものとして扱い、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
   '書き込みは propose-only です。correct_fact は提案を作るだけで、ユーザー本人が確認するまで何も変更されません。課題の提出・履修登録や削除・成績に関わる操作はできません（提出済み status は提出システムからのみ反映されます）。',
   'ユーザーが会話の中で言った締切・試験の日程・やること・覚えておきたいこと（例「レポートの締切10/20って登録しといて」）や、ユーザーと一緒に決めた勉強のTODOは add_deadline / add_task / add_note で、講義の録音で聞いたことは record_lecture などで、UniContextに登録できます。登録した内容は他の会話・クライアントからも get_today・get_week・get_deadlines・get_tasks・get_notes で見えます（大学のシステムには送られず、「チャットで登録」「録音から」と表示され、大学側の値は上書きしません）。',
+  'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only. Deadlines, to-dos and notes the student mentions in any chat can be registered with add_deadline / add_task / add_note so every other session sees them; they never override a university system.',
 ].join('\n');
 
@@ -169,8 +187,10 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   '回答するときは、各結果のcitations・answerHintに従い「根拠: 学務情報システム 10/1 09:42取得」のように出典を添えてください。',
   'conflictsが空でないときは情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典を伝えてください。',
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
+  '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、分からない締切はすぐ来るかもしれないものとして扱い、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
   'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
   'Read-only: answers must cite sources and report conflicting sources instead of picking one.',
+  'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
 ].join('\n');
 
 /** Instructions of the remote surface when the grant includes unicontext.write. */
@@ -179,11 +199,13 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   '回答するときは、各結果のcitations・answerHintに従い「根拠: 学務情報システム 10/1 09:42取得」のように出典を添えてください。',
   'conflictsが空でないときは情報源の間で食い違いがあります。どちらかに断定せず、両方の値と出典を伝えてください。',
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
+  '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、分からない締切はすぐ来るかもしれないものとして扱い、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
   'どの会話でも、ユーザーが締切・試験の日程（例「レポートの締切10/20って登録しといて」「来週の金曜に小テスト」）、やること、覚えておきたいことを言ったら、add_deadline・add_task・add_note で登録してください。ユーザーと一緒に立てた勉強計画のTODOも add_task で登録できます。科目に関係ないものは course を省略します。',
   '登録した内容は、ChatGPTの他の会話やClaudeなど、UniContextにつながる全てのセッションから get_today・get_week・get_deadlines・get_tasks・get_course・get_notes で見えます。登録の前に get_deadlines などで既にあるか確かめると二重登録を避けられます（同じ科目・題名・近い締切は自動で1件にまとまります）。',
   'evidence にはユーザーの言葉をそのまま引用してください。締切は言われたままの表現（10月20日17時・来週の金曜など）でよく、解決した日時が返るのでユーザーに伝えてください。講義の録音で聞いたことは via=recording とし、recordingTimestamp に録音の位置を入れます（record_lecture は講義の要約・要点）。',
   '保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
   'Register deadlines, to-dos and notes the student mentions or plans in any chat (add_deadline / add_task / add_note) so every other session and client sees them. Writes go to UniContext only (never to a university system) and cannot change authoritative data, task status or grades.',
+  'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
 ].join('\n');
 
 // ---------- shared plumbing ----------
@@ -291,7 +313,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
       name: MCP_SERVER_NAME,
       title: 'UniContext',
       version: deps.version ?? DEFAULT_MCP_VERSION,
-      description: '大学の時間割・課題・お知らせ・講義録を出典つきでまとめて渡す / One student’s university life, with sources',
+      description:
+        '大学の時間割・課題・お知らせ・講義録を出典つきでまとめて渡す / One student’s university life, with sources',
       websiteUrl: 'https://github.com/satomasahiro2005/unicontext',
       ...(deps.icons ? { icons: deps.icons } : {}),
     },
@@ -429,9 +452,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     write: { status: r.status, ...r.audit },
   });
 
-  const view = (name: ContextViewName, params: unknown = {}): ToolOutput => ({
-    data: getView(uc.context, name, params),
-  });
+  const view = (name: ContextViewName, params: unknown = {}): ToolOutput => {
+    const data = getView(uc.context, name, params);
+    const hint = coverageHint(data);
+    return { data, ...(hint ? { options: { hint } } : {}) };
+  };
 
   // ----- views -----
 
@@ -440,7 +465,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '今日の予定',
       description:
-        '今日の授業（教室・状態）、昨日以降の変更、締切、未提出の課題、重要なお知らせ、授業準備、情報源の食い違いをまとめて返す。「今日の授業は？」「今日やることは？」に使う。学期（前期・後期）は約8週ずつの前半・後半に分かれる: term.part は今が後期前半か後期後半か、各授業の termPart はその科目の期間（後期前半・後期後半だけの科目と、後期（前半・後半）の通しの科目がある）。 / Everything for today: classes (with room), changes, deadlines, tasks, important announcements, preparation and conflicts. Every item carries citations. Each term is split into halves of about 8 weeks (前半/後半): term.part is the current half, termPart on a class is the half(s) the course meets in.',
+        '今日の授業（教室・状態）、昨日以降の変更、締切、未提出の課題、重要なお知らせ、授業準備、情報源の食い違いをまとめて返す。「今日の授業は？」「今日やることは？」に使う。学期（前期・後期）は約8週ずつの前半・後半に分かれる: term.part は今が後期前半か後期後半か、各授業の termPart はその科目の期間（後期前半・後期後半だけの科目と、後期（前半・後半）の通しの科目がある）。 / Everything for today: classes (with room), changes, deadlines, tasks, important announcements, preparation and conflicts. Every item carries citations. Each term is split into halves of about 8 weeks (前半/後半): term.part is the current half, termPart on a class is the half(s) the course meets in. 締切の coverage（情報源・状態・欠け gaps）も返す: 欠けがあれば伝え、載っていないことを締切なしと扱わない。 / Includes deadline coverage (sources, health, gaps): an empty list is not "no deadline".',
     },
     {},
     () => view('today'),
@@ -462,7 +487,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '今週の予定',
       description:
-        "今週（月曜始まり）の時間割・締切・試験・変更・食い違いを返す。学期（前期・後期）は約8週ずつの前半・後半に分かれる: term.part は今が後期前半か後期後半か、各授業の termPart はその科目の期間（後期前半・後期後半だけの科目と、後期（前半・後半）の通しの科目がある）。 / This week's timetable, deadlines, exams, changes and conflicts. Each term is split into halves of about 8 weeks (前半/後半): term.part is the current half, termPart on a class is the half(s) the course meets in.",
+        '今週（月曜始まり）の時間割・締切・試験・変更・食い違いを返す。学期（前期・後期）は約8週ずつの前半・後半に分かれる: term.part は今が後期前半か後期後半か、各授業の termPart はその科目の期間（後期前半・後期後半だけの科目と、後期（前半・後半）の通しの科目がある）。 / This week\'s timetable, deadlines, exams, changes and conflicts. Each term is split into halves of about 8 weeks (前半/後半): term.part is the current half, termPart on a class is the half(s) the course meets in. 締切の coverage（情報源・状態・欠け gaps）も返す: 欠けがあれば伝え、載っていないことを締切なしと扱わない。 / Includes deadline coverage (sources, health, gaps): an empty list is not "no deadline".',
     },
     {},
     () => view('week'),
@@ -473,14 +498,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '科目の全体像',
       description:
-        '1科目の全体像（担当・教室・授業のある期間 termPart（後期前半・後期後半・後期（前半・後半））・今後の授業・直近の講義・締切・お知らせ・資料・Teamsの投稿・フォルダごとのファイル・課題と提出状況・変更・食い違い）を全ソース統合で返す。courseOfferingId には id のほか「データベース」のような科目名や科目コードも使える。 / One course across all sources, including Teams posts (discussion), files with folders, and assignments with submission status. Accepts an id or a fuzzy title / course code.',
+        '1科目の全体像（担当・教室・授業のある期間 termPart（後期前半・後期後半・後期（前半・後半））・今後の授業・直近の講義・締切・お知らせ・資料・Teamsの投稿・フォルダごとのファイル・課題と提出状況・変更・食い違い）を全ソース統合で返す。courseOfferingId には id のほか「データベース」のような科目名や科目コードも使える。 / One course across all sources, including Teams posts (discussion), files with folders, and assignments with submission status. Accepts an id or a fuzzy title / course code. 締切の coverage（情報源・状態・欠け gaps）も返す: 欠けがあれば伝え、載っていないことを締切なしと扱わない。 / Includes deadline coverage (sources, health, gaps): an empty list is not "no deadline".',
     },
     { courseOfferingId: courseIdField },
     (a) => {
       const t = trimCourseForAi(
         getView(uc.context, 'course', { courseOfferingId: courseId(a.courseOfferingId) }),
       );
-      return { data: t.data, ...(t.hint ? { options: { hint: t.hint } } : {}) };
+      const hint = [t.hint, coverageHint(t.data)].filter(Boolean).join(' ');
+      return { data: t.data, ...(hint ? { options: { hint } } : {}) };
     },
   );
 
@@ -534,7 +560,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '締切一覧',
       description:
-        '期限切れと今後の締切を返す（days 日先まで、既定15日）。「今週の締切は？」「レポートはいつまで？」に使う。 / Overdue and upcoming deadlines.',
+        '期限切れと今後の締切を返す（days 日先まで、既定15日）。「今週の締切は？」「レポートはいつまで？」に使う。 / Overdue and upcoming deadlines. 締切の coverage（情報源・状態・欠け gaps）も返す: 欠けがあれば伝え、載っていないことを締切なしと扱わない。 / Includes deadline coverage (sources, health, gaps): an empty list is not "no deadline".',
     },
     {
       days: z

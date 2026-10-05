@@ -48,6 +48,13 @@ import {
 } from '@unicontext/database';
 import type { IdentityResolver } from '@unicontext/identity';
 import {
+  buildDeadlineCoverage,
+  type CoverageCourse,
+  type CoverageSourceInput,
+  type CoverageUndated,
+  type DeadlineCoverage,
+} from './coverage.js';
+import {
   type ConflictResolver,
   type Resolution,
   toCitation,
@@ -141,6 +148,11 @@ export interface ContextEngineOptions {
    * out of the today / week / changes views unless the student is enrolled in them.
    */
   isReferenceSource?: (sourceId: string) => boolean;
+  /**
+   * Every known source with its capabilities and health, for the deadline coverage of the views
+   * (coverage.ts). Without it, only unhealthy sources from the health store are reported.
+   */
+  coverageSources?: () => CoverageSourceInput[];
 }
 
 /** Whether the student is enrolled in a course offering (§14: any linked offering counts). */
@@ -187,9 +199,11 @@ export class ContextEngine {
   private readonly tasks: TaskEngine;
   private readonly search: SearchService | undefined;
   private readonly isReferenceSource: (sourceId: string) => boolean;
+  private readonly coverageSources: () => CoverageSourceInput[];
 
   constructor(options: ContextEngineOptions) {
     this.isReferenceSource = options.isReferenceSource ?? (() => false);
+    this.coverageSources = options.coverageSources ?? (() => this.storedSourceStates());
     this.db = options.db;
     this.clock = options.clock ?? systemClock;
     this.timezone =
@@ -1151,7 +1165,88 @@ export class ContextEngine {
 
   /** getTodayContext() → {classes, changes, deadlines, tasks, importantAnnouncements, preparation, conflicts, pacing} (§17). */
   today(): TodayContext {
-    return { ...this.day('today', 0), pacing: this.pacing() };
+    return { ...this.day('today', 0), pacing: this.pacing(), coverage: this.deadlineCoverage() };
+  }
+
+  /** Sources from the health store only (no connector metadata): their capabilities are unknown. */
+  private storedSourceStates(): CoverageSourceInput[] {
+    const stores = createStores(this.db, this.clock);
+    return new RawStore(this.db, { clock: this.clock }).listSources().map((s) => {
+      const h = stores.health.get(s.id);
+      return {
+        sourceId: s.id,
+        label: s.displayName ?? s.id,
+        capabilities: undefined,
+        authority: undefined,
+        referenceOnly: this.isReferenceSource(s.id),
+        state: h?.state,
+        lastSuccessAt: h?.lastSuccessAt,
+        staleAfterMs: undefined,
+      };
+    });
+  }
+
+  /**
+   * Which sources feed the deadlines and what is known to be missing (coverage.ts): for one course,
+   * or for the student's current-term courses.
+   */
+  deadlineCoverage(courseOfferingId?: string): DeadlineCoverage {
+    const now = this.now();
+    const sourceOf = (id: string): string | undefined => this.entities.meta(id)?.sourceId;
+    let courses: CoverageCourse[];
+    let scope: Set<string>;
+    if (courseOfferingId) {
+      const ref = this.courseRef(courseOfferingId);
+      const ids = ref?.linkedIds ?? [courseOfferingId];
+      scope = new Set(ids);
+      courses = [
+        {
+          id: ref?.id ?? courseOfferingId,
+          title: ref?.title ?? courseOfferingId,
+          sourceIds: ids.map(sourceOf).filter((x): x is string => x !== undefined),
+        },
+      ];
+    } else {
+      const current = this.currentTermOfferings();
+      scope = new Set(current.flatMap((e) => e.ids));
+      courses = current.map((e) => ({
+        id: this.courseRef(e.offering.id)?.id ?? e.offering.id,
+        title: e.offering.title,
+        sourceIds: e.ids.map(sourceOf).filter((x): x is string => x !== undefined),
+      }));
+    }
+    const undated: CoverageUndated[] = this.tasks
+      .list({ statuses: OPEN_STATUSES })
+      .filter(
+        (t) =>
+          !t.dueAt &&
+          t.taskKind === 'assignment' &&
+          t.courseOfferingId !== undefined &&
+          scope.has(t.courseOfferingId),
+      )
+      .map((t) => {
+        const course = this.courseRef(t.courseOfferingId);
+        const assignment = t.assignmentId
+          ? this.entities.getOfKind('assignment', t.assignmentId)
+          : undefined;
+        return {
+          course: course ? { id: course.id, title: course.title } : undefined,
+          title: t.title,
+          url: assignment?.url,
+        };
+      });
+    const tz = this.timezone;
+    return buildDeadlineCoverage({
+      now,
+      sources: this.coverageSources(),
+      courses,
+      undated,
+      courseScoped: courseOfferingId !== undefined,
+      formatTime: (iso) => {
+        const p = zonedParts(new Date(iso), tz);
+        return `${p.month}/${p.day} ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
+      },
+    });
   }
 
   paceSlotView(slot: PaceSlot): PaceSlotView {
@@ -1293,6 +1388,7 @@ export class ContextEngine {
       to: to.toISOString(),
       days,
       deadlines: all.filter((d) => d.kind !== 'exam_preparation'),
+      coverage: this.deadlineCoverage(),
       exams: all.filter((d) => d.kind === 'exam_preparation'),
       ...this.changeDigest(
         this.changes.list({ since: new Date(now.getTime() - 7 * DAY).toISOString() }),
@@ -1380,6 +1476,7 @@ export class ContextEngine {
         addZonedDays(now, 60, this.timezone),
         { courseOfferingId: c.id },
       ),
+      coverage: this.deadlineCoverage(c.id),
       announcements: this.entities
         .list('announcement', { where: { courseOfferingId: ids } })
         .sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''))
@@ -1415,6 +1512,7 @@ export class ContextEngine {
       ...this.base('deadline'),
       overdue: all.filter((d) => d.overdue),
       upcoming: all.filter((d) => !d.overdue),
+      coverage: this.deadlineCoverage(options.courseOfferingId),
     };
   }
 
