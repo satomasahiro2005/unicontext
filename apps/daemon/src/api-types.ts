@@ -47,6 +47,9 @@ import type {
   Citation,
   CourseRef,
   ResolvedValue,
+  NextAction,
+  NextActionSummary,
+  NextActionsContext,
 } from '@unicontext/context-engine';
 import type {
   Conflict,
@@ -98,6 +101,9 @@ export type {
   TodayContext,
   TomorrowContext,
   WeekContext,
+  NextAction,
+  NextActionSummary,
+  NextActionsContext,
 };
 
 export interface ApiErrorBody {

@@ -19,6 +19,7 @@ import {
   printCourses,
   printDay,
   printDeadlineContext,
+  printNext,
   printSearch,
   printSources,
   printWeek,
@@ -43,6 +44,26 @@ export function registerViewCommands(program: Command, h: Harness): void {
         const bundle = getView(uc.context, 'today', {});
         if (ctx.json) ctx.printJson(bundle);
         else printDay(ctx, '今日', bundle);
+      }),
+    );
+
+  program
+    .command('next')
+    .description('今やること1つと、その次 / The one thing to do now, then the next few')
+    .option('--count <n>', 'その次に出す件数（既定3） / how many after the first (default 3)')
+    .option('--course <course>', '科目で絞る / only one course')
+    .action(
+      action<{ count?: string; course?: string }>(h, async (ctx, { opts }) => {
+        const { uc } = await ctx.runtime();
+        const course = await courseId(ctx, opts.course);
+        const r = uc.context.nextActions({
+          ...(opts.count !== undefined
+            ? { count: parsePositiveInt(opts.count, '--count', 10) }
+            : {}),
+          ...(course ? { courseOfferingId: course } : {}),
+        });
+        if (ctx.json) ctx.printJson(r);
+        else printNext(ctx, r);
       }),
     );
 

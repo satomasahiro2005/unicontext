@@ -10,6 +10,7 @@ import {
   formatDateJa,
   formatShortJa,
   type Logger,
+  zonedParts,
   parseDuration,
   parseZonedDate,
   redact,
@@ -19,6 +20,7 @@ import {
   type TimerHandle,
   zonedDateString,
 } from '@unicontext/core';
+import { coverageGapText } from '@unicontext/context-engine';
 import type { Citation } from '@unicontext/provenance';
 import type { BusChangeEvent, ChangeOrigin, SyncEngineEvents } from '@unicontext/sync-engine';
 import { NotificationLog, type NotificationListOptions } from './log.js';
@@ -99,6 +101,8 @@ export class NotificationService {
   private readonly logger: Logger;
   private readonly minPriority: NotificationPriority;
   private readonly leads: Lead[];
+  private readonly escalation: Lead[];
+  private readonly digestAt: { hour: number; minute: number } | undefined;
   private readonly intervalMs: number;
   private readonly windowMs: number;
   /** Drafts of the sync run in progress, by source: published together when it settles. */
@@ -119,6 +123,14 @@ export class NotificationService {
       logger: this.logger,
     });
     this.leads = this.parseLeads(o.deadlineLeadTimes ?? DEFAULT_LEADS);
+    this.escalation =
+      o.escalationLeadTimes && o.escalationLeadTimes.length > 0
+        ? this.parseLeads(o.escalationLeadTimes)
+        : [];
+    const m = o.morningDigestAt ? /^(\d{1,2}):(\d{2})$/.exec(o.morningDigestAt.trim()) : null;
+    this.digestAt = m ? { hour: Number(m[1]), minute: Number(m[2]) } : undefined;
+    if (o.morningDigestAt && !m)
+      this.logger.warn('ignoring invalid morning digest time', { value: o.morningDigestAt });
   }
 
   /** Subscribes to the bus and starts the deadline poll (runs once immediately). */
@@ -277,8 +289,100 @@ export class NotificationService {
    * and `pace_behind` for offerings the student is falling behind in.
    */
   async checkDeadlines(): Promise<Notification[]> {
-    const drafts = [...this.paceDrafts(), ...this.deadlineDrafts()];
+    const escalation = this.escalationDrafts();
+    const escalated = new Set(escalation.covered);
+    const drafts = [
+      ...this.digestDrafts(),
+      ...escalation.drafts,
+      ...this.paceDrafts(),
+      ...this.deadlineDrafts().filter((d) => !d.entityId || !escalated.has(d.entityId)),
+    ];
     return this.publish(drafts);
+  }
+
+  /**
+   * The morning digest as a notification object (not logged or sent): today's top action from
+   * the next-action engine, unsubmitted work due within 72 hours and sources whose deadlines
+   * cannot be trusted. Deduped per local date.
+   */
+  morningDigest(): Omit<Notification, 'id' | 'createdAt'> {
+    const tz = this.uc.timezone;
+    const now = this.uc.clock.now();
+    const r = this.uc.context.nextActions({ count: 2 });
+    const soon = r.dueSoon.filter((d) => this.inScope(d.courseId));
+    const lines = [
+      r.top ? `まずこれ: ${r.top.what}（${r.top.why}）` : '今やることは見つかりませんでした',
+    ];
+    if (soon.length)
+      lines.push(
+        `72時間以内: ${soon
+          .slice(0, 3)
+          .map((d) => `${d.title}（${d.dueText}${d.unsubmitted ? '・未提出' : ''}）`)
+          .join('、')}${soon.length > 3 ? ` ほか${soon.length - 3}件` : ''}`,
+      );
+    for (const g of r.coverage.gaps) lines.push(`要確認: ${coverageGapText(g, now.getTime())}`);
+    return {
+      kind: 'next_action_digest',
+      priority: r.urgent ? 'high' : 'normal',
+      title: `今日やること（${formatDateJa(now, tz)}）`,
+      body: safeText(lines.join(' ／ '), 300),
+      dedupeKey: `next_action_digest:${zonedDateString(now, tz)}`,
+      ...(r.top?.taskId ? { entityId: r.top.taskId } : {}),
+      ...(r.top?.course ? { courseOfferingId: r.top.course.id } : {}),
+      citations: r.top?.citations ?? [],
+    };
+  }
+
+  private digestDrafts(): Draft[] {
+    if (!this.digestAt) return [];
+    const p = zonedParts(this.uc.clock.now(), this.uc.timezone);
+    const minutes = p.hour * 60 + p.minute;
+    const from = this.digestAt.hour * 60 + this.digestAt.minute;
+    // Once a day, from the configured time until noon (a daemon started at night stays quiet).
+    if (minutes < from || minutes >= Math.max(from + 60, 12 * 60)) return [];
+    return [this.morningDigest()];
+  }
+
+  /**
+   * Unsubmitted assignments inside an escalation window (default off): one notification per
+   * (task, due date, window), with the first step to take. Returns the task ids it covers so the
+   * plain deadline_approaching notice is not sent for them as well.
+   */
+  private escalationDrafts(): { drafts: Draft[]; covered: string[] } {
+    if (this.escalation.length === 0) return { drafts: [], covered: [] };
+    const r = this.uc.context.nextActions({ count: 10 });
+    const actions = [r.top, ...r.next];
+    const tz = this.uc.timezone;
+    const nowMs = this.uc.clock.now().getTime();
+    const drafts: Draft[] = [];
+    const covered: string[] = [];
+    for (const d of r.dueSoon) {
+      if (!d.unsubmitted) continue;
+      if (!this.inScope(d.courseId)) continue;
+      covered.push(d.taskId);
+      const hoursLeft = (Date.parse(d.dueAt) - nowMs) / HOUR_MS;
+      const lead = this.escalation.find((l) => hoursLeft <= l.hours);
+      if (!lead || hoursLeft < 0) continue;
+      const step = actions.find((a) => a?.taskId === d.taskId)?.what;
+      const left =
+        hoursLeft < 1
+          ? `${Math.max(1, Math.round(hoursLeft * 60))}分`
+          : `${Math.floor(hoursLeft)}時間`;
+      drafts.push({
+        kind: 'deadline_escalation',
+        priority: lead.hours <= 6 ? 'critical' : lead.hours <= 24 ? 'high' : 'normal',
+        title: `未提出・締切まであと約${left}: ${d.title}`,
+        body: safeText(
+          `${d.course ? `${d.course}「${d.title}」` : `「${d.title}」`}の締切は${formatShortJa(new Date(d.dueAt), tz)}です。${step ? `まずこれ: ${step}` : ''}`,
+          300,
+        ),
+        dedupeKey: `deadline_escalation:${d.taskId}:${d.dueAt}:${lead.label}`,
+        entityId: d.taskId,
+        ...(d.courseId ? { courseOfferingId: d.courseId } : {}),
+        citations: d.citations,
+      });
+    }
+    return { drafts, covered };
   }
 
   /**

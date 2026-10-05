@@ -55,6 +55,8 @@ export type {
   SyncResponse,
   TodayContext,
   WeekContext,
+  NextAction,
+  NextActionSummary,
 } from '@unicontext/daemon/api-types';
 
 export type { IdentityLink } from '@unicontext/canonical-model';

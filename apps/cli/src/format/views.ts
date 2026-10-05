@@ -4,6 +4,8 @@ import type {
   ClassItem,
   ConflictItem,
   DeadlineItem,
+  NextAction,
+  NextActionsContext,
   PaceItem,
   PreparationItem,
   TaskItem,
@@ -262,6 +264,7 @@ export function printDay(
     ctx.style.bold(`${label}（${formatDateJa(parseZonedDate(b.date, tz), tz)}）`) +
       ctx.style.dim(`  （${shortTime(b.generatedAt, tz)}時点）`),
   );
+  if ('next' in b && b.next) ctx.out(ctx.style.bold(`→ ${ctx.text(b.next.line)}`));
   printSection(ctx, '授業', b.classes.length);
   printClasses(ctx, b.classes, tz, b.noClassesReason);
   printConflicts(ctx, b.conflicts);
@@ -509,5 +512,31 @@ export function printSources(ctx: CliContext, sources: readonly SourceInfo[], tz
       ctx.out(`  ${s.sourceId}: ${ctx.text(s.message)}`);
     if (s.enabled && s.state === 'auth_required')
       ctx.out(`  ${ctx.style.yellow(`「${s.loginCommand}」でログインしてください`)}`);
+  }
+}
+
+function printAction(ctx: CliContext, a: NextAction, lead: string): void {
+  ctx.out(`${lead}${ctx.text(a.what)}`);
+  const due = a.dueText && a.dueText !== '—' ? `締切 ${a.dueText}` : '';
+  const meta = [a.why, due, a.course?.title].filter(Boolean).map((x) => ctx.text(x));
+  if (meta.length) ctx.out(`    ${ctx.style.dim(meta.join(' / '))}`);
+  if (a.link) ctx.out(`    ${ctx.style.dim(ctx.text(a.link.url))}`);
+}
+
+/** `unicontext next`: the one thing to do now, then the next few. */
+export function printNext(ctx: CliContext, r: NextActionsContext): void {
+  if (!r.top) {
+    ctx.out(ctx.text(r.line));
+    return;
+  }
+  ctx.out(ctx.style.bold('今やること'));
+  printAction(ctx, r.top, '  ');
+  if (r.next.length) {
+    printSection(ctx, 'その次', r.next.length);
+    for (const a of r.next) printAction(ctx, a, '  ・');
+  }
+  if (!r.coverage.trusted) {
+    printSection(ctx, '要確認', r.coverage.gaps.length);
+    for (const g of r.coverage.gaps) ctx.out(`  ${ctx.text(g.detail)}`);
   }
 }

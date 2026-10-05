@@ -992,3 +992,22 @@ main:has(.week-grid) {
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+
+/* Today: the one thing to do now (next-action engine) */
+.next-card {
+  border-left: 4px solid var(--accent);
+  margin-bottom: 1rem;
+}
+.next-card.urgent {
+  border-left-color: var(--warn);
+  background: var(--warn-bg);
+}
+.next-what {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0.25rem 0;
+}
+.next-then {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}

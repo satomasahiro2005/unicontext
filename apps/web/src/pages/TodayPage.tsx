@@ -13,7 +13,7 @@ import { Async, Empty, PageHeader, Section } from '../components/ui';
 import { useApi, usePageTitle } from '../hooks';
 import { formatDateJa, formatShort, formatTimeRange } from '../lib/dates';
 import { sortByDue, sortClasses } from '../lib/sort';
-import type { PreparationItem, TodayContext } from '../types';
+import type { NextActionSummary, PreparationItem, TodayContext } from '../types';
 
 export function TodayPage() {
   usePageTitle('今日');
@@ -59,6 +59,7 @@ function TodayBody({ today }: { today: TodayContext }) {
         <span className="meta">{formatShort(today.generatedAt, tz)}時点</span>
       </p>
       <ConflictBanner count={today.conflicts.length} />
+      {today.next ? <NextCard next={today.next} /> : null}
 
       <Section title="今日の授業" count={classes.length}>
         {classes.length === 0 ? (
@@ -177,6 +178,54 @@ function Preparation({ item }: { item: PreparationItem }) {
         </div>
       ) : null}
       <Citations citations={item.citations} />
+    </article>
+  );
+}
+
+/** The one thing to do now, decided by UniContext (the student does not have to prioritise). */
+function NextCard({ next }: { next: NextActionSummary }) {
+  const top = next.top;
+  if (!top) {
+    return (
+      <article className="card next-card">
+        <p className="meta">{next.line}</p>
+      </article>
+    );
+  }
+  return (
+    <article className={next.urgent ? 'card next-card urgent' : 'card next-card'}>
+      <header className="card-head">
+        <h3 className="card-title">今やること</h3>
+        {top.dueAt ? <span className="meta">締切 {top.dueText}</span> : null}
+      </header>
+      <p className="next-what">{top.what}</p>
+      <p className="meta">
+        {top.why}
+        {top.course ? ` / ${top.course.title}` : ''}
+      </p>
+      {top.link ? (
+        <p>
+          <a href={top.link.url} target="_blank" rel="noreferrer">
+            {top.link.label ? `${top.link.label}で開く` : '開く'}
+          </a>
+        </p>
+      ) : null}
+      {next.then.length > 0 ? (
+        <ol className="next-then">
+          {next.then.map((t) => (
+            <li key={t.what}>
+              {t.what}
+              <span className="meta">
+                {' '}
+                {t.dueText}
+                {t.course ? ` / ${t.course}` : ''}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {!next.coverageTrusted ? <p className="meta">締切を取れていない情報源があります</p> : null}
+      <Citations citations={top.citations} />
     </article>
   );
 }
