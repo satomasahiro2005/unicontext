@@ -4,6 +4,8 @@ Goal: ChatGPT looks after a student who never checks anything. It checks UniCont
 being asked, puts what is urgent first, saves lecture transcripts, and twice a day or more
 it checks on its own and sends a push notification only when something needs action.
 UniContext never starts ChatGPT; ChatGPT's scheduled tasks call UniContext.
+When ChatGPT's Google Calendar and Gmail connectors are available the tasks read those too,
+read-only (see §3.1).
 
 Background and sources: [research/chatgpt-plugin-tasks.md](research/chatgpt-plugin-tasks.md)
 (2026-10-05). The remote MCP endpoint itself is set up in [remote.md](remote.md).
@@ -110,12 +112,75 @@ Both prompts:
 - call `get_attention_required` / `get_student_state` first, fall back to `get_briefing` and
   then to `get_today` / `get_deadlines` / `get_recent_changes` / `get_tasks`, so they work
   before and after the new tools land;
-- use read-only tools only (a write waits for approval and pauses the task);
-- answer exactly 「通知なし」 when nothing needs action, and at most 4 (watcher) or 6
-  (morning) short lines otherwise;
-- do not repeat an item already notified unless it became more urgent;
-- the watcher stays quiet 0:00–6:59 except for a deadline within 3 hours or a same-day
-  休講/教室変更.
+- use read-only tools only (a write waits for approval and pauses the task), and never store
+  anything found in Gmail or Google Calendar in UniContext (see §3.1);
+- the morning task answers in this order: one single immediate action on the first line, then
+  「まず今やること」 / 「時間が決まっている今日の予定」 / 「今日中に終えること」 / 「近いうちに注意すること」
+  (big work broken into steps that start in five minutes), and exactly 「通知なし」 on a day with
+  no class, appointment or urgent matter;
+- the watcher notifies only when waiting for the next normal check (the next morning briefing)
+  would hurt, in 1-3 sentences per item (what happened, when, what to do now), at most 4 items,
+  and outputs nothing at all when there is nothing (not even 「通知なし」). It stays quiet
+  0:00-6:59 except for a deadline within 3 hours or a same-day 休講/教室変更;
+- do not repeat an item already notified unless it escalated, changed, or reached a stage that
+  is still not acted on; the same event seen in several sources (a 休講 in UniContext and in
+  Gmail) is one notification.
+
+The prompts have no documented length limit, but they are pasted into the task box, so keep
+them compact (the watcher is about 1,500 characters, the morning one about 1,100).
+
+### 3.1 Gmail and Google Calendar (read-only)
+
+In the same Work chat, connect Gmail and Google Calendar in ChatGPT (its app/connector
+settings) if you want them used. The prompts and the `student-briefing` skill use them when
+available and say 「取得できていない」 for a source that is not connected.
+
+- **Strictly read-only.** Never mark mail as read, reply, send, draft, label, archive or
+  trash; never create or change a calendar event.
+- **Nothing is stored.** What is found in mail or calendar is only shown in that run's answer.
+  No `add_note` / `add_deadline` / `add_task` from it: that is out of scope until a future
+  `ingest_external_signal` (see [ARCHITECTURE.md](ARCHITECTURE.md), "Future:
+  `ingest_external_signal`").
+- **Calendar = time facts**: appointments that are not classes (interviews, travel). An entry
+  with the same time and title as a UniContext class is the same class and is shown once.
+- **Gmail = new information**, judged by sender, subject and content, not by labels or
+  categories. Taken: the university or teachers (休講, 教室変更, 締切変更, 課題), hiring
+  (interview or schedule changes), urgent security notices (account compromise, suspicious
+  login). Ignored: ads, newsletters, campus-wide general notices, routine GitHub notifications.
+- **「情報がない」 vs 「取得できていない」**: the first means the source was read and has nothing;
+  the second means it could not be read (connector unavailable, error, UniContext coverage gap
+  or unhealthy `sourceHealth`). They are never mixed.
+
+### 3.2 Effective schedule and personal conditions
+
+UniContext returns, for class items, `effectiveSchedule.status` (`attending` / `not_attending`
+/ `unknown`) with `effectiveSchedule.reason`, and `rawSchedule` (what the academic system
+timetable says). Day views put sessions that do not apply in `notAttending` (「Aグループの日な
+ので本人(B)は授業なし」).
+
+- A `not_attending` class is never shown as today's class and never notified.
+- `unknown` (depends on the group, group not known): the answer says it depends on the group;
+  the morning run asks once which group the student is in.
+- A `rawSchedule` that differs from the effective value is the student's group applied, not a
+  conflict. When `effectiveSchedule.conflicts` is present (sources disagree about the group or
+  the date), both are shown with their sources; one
+  side is never adopted.
+- In a normal chat, when the student says their group/班, or a group schedule document or post
+  appears, ChatGPT calls `set_course_condition` (for example group B, with the evidence) and
+  `add_session_rule` (dates and periods per group, with the source document). Scheduled tasks
+  never call them.
+
+### 3.3 Attention fields (`get_attention_required`)
+
+Each item carries `attentionId` (stable id), `severity`, `firstSeenAt`, `lastChangedAt`,
+`nextEscalationAt`, `recommendedAction` and `sourceHealth` (health of the sources the item
+relies on). The watcher uses:
+
+- `attentionId` to recognise the same item across runs;
+- `severity` and `nextEscalationAt` to decide whether to notify again (only on escalation,
+  change, or a still-not-acted stage);
+- `recommendedAction` for the 「今やること」 part of the message;
+- `sourceHealth` to say 「取得できていない」 when a source is unhealthy.
 
 ## 4. Verify
 
@@ -128,8 +193,9 @@ Both prompts:
    tool is offered at all, the account has read-only MCP (see the research notes, §4).
 4. Scheduled → each task → **Run now** (or wait one run). Check the run's tool calls: the
    UniContext tool was called and returned data (not an auth error).
-5. Silence: on a quiet hour the watcher must answer 「通知なし」. Check whether that run still
-   produced a push on the phone. Record the result here.
+5. Silence: on a quiet hour the watcher must output nothing at all. Check whether that run
+   still produced a push on the phone. Record the result here. Also check that Gmail and
+   Calendar were only read (no mail marked read, no draft, no event created).
 6. Next day: confirm the 07:30 run happened and could still reach UniContext (access tokens
    last 1 hour; the run must refresh with the 30-day refresh token). `unicontext remote
 clients` shows the ChatGPT client's last use; `logs/remote-audit.jsonl` shows `refresh`
@@ -137,7 +203,7 @@ clients` shows the ChatGPT client's last use; `logs/remote-audit.jsonl` shows `r
 
 ## 5. If ChatGPT notifications are not good enough
 
-Signs: runs that answer 「通知なし」 still push; runs pause ("inactive", approval pending) or
+Signs: quiet runs (no output, or 「通知なし」 in the morning) still push; runs pause ("inactive", approval pending) or
 lose the developer-mode app after the first run; pushes arrive late or not at all on the phone.
 
 Then:

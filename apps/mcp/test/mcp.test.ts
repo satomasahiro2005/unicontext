@@ -110,6 +110,8 @@ describe('MCP contract: tools listing', () => {
       'add_deadline',
       'add_note',
       'add_task',
+      'set_course_condition',
+      'add_session_rule',
       'list_my_additions',
       'retract_addition',
       'open_announcement',

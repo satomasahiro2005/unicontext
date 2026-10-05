@@ -44,9 +44,21 @@ predicates:
       transcript,
       student-statement,
     ]
+  # The student's group / 班 in a course. A chat or recording never outranks the university or an
+  # instructor's document; a newer, different value from them opens a Conflict instead.
+  'condition:group':
+    [
+      academic-system,
+      instructor-announcement,
+      lms,
+      collaboration,
+      discussion,
+      transcript,
+      student-statement,
+    ]
 # Predicates whose facts are separate items rather than competing values for one slot (a lecture
 # can name several things to prepare): they are never turned into Conflicts.
-multiValued: [todo]
+multiValued: [todo, session_rule]
 # Used for predicates not listed above.
 default:
   [

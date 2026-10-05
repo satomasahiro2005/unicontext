@@ -31,6 +31,8 @@ const WRITE_TOOLS = [
   'add_note',
   'retract_addition',
   'open_announcement',
+  'set_course_condition',
+  'add_session_rule',
 ];
 
 /** @param {string} p */

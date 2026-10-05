@@ -349,6 +349,30 @@ export class ClassSchedule {
     return { ...(startsAt ? { startsAt } : {}), ...(endsAt ? { endsAt } : {}) };
   }
 
+  /** Start / end (ISO) of a period or a start–end time on a local date (profile period table). */
+  slotTimes(
+    date: string,
+    slot: {
+      period?: number | undefined;
+      startTime?: string | undefined;
+      endTime?: string | undefined;
+    },
+  ): { startsAt?: string; endsAt?: string } {
+    return this.times(date, slot);
+  }
+
+  /** Periods of an offering's weekly timetable (across linked offerings), sorted. */
+  timetablePeriods(ids: readonly string[]): number[] {
+    for (const id of ids) {
+      const o = this.entities.getOfKind('courseOffering', id);
+      const periods = (o?.schedule ?? [])
+        .map((s) => s.period)
+        .filter((p): p is number => p !== undefined);
+      if (periods.length) return [...new Set(periods)].sort((a, b) => a - b);
+    }
+    return [];
+  }
+
   /** Generated (not stored) sessions in [fromDate, toDate) for the given or all enrolled offerings. */
   generated(fromDate: string, toDate: string, courseIds?: readonly string[]): ClassSession[] {
     const cal = this.calendar;

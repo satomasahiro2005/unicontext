@@ -107,8 +107,24 @@ describe('ChatGPT plugin package', () => {
   it('keeps the scheduled task prompts silent by default and read-only', () => {
     for (const task of ['watcher.ja.txt', 'morning.ja.txt']) {
       const text = readFileSync(join(BASE, 'tasks', task), 'utf8');
-      expect(text).toContain('「通知なし」の1行だけ');
       expect(text).toContain('書き込み');
+      // Gmail / Google Calendar are read only and never stored in UniContext.
+      expect(text).toContain('既読にする');
+      expect(text).toContain('UniContextに保存もしない');
+      expect(text).toContain('effectiveSchedule');
     }
+    const morning = readFileSync(join(BASE, 'tasks', 'morning.ja.txt'), 'utf8');
+    expect(morning).toContain('「通知なし」の1行だけ');
+    for (const h of [
+      'まず今やること',
+      '時間が決まっている今日の予定',
+      '今日中に終えること',
+      '近いうちに注意すること',
+    ])
+      expect(morning).toContain(h);
+    // The watcher says nothing at all when nothing would hurt by waiting.
+    const watcher = readFileSync(join(BASE, 'tasks', 'watcher.ja.txt'), 'utf8');
+    expect(watcher).toContain('何も出力しない');
+    expect(watcher).toContain('attentionId');
   });
 });

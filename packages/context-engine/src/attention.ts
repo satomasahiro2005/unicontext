@@ -15,12 +15,13 @@ import {
   formatDateJa,
   formatShortJa,
   parseZonedDate,
+  sha256,
   startOfZonedWeek,
   zonedDateString,
   zonedParts,
 } from '@unicontext/core';
 import type { UniContextDatabase } from '@unicontext/database';
-import type { CoverageGap } from './coverage.js';
+import type { CoverageGap, CoverageHealth, CoverageSource } from './coverage.js';
 import {
   classifyWork,
   coverageGapText,
@@ -33,7 +34,14 @@ import {
   WORK_KIND_LABELS,
 } from './next-action.js';
 import type { UniContext } from './runtime.js';
-import type { Citation, ClassItem, ConflictItem, PaceItem, TermOfDate } from './types.js';
+import type {
+  AttendanceStatus,
+  Citation,
+  ClassItem,
+  ConflictItem,
+  PaceItem,
+  TermOfDate,
+} from './types.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -50,6 +58,8 @@ export interface ClientMark {
   lastCallAt: string | undefined;
   /** Alert key → severity rank already told to this client. */
   alerted: Record<string, number>;
+  /** attentionId → when this client first saw it, when it last changed, and its last signature. */
+  seen?: Record<string, { first: string; changed: string; sig: string }>;
 }
 
 /** Per-client bookkeeping of what was already told (attention / briefing). */
@@ -79,12 +89,12 @@ export class ClientMarkStore {
         .get(clientId, scope) as { data_json: string } | undefined;
       if (row) {
         const v = JSON.parse(row.data_json) as Partial<ClientMark>;
-        return { lastCallAt: v.lastCallAt, alerted: v.alerted ?? {} };
+        return { lastCallAt: v.lastCallAt, alerted: v.alerted ?? {}, seen: v.seen ?? {} };
       }
     } catch {
       // read-only database or a damaged row: behave as a first call
     }
-    return { lastCallAt: undefined, alerted: {} };
+    return { lastCallAt: undefined, alerted: {}, seen: {} };
   }
 
   /** False when the database cannot be written (read-only): the caller just does not dedupe. */
@@ -122,7 +132,22 @@ export interface BriefClass {
   selfStudy?: true | undefined;
   note?: string | undefined;
   termPart?: string | undefined;
+  /**
+   * The meeting for this student after personal conditions (group …): attending, unknown (depends
+   * on a group the student has not registered). Another group's day is not listed as a class.
+   */
+  effectiveSchedule: { status: AttendanceStatus; reason?: string | undefined; group?: string };
+  /** What the timetable says when it differs (another day / room), or null = not in the timetable. */
+  rawSchedule?: { date: string; period: number | undefined; room: string | undefined } | null;
   citations: Citation[];
+}
+
+/** A timetable meeting the student does not attend (another group's day), with the reason. */
+export interface BriefNotAttending {
+  course: string;
+  date: string;
+  period: number | undefined;
+  reason: string | undefined;
 }
 
 /** One open piece of work (assignment, exam preparation, task), compact. */
@@ -176,8 +201,18 @@ export interface StudentStateContext {
   currentClass: BriefClass | undefined;
   /** The next class today (or the first one of a later day within a week). */
   nextClass: BriefClass | undefined;
-  today: { date: string; classes: BriefClass[]; noClassesReason?: string | undefined };
-  tomorrow: { date: string; classes: BriefClass[]; noClassesReason?: string | undefined };
+  today: {
+    date: string;
+    classes: BriefClass[];
+    noClassesReason?: string | undefined;
+    notAttending?: BriefNotAttending[] | undefined;
+  };
+  tomorrow: {
+    date: string;
+    classes: BriefClass[];
+    noClassesReason?: string | undefined;
+    notAttending?: BriefNotAttending[] | undefined;
+  };
   /** Open assignments: undated, overdue up to 14 days, due within 45 days. */
   assignments: BriefWork[];
   /** Upcoming exams (preparation tasks) within 60 days. */
@@ -205,11 +240,33 @@ export interface StudentStateContext {
 export type AttentionSeverity = 'info' | 'warning' | 'critical';
 const SEVERITY_RANK: Record<AttentionSeverity, number> = { info: 1, warning: 2, critical: 3 };
 
+export type AttentionKind =
+  | 'deadline'
+  | 'class_soon'
+  | 'cancellation'
+  | 'room_change'
+  | 'announcement'
+  | 'pace'
+  | 'source'
+  | 'group_unknown';
+
+/** Health of a source an attention item relies on (say 「取得できていない」 when it is not ok). */
+export interface AttentionSourceHealth {
+  sourceId: string;
+  label: string;
+  health: CoverageHealth | 'unknown';
+  lastSuccessAt?: string | undefined;
+}
+
 export interface AttentionItem {
-  /** Dedupe key (per client). */
+  /**
+   * Stable id of the thing (a deadline, a class meeting, a notice, a source): the same across calls
+   * and clients even when its due date, room or severity changes.
+   */
+  attentionId: string;
+  /** Dedupe key (per client): changes when what is said changes. */
   key: string;
-  kind:
-    'deadline' | 'class_soon' | 'cancellation' | 'room_change' | 'announcement' | 'pace' | 'source';
+  kind: AttentionKind;
   severity: AttentionSeverity;
   /** Short, ready-to-send Japanese line. */
   line: string;
@@ -217,6 +274,16 @@ export interface AttentionItem {
   at: string | undefined;
   link: NextActionLink | undefined;
   citations: Citation[];
+  /** When this client first saw the item (this call when new). */
+  firstSeenAt: string;
+  /** When what the item says (key, severity, line) last changed for this client. */
+  lastChangedAt: string;
+  /** When the severity rises if nothing is done (6 h before a deadline, the class day …). */
+  nextEscalationAt: string | undefined;
+  /** One concrete thing to do now (「…を提出する」「教室は…」). */
+  recommendedAction: string;
+  /** Health of the sources the item relies on. */
+  sourceHealth: AttentionSourceHealth[];
 }
 
 export interface AttentionContext {
@@ -267,6 +334,10 @@ function classOf(c: ClassItem): BriefClass {
     c.room.status === 'conflict'
       ? [...new Set(c.room.candidates.map((x) => String(x.value)))]
       : undefined;
+  const eff = c.effectiveSchedule;
+  const raw = c.rawSchedule;
+  const rawDiffers =
+    !raw || raw.date !== eff.date || (raw.room !== undefined && raw.room !== eff.room);
   return {
     sessionId: c.sessionId,
     course: c.course.title,
@@ -281,7 +352,24 @@ function classOf(c: ClassItem): BriefClass {
     ...(c.sessionKind === 'self_study' ? { selfStudy: true as const } : {}),
     ...(c.note ? { note: c.note } : {}),
     ...(c.termPart ? { termPart: c.termPart } : {}),
+    effectiveSchedule: {
+      status: eff.status,
+      ...(eff.reason ? { reason: eff.reason } : {}),
+      ...(eff.group ? { group: eff.group.value } : {}),
+    },
+    ...(eff.reason && rawDiffers
+      ? { rawSchedule: raw ? { date: raw.date, period: raw.period, room: raw.room } : null }
+      : {}),
     citations: c.citations.slice(0, 2),
+  };
+}
+
+function notAttendingOf(c: ClassItem): BriefNotAttending {
+  return {
+    course: c.course.title,
+    date: c.date,
+    period: c.period,
+    reason: c.effectiveSchedule.reason,
   };
 }
 
@@ -298,7 +386,8 @@ function classLabel(c: BriefClass, tz: string): string {
     : c.room
       ? c.room
       : '';
-  return `${when} ${c.course}${c.cancelled ? '（休講）' : room ? `（${room}）` : ''}`;
+  const unknown = c.effectiveSchedule.status === 'unknown' ? '［グループにより要確認］' : '';
+  return `${when} ${c.course}${c.cancelled ? '（休講）' : room ? `（${room}）` : ''}${unknown}`;
 }
 
 function workOf(uc: UniContext, host: NextActionHost, t: Task): BriefWork | undefined {
@@ -412,11 +501,17 @@ export function studentState(uc: UniContext): StudentStateContext {
       date: today.date,
       classes: todayClasses,
       ...(today.noClassesReason ? { noClassesReason: today.noClassesReason } : {}),
+      ...(today.notAttending?.length
+        ? { notAttending: today.notAttending.map(notAttendingOf) }
+        : {}),
     },
     tomorrow: {
       date: tomorrow.date,
       classes: tomorrowClasses,
       ...(tomorrow.noClassesReason ? { noClassesReason: tomorrow.noClassesReason } : {}),
+      ...(tomorrow.notAttending?.length
+        ? { notAttending: tomorrow.notAttending.map(notAttendingOf) }
+        : {}),
     },
     assignments,
     exams,
@@ -443,9 +538,17 @@ export function studentState(uc: UniContext): StudentStateContext {
   };
 }
 
-interface Draft extends Omit<AttentionItem, 'severity'> {
-  severity: AttentionSeverity;
-}
+type Draft = Omit<
+  AttentionItem,
+  'attentionId' | 'firstSeenAt' | 'lastChangedAt' | 'sourceHealth'
+> & {
+  /** What the item is about, independent of what it says now (→ attentionId). */
+  subject: string;
+  /** Sources it relies on beyond its citations (a source alert names its own source). */
+  sourceIds?: string[];
+};
+
+const iso = (ms: number): string => new Date(ms).toISOString();
 
 /** Every alert that is true right now (before per-client dedupe). */
 function currentAlerts(uc: UniContext, since: string): Draft[] {
@@ -461,7 +564,9 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
   for (const d of next.dueSoon) {
     if (!d.unsubmitted || d.hoursLeft > 24) continue;
     const critical = d.hoursLeft <= 6;
+    const dueMs = Date.parse(d.dueAt);
     out.push({
+      subject: `task:${d.taskId}`,
       key: `deadline:${d.taskId}:${d.dueAt}`,
       kind: 'deadline',
       severity: critical ? 'critical' : 'warning',
@@ -470,10 +575,18 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
       at: d.dueAt,
       link: d.link,
       citations: d.citations.slice(0, 2),
+      nextEscalationAt: Number.isFinite(dueMs)
+        ? critical
+          ? d.dueAt
+          : iso(dueMs - 6 * HOUR)
+        : undefined,
+      recommendedAction: `「${d.title}」を${d.link ? `${d.link.label ?? '提出先'}で` : ''}提出する（締切${d.dueText}）`,
     });
   }
 
   // Classes today and tomorrow: starting within 60 minutes, and cancellations.
+  const tomorrowStart = iso(parseZonedDate(tomorrowDate, tz).getTime());
+  const groupAsked = new Set<string>();
   for (const c of host.classes(todayDate, tomorrowDate)) {
     if (c.sessionKind !== 'class') continue;
     const b = classOf(c);
@@ -482,6 +595,7 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
     if (c.cancelled) {
       if (Number.isFinite(start) && start < nowMs) continue;
       out.push({
+        subject: `class:${c.sessionId}`,
         key: `cancel:${c.sessionId}`,
         kind: 'cancellation',
         severity: c.date === todayDate ? 'warning' : 'info',
@@ -490,11 +604,32 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
         at: c.startsAt,
         link: undefined,
         citations: b.citations,
+        nextEscalationAt: c.date === todayDate ? undefined : tomorrowStart,
+        recommendedAction: `${day}の${b.course}には行かなくてよい（休講）`,
       });
       continue;
     }
+    // The meeting depends on the group and the student's group is not registered: ask once.
+    if (c.effectiveSchedule.status === 'unknown' && !groupAsked.has(c.course.id)) {
+      if (Number.isFinite(start) && start < nowMs) continue;
+      groupAsked.add(c.course.id);
+      out.push({
+        subject: `group:${c.course.id}`,
+        key: `group:${c.course.id}:${c.date}`,
+        kind: 'group_unknown',
+        severity: c.date === todayDate ? 'warning' : 'info',
+        line: `【要確認】${day}の${b.course}はグループで実施日が違います（${c.effectiveSchedule.reason ?? ''}）`,
+        course: b.course,
+        at: c.startsAt,
+        link: undefined,
+        citations: b.citations,
+        nextEscalationAt: c.date === todayDate ? c.startsAt : tomorrowStart,
+        recommendedAction: `${b.course}で自分がどのグループ（班）か確かめる（分かったら set_course_condition で登録）`,
+      });
+    }
     if (Number.isFinite(start) && start >= nowMs && start - nowMs <= 60 * 60_000) {
       out.push({
+        subject: `class:${c.sessionId}`,
         key: `class:${c.sessionId}`,
         kind: 'class_soon',
         severity: b.roomConflict ? 'warning' : 'info',
@@ -503,6 +638,10 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
         at: c.startsAt,
         link: undefined,
         citations: b.citations,
+        nextEscalationAt: undefined,
+        recommendedAction: b.roomConflict
+          ? `教室を確かめる（${b.roomConflict.join('か')}）`
+          : `${b.room ? `${b.room}へ` : '教室へ'}向かう（${hhmm(c.startsAt, tz)}開始）`,
       });
     }
   }
@@ -519,6 +658,7 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
       const title = ch.course?.title ?? '授業';
       if (s.status === 'cancelled') {
         out.push({
+          subject: `class:${s.id}`,
           key: `cancel:${s.id}`,
           kind: 'cancellation',
           severity: s.date === todayDate ? 'warning' : 'info',
@@ -527,23 +667,31 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
           at: s.startsAt,
           link: undefined,
           citations: ch.citations.slice(0, 2),
+          nextEscalationAt:
+            s.date === todayDate ? undefined : iso(parseZonedDate(s.date, tz).getTime()),
+          recommendedAction: `${when}の${title}には行かなくてよい（休講）`,
         });
       } else if (ch.changedFields.includes('room') && s.room) {
+        const soon = s.date === todayDate || s.date === tomorrowDate;
         out.push({
+          subject: `class:${s.id}`,
           key: `room:${s.id}:${s.room}`,
           kind: 'room_change',
-          severity: s.date === todayDate || s.date === tomorrowDate ? 'warning' : 'info',
+          severity: soon ? 'warning' : 'info',
           line: `【教室変更】${when}${s.period ? ` ${s.period}限` : ''} ${title}は${s.room}です`,
           course: ch.course?.title,
           at: s.startsAt,
           link: undefined,
           citations: ch.citations.slice(0, 2),
+          nextEscalationAt: soon ? undefined : iso(parseZonedDate(s.date, tz).getTime() - DAY),
+          recommendedAction: `${when}の${title}は${s.room}へ行く`,
         });
       }
     } else if (ch.entityKind === 'announcement' && ch.type === 'created') {
       const a = entities.getOfKind('announcement', ch.entityId) as Announcement | undefined;
       if (!a || (a.importance !== 'critical' && a.importance !== 'high')) continue;
       out.push({
+        subject: `notice:${a.id}`,
         key: `notice:${a.id}`,
         kind: 'announcement',
         severity: a.importance === 'critical' ? 'warning' : 'info',
@@ -552,6 +700,8 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
         at: a.publishedAt,
         link: undefined,
         citations: ch.citations.slice(0, 2),
+        nextEscalationAt: undefined,
+        recommendedAction: `お知らせ「${a.title}」を開いて読む`,
       });
     }
   }
@@ -561,6 +711,7 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
   for (const p of host.pacing()) {
     if (p.behindWeeks < 1) continue;
     out.push({
+      subject: `pace:${p.course.id}`,
       key: `pace:${p.course.id}:${week}:${p.behindWeeks}`,
       kind: 'pace',
       severity: p.behindWeeks >= 2 ? 'critical' : 'warning',
@@ -569,6 +720,10 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
       at: undefined,
       link: undefined,
       citations: [],
+      // One more week behind next week.
+      nextEscalationAt:
+        p.behindWeeks >= 2 ? undefined : iso(parseZonedDate(week, tz).getTime() + 7 * DAY),
+      recommendedAction: `${p.course.title}を1週分進める${p.slots.length ? `（自習: ${p.slots[0]}）` : ''}`,
     });
   }
 
@@ -577,6 +732,7 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
     if (g.kind !== 'source_unhealthy') continue;
     if (g.health !== 'auth_required' && g.health !== 'failing') continue;
     out.push({
+      subject: `source:${g.sourceId}`,
       key: `source:${g.sourceId}:${g.health}`,
       kind: 'source',
       severity: 'warning',
@@ -585,6 +741,12 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
       at: g.lastSuccessAt,
       link: undefined,
       citations: [],
+      sourceIds: [g.sourceId],
+      nextEscalationAt: undefined,
+      recommendedAction:
+        g.health === 'auth_required'
+          ? `${g.label}にログインし直す（UniContextの画面から）`
+          : `${g.label}の同期を確かめる（締切が取れていない可能性）`,
     });
   }
 
@@ -595,6 +757,48 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
     if (!prev || SEVERITY_RANK[d.severity] > SEVERITY_RANK[prev.severity]) byKey.set(d.key, d);
   }
   return [...byKey.values()];
+}
+
+/**
+ * Health of the sources behind an item: the sources of its citations (matched to the configured
+ * sources by id or label) and any it names itself. Unmatched citations are 'unknown'.
+ */
+function sourceHealthLookup(
+  uc: UniContext,
+): (citations: readonly Citation[], sourceIds?: readonly string[]) => AttentionSourceHealth[] {
+  let sources: CoverageSource[] = [];
+  try {
+    sources = uc.context.nextActionHost().coverage().sources;
+  } catch {
+    sources = [];
+  }
+  const view = (s: CoverageSource): AttentionSourceHealth => ({
+    sourceId: s.sourceId,
+    label: s.label,
+    health: s.health,
+    ...(s.lastSuccessAt ? { lastSuccessAt: s.lastSuccessAt } : {}),
+  });
+  return (citations, sourceIds = []) => {
+    const out = new Map<string, AttentionSourceHealth>();
+    for (const id of sourceIds) {
+      const s = sources.find((x) => x.sourceId === id);
+      out.set(id, s ? view(s) : { sourceId: id, label: id, health: 'unknown' });
+    }
+    for (const c of citations) {
+      const s = sources.find(
+        (x) =>
+          x.sourceId === c.sourceSystem ||
+          (c.sourceLabel !== undefined && x.label === c.sourceLabel),
+      );
+      const id = s?.sourceId ?? c.sourceSystem;
+      if (out.has(id)) continue;
+      out.set(
+        id,
+        s ? view(s) : { sourceId: id, label: c.sourceLabel ?? c.sourceSystem, health: 'unknown' },
+      );
+    }
+    return [...out.values()];
+  };
 }
 
 function joinText(lines: string[], limit = ATTENTION_TEXT_LIMIT): string {
@@ -611,7 +815,7 @@ function joinText(lines: string[], limit = ATTENTION_TEXT_LIMIT): string {
   return text;
 }
 
-function sortAlerts(items: Draft[]): Draft[] {
+function sortAlerts<T extends Pick<Draft, 'severity' | 'at' | 'key'>>(items: T[]): T[] {
   return items.sort(
     (a, b) =>
       SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] ||
@@ -645,14 +849,34 @@ export function attentionRequired(
   const since = new Date(
     Math.max(floor, mark.lastCallAt ? Date.parse(mark.lastCallAt) : floor),
   ).toISOString();
-  const alerts = sortAlerts(currentAlerts(uc, since));
+  const drafts = sortAlerts(currentAlerts(uc, since));
+  const nowIso = now.toISOString();
+  const health = sourceHealthLookup(uc);
+  const seen: NonNullable<ClientMark['seen']> = {};
+  const alerts: AttentionItem[] = drafts.map((d) => {
+    const attentionId = `attention:${sha256(d.subject).slice(0, 24)}`;
+    const sig = `${d.key}|${d.severity}|${d.line}`;
+    const prev = mark.seen?.[attentionId];
+    const entry = prev
+      ? { first: prev.first, changed: prev.sig === sig ? prev.changed : nowIso, sig }
+      : { first: nowIso, changed: nowIso, sig };
+    seen[attentionId] = entry;
+    const { subject: _subject, sourceIds, ...rest } = d;
+    return {
+      attentionId,
+      ...rest,
+      firstSeenAt: entry.first,
+      lastChangedAt: entry.changed,
+      sourceHealth: health(d.citations, sourceIds),
+    };
+  });
   const fresh = alerts.filter((a) => (mark.alerted[a.key] ?? 0) < SEVERITY_RANK[a.severity]);
   const alerted: Record<string, number> = {};
   for (const a of alerts)
     alerted[a.key] = Math.max(mark.alerted[a.key] ?? 0, SEVERITY_RANK[a.severity]);
   const recorded = options.dryRun
     ? false
-    : store.set(clientId, scope, { lastCallAt: now.toISOString(), alerted }, now.toISOString());
+    : store.set(clientId, scope, { lastCallAt: nowIso, alerted, seen }, nowIso);
   return {
     view: 'attention',
     generatedAt: now.toISOString(),

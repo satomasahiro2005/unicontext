@@ -96,7 +96,14 @@ export const IdentityLinkSchema = z.object({
 export type IdentityLink = z.infer<typeof IdentityLinkSchema>;
 
 /** What an AI client wrote into UniContext through an MCP write tool, and what became of it. */
-export const ADDITION_TOOLS = ['record_lecture', 'add_deadline', 'add_note', 'add_task'] as const;
+export const ADDITION_TOOLS = [
+  'record_lecture',
+  'add_deadline',
+  'add_note',
+  'add_task',
+  'set_course_condition',
+  'add_session_rule',
+] as const;
 export type AdditionTool = (typeof ADDITION_TOOLS)[number];
 export const ADDITION_KINDS = [
   'lecture',
@@ -107,6 +114,10 @@ export const ADDITION_KINDS = [
   'prep',
   'note',
   'task',
+  /** A personal condition in a course (group B). */
+  'condition',
+  /** Dated meetings per group (a group schedule). */
+  'session_rule',
 ] as const;
 export type AdditionKind = (typeof ADDITION_KINDS)[number];
 /** unconfirmed → confirmed (owner, becomes user facts) | rejected (owner) | retracted (the client). */

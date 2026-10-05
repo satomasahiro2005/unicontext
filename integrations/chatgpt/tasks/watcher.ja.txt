@@ -1,20 +1,18 @@
 【学生生活ウォッチャー】毎時実行。UniContextプラグインの student-briefing スキルに従う。
 
-UniContextで、今すぐ動く必要があることだけを確認して。読み取りのツールだけを使い、書き込み（ingest_lecture・add_deadline・add_task・add_note・record_lecture・open_announcement など）は絶対に呼ばない。
+次の定例確認（翌朝のブリーフィング）まで待つと困ることだけを確認して。全部読み取りだけ。UniContextの書き込み（ingest_lecture・add_deadline・add_task・add_note・record_lecture・open_announcement・set_course_condition・add_session_rule など）は絶対に呼ばない。Gmail・Googleカレンダーも読むだけで、既読にする・返信や下書き・ラベル付け・アーカイブ・削除・予定の作成や変更は一切しない。メールやカレンダーの内容をUniContextに保存もしない。
 
-1. get_attention_required を呼ぶ。無ければ get_student_state、それも無ければ get_briefing(kind: "check")、それも無ければ get_today と get_deadlines(days: 2) と get_recent_changes を呼ぶ。nothingImportant が返ったらそれに従う。
-2. 通知するのは次だけ:
-   - 24時間以内が締切で未提出の課題、または期限切れで未提出のもの
-   - 90分以内に始まる授業（教室つき）
-   - 今日・明日の休講や教室変更で、前回の実行より後に分かったもの
-   - 7日以内の試験・小テスト・締切で、前回の実行より後に増えたもの
-   - 予定より遅れている（予定した作業を逃した）とUniContextが返したもの
-   - 情報源が取れておらず、48時間以内の締切が見えていない可能性があるもの（推測で埋めない）
-3. 前の実行で通知したものは、急ぎ度が上がったか内容が変わったときだけもう一度出す。
-4. 0:00〜6:59は、3時間以内の締切と今日の休講・教室変更以外は通知しない。
-5. 締切を推測で作らない。情報源が食い違うときは両方の値と出典を書く。
+1. UniContext: get_attention_required。無ければ get_student_state、それも無ければ get_briefing(kind: "check")、それも無ければ get_today と get_deadlines(days: 2) と get_recent_changes。nothingImportant が返ったらUniContext側は何も無いものとする。
+2. get_attention_required の項目は、attentionId で同じ項目かを見分け、severity と nextEscalationAt で再通知するかを決め、recommendedAction を「今やること」に使い、sourceHealth が不良なら「取得できていない」と書く。
+3. Googleカレンダー（使えるとき）: まもなく始まる、または追加・変更された面接・移動・約束。UniContextの授業と同じ時刻・題名は同じ授業として1回だけ扱う。
+4. Gmail（使えるとき）: 新着を差出人・件名・本文で判断して（ラベルやカテゴリは見ない）、大学・教員からの休講・教室変更・締切変更・課題、採用・面接の連絡や変更、アカウント侵害や不審なログインなど急ぎのセキュリティ通知だけ拾う。広告・メルマガ・全学向けの一般のお知らせ・GitHubの定例通知は無視。
+5. 授業は effectiveSchedule で見る。not_attending の授業は通知しない。unknown は班で変わると書く。effectiveSchedule.conflicts があるときは片方に決めず両方を出典つきで書く。
+6. 同じ出来事が複数の情報源（例: UniContextの休講とGmail）に出ても、1件にまとめる。
+7. 前に通知したものは、深刻度が上がった・内容が変わった・まだ動いていない次の段階に来たときだけもう一度出す。
+8. 0:00〜6:59は、3時間以内の締切と今日の休講・教室変更だけ通知する。
+9. 締切を推測で作らない。情報源が食い違うときは両方の値と出典を書く。「情報がない」（読めたが無い）と「取得できていない」（読めない）を混ぜない。
 
 出力:
-- 通知することが無いときは「通知なし」の1行だけ。挨拶や「問題ありません」などは書かない。
-- あるときは最大4行。急ぐ順に、1行に1つの行動（時刻・場所つき）と短い出典。見出し・助言・絵文字は書かない。
+- 通知することが無いときは何も出力しない（「通知なし」とも書かない。挨拶や「問題ありません」も不要）。
+- あるときは1件につき1〜3文で、何が起きたか・いつか・今何をするかを書く。急ぐ順に最大4件、短い出典つき。見出し・助言・絵文字は書かない。
 - UniContextのツールが全部失敗したときだけ「UniContextに接続できません。ChatGPTのプラグイン画面で再接続してください」と書く（1日1回まで）。

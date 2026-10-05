@@ -7,11 +7,17 @@ import {
   type Assignment,
   type ChangeEvent,
   type ClassSession,
+  type CourseCondition,
   type EntityId,
   type Exam,
   type Fact,
+  GROUP_CONDITION_PREDICATE,
   type JsonValue,
   makeId,
+  normalizeGroupLabel,
+  SESSION_RULE_PREDICATE,
+  type SessionRuleValue,
+  SessionRuleValueSchema,
   type SourceReference,
   stableId,
 } from '@unicontext/canonical-model';
@@ -140,7 +146,17 @@ export const DEDUPE_TOLERANCE_MS = 36 * 3_600_000;
 
 const CONFIDENCE = 0.7;
 /** Predicates an addition may put on someone else's entity. Never grades, submissions, status. */
-const ATTACHABLE_PREDICATES = new Set(['assignment_due', 'exam_at']);
+const ATTACHABLE_PREDICATES = new Set([
+  'assignment_due',
+  'exam_at',
+  // The student's own conditions in a course and a group schedule: never the course's data itself.
+  GROUP_CONDITION_PREDICATE,
+  SESSION_RULE_PREDICATE,
+]);
+/** Predicates whose facts are separate items (confirmed one by one, never a single slot). */
+const MULTI_VALUED = new Set([TODO_PREDICATE, SESSION_RULE_PREDICATE]);
+/** Rows of one add_session_rule call. */
+export const SESSION_RULE_LIMIT = 60;
 const OWN_PREDICATES = new Set(['assignment_due', 'exam_at', TODO_PREDICATE]);
 
 export type DeadlineKind = 'assignment' | 'report' | 'quiz' | 'exam' | 'prep';
@@ -189,6 +205,45 @@ export interface AddNoteInput extends Common {
   title?: string | undefined;
   text: string;
   evidence?: string | undefined;
+}
+
+/**
+ * A personal condition of the student in a course (set_course_condition): the group / 班 they are
+ * in ("B"), with what it rests on (the student's words, a roster, a document).
+ */
+export interface SetCourseConditionInput extends Common {
+  courseOfferingId: string;
+  /** Only `group` for now. */
+  condition?: CourseCondition | undefined;
+  /** 「B」「B班」「Bグループ」 → "B". */
+  value: string;
+  evidence: string;
+}
+
+/** One dated meeting of a group schedule (add_session_rule). */
+export interface SessionRuleInputRow {
+  /** YYYY-MM-DD */
+  date: string;
+  /** The group meeting that day; omitted with noClass = nobody (休講 / 祝日). */
+  group?: string | undefined;
+  noClass?: boolean | undefined;
+  periods?: number[] | undefined;
+  startTime?: string | undefined;
+  endTime?: string | undefined;
+  room?: string | undefined;
+  number?: number | undefined;
+  topic?: string | undefined;
+  note?: string | undefined;
+}
+
+/** A group schedule (which dates / periods / rooms apply to which group) for one course. */
+export interface AddSessionRuleInput extends Common {
+  courseOfferingId: string;
+  sessions: SessionRuleInputRow[];
+  /** The table or sentence it was read from. */
+  evidence: string;
+  /** Title of the document / post the schedule is in (「2026実験Bスケジュール_配布.pdf」). */
+  sourceDocument?: string | undefined;
 }
 
 export interface AddTaskInput extends Common {
@@ -361,6 +416,11 @@ export interface AdditionsServiceDeps {
   courseTitle: (id: string) => string | undefined;
   /** Identity → conflicts → tasks (createUniContext's runPipeline). */
   runPipeline: () => Promise<unknown>;
+  /**
+   * The student's meetings of a date after personal conditions (effective schedule: another
+   * group's day left out, group-schedule meetings added). Default: the timetable.
+   */
+  sessionsOn?: (date: string) => ClassSession[];
 }
 
 interface Applied {
@@ -522,6 +582,22 @@ export class AdditionsService {
 
   async addTask(client: AdditionClient, input: AddTaskInput): Promise<AdditionResult> {
     return this.write(client, this.taskSpec(input));
+  }
+
+  /** set_course_condition: the student's group in a course (unconfirmed until the owner confirms). */
+  async setCourseCondition(
+    client: AdditionClient,
+    input: SetCourseConditionInput,
+  ): Promise<AdditionResult> {
+    return this.write(client, this.conditionSpec(input));
+  }
+
+  /** add_session_rule: dated meetings per group of one course (unconfirmed, cited). */
+  async addSessionRule(
+    client: AdditionClient,
+    input: AddSessionRuleInput,
+  ): Promise<AdditionResult> {
+    return this.write(client, this.sessionRuleSpec(input));
   }
 
   /**
@@ -805,6 +881,116 @@ export class AdditionsService {
     };
   }
 
+  private conditionSpec(input: SetCourseConditionInput): WriteSpec {
+    const course = this.requireCourse(input.courseOfferingId);
+    const condition = input.condition ?? 'group';
+    if (condition !== 'group') throw new ValidationError(`unknown condition ${String(condition)}`);
+    const value = normalizeGroupLabel(input.value);
+    if (!value)
+      throw new ValidationError('value must be a group label such as A, B, B班, Bグループ or 2');
+    const evidence = input.evidence.trim();
+    if (!evidence) throw new ValidationError('evidence is empty: quote what the group rests on');
+    return {
+      tool: 'set_course_condition',
+      kind: 'condition',
+      input,
+      via: viaOf(input),
+      course,
+      title: `${this.courseTitle(course)}: ${value}グループ`,
+      dedupeKey: `condition|${course}|${condition}|${value}`,
+      dueAt: undefined,
+      data: { condition, value, evidence },
+      apply: (a, ref) => {
+        const f = this.putFact(a, ref, course, GROUP_CONDITION_PREDICATE, value, evidence, false);
+        return {
+          entityIds: [course],
+          ownEntityIds: [],
+          factIds: [f.id],
+          stored: { predicate: GROUP_CONDITION_PREDICATE, value },
+        };
+      },
+    };
+  }
+
+  private sessionRuleSpec(input: AddSessionRuleInput): WriteSpec {
+    const course = this.requireCourse(input.courseOfferingId);
+    const evidence = input.evidence.trim();
+    if (!evidence) throw new ValidationError('evidence is empty: quote the schedule it comes from');
+    if (input.sessions.length === 0) throw new ValidationError('sessions is empty');
+    if (input.sessions.length > SESSION_RULE_LIMIT)
+      throw new ValidationError(
+        `at most ${SESSION_RULE_LIMIT} sessions per call; send the rest with another call`,
+      );
+    const doc = input.sourceDocument?.trim().slice(0, 200) || undefined;
+    const rows: SessionRuleValue[] = input.sessions.map((r, i) => {
+      if (!LOCAL_DATE.test(r.date))
+        throw new ValidationError(`sessions[${i}].date must be YYYY-MM-DD`);
+      parseZonedDate(r.date, this.tz);
+      const group = r.group?.trim() ? normalizeGroupLabel(r.group) : undefined;
+      if (r.group?.trim() && !group)
+        throw new ValidationError(`sessions[${i}].group must be a group label such as A or B`);
+      if (!group && !r.noClass)
+        throw new ValidationError(
+          `sessions[${i}] needs a group (or noClass: true for a day nobody meets)`,
+        );
+      const parsed = SessionRuleValueSchema.safeParse({
+        date: r.date,
+        ...(group ? { group } : {}),
+        status: r.noClass ? 'no_class' : 'held',
+        ...(r.periods?.length ? { periods: [...new Set(r.periods)].sort((a, b) => a - b) } : {}),
+        ...(r.startTime ? { startTime: r.startTime } : {}),
+        ...(r.endTime ? { endTime: r.endTime } : {}),
+        ...(r.room?.trim() ? { room: r.room.trim() } : {}),
+        ...(r.number ? { number: r.number } : {}),
+        ...(r.topic?.trim() ? { topic: r.topic.trim() } : {}),
+        ...(r.note?.trim() ? { note: r.note.trim() } : {}),
+        ...(doc ? { documentTitle: doc } : {}),
+      });
+      if (!parsed.success)
+        throw new ValidationError(
+          `sessions[${i}]: ${parsed.error.issues[0]?.message ?? 'invalid'}`,
+        );
+      return parsed.data;
+    });
+    const groups = [...new Set(rows.map((r) => r.group).filter(Boolean))].join('・');
+    const key = sha256(stableStringify(rows as unknown as JsonValue)).slice(0, 24);
+    return {
+      tool: 'add_session_rule',
+      kind: 'session_rule',
+      input,
+      via: viaOf(input),
+      course,
+      title: `${this.courseTitle(course)}: グループ別の実施日${groups ? `（${groups}）` : ''} ${rows.length}件`,
+      dedupeKey: `session_rule|${course}|${key}`,
+      dueAt: undefined,
+      data: {
+        evidence,
+        sessions: rows as unknown as JsonValue,
+        ...(doc ? { sourceDocument: doc } : {}),
+      },
+      apply: (a, ref) => {
+        const ids = rows.map(
+          (r) =>
+            this.putFact(
+              a,
+              ref,
+              course,
+              SESSION_RULE_PREDICATE,
+              r as unknown as JsonValue,
+              evidence.slice(0, ADDITION_LIMITS.evidence),
+              false,
+            ).id,
+        );
+        return {
+          entityIds: [course],
+          ownEntityIds: [],
+          factIds: [...new Set(ids)],
+          stored: { predicate: SESSION_RULE_PREDICATE, rows: rows.length },
+        };
+      },
+    };
+  }
+
   private taskSpec(input: AddTaskInput): WriteSpec {
     const course = this.course(input.courseOfferingId);
     const title = input.title.trim();
@@ -846,8 +1032,7 @@ export class AdditionsService {
 
   /** The one class of the timetable on that date (and period), for a lecture without a course. */
   private inferCourse(date: string, period: number | undefined): string {
-    const sessions = this.deps.tasks.schedule
-      .sessionsBetween(date, addLocalDays(date, 1))
+    const sessions = this.sessionsOnDate(date)
       .filter((s) => s.sessionKind !== 'self_study')
       .filter((s) => period === undefined || s.period === period);
     const courses = [
@@ -870,8 +1055,7 @@ export class AdditionsService {
   private lecturePeriod(course: string, date: string): number | undefined {
     const periods = [
       ...new Set(
-        this.deps.tasks.schedule
-          .sessionsBetween(date, addLocalDays(date, 1), [course])
+        this.sessionsOnDate(date, course)
           .filter((s) => s.sessionKind !== 'self_study' && s.period !== undefined)
           .map((s) => s.period as number),
       ),
@@ -943,7 +1127,7 @@ export class AdditionsService {
     const userFacts: string[] = [];
     for (const f of this.deps.resolver.facts.getMany(a.factIds)) {
       if (f.retractedAt || f.origin !== 'extracted') continue;
-      if (f.predicate === TODO_PREDICATE) userFacts.push(this.confirmTodo(a, f, now).id);
+      if (MULTI_VALUED.has(f.predicate)) userFacts.push(this.confirmTodo(a, f, now).id);
       else
         userFacts.push(
           this.deps.resolver.correct({
@@ -1627,6 +1811,21 @@ export class AdditionsService {
     return canonical;
   }
 
+  /** The student's meetings of a date (effective schedule when wired), optionally of one course. */
+  private sessionsOnDate(date: string, course?: string): ClassSession[] {
+    if (this.deps.sessionsOn) {
+      const all = this.deps.sessionsOn(date);
+      if (!course) return all;
+      const ids = new Set(this.deps.identity.expand(course));
+      return all.filter((s) => ids.has(s.courseOfferingId));
+    }
+    return this.deps.tasks.schedule.sessionsBetween(
+      date,
+      addLocalDays(date, 1),
+      course ? [course] : undefined,
+    );
+  }
+
   private courseTitle(id: string): string {
     return this.deps.courseTitle(id) ?? id;
   }
@@ -1637,9 +1836,9 @@ export class AdditionsService {
     date: string,
     period: number | undefined,
   ): ClassSession | undefined {
-    const sessions = this.deps.tasks.schedule
-      .sessionsBetween(date, addLocalDays(date, 1), [course])
-      .filter((s) => s.sessionKind !== 'self_study');
+    const sessions = this.sessionsOnDate(date, course).filter(
+      (s) => s.sessionKind !== 'self_study',
+    );
     if (period !== undefined) return sessions.find((s) => s.period === period);
     return sessions.length === 1 ? sessions[0] : undefined;
   }
