@@ -355,6 +355,7 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
   app.get('/api/v1/today', async () => getView(uc.context, 'today', {}));
   app.get('/api/v1/tomorrow', async () => getView(uc.context, 'tomorrow', {}));
   app.get('/api/v1/week', async () => getView(uc.context, 'week', {}));
+  app.get('/api/v1/next', async () => uc.context.nextActions());
   app.get('/api/v1/admin', async () => getView(uc.context, 'admin', {}));
 
   app.get<{ Querystring: { term?: string } }>(

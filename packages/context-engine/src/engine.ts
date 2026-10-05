@@ -21,6 +21,7 @@ import {
   type Thread,
 } from '@unicontext/canonical-model';
 import {
+  addLocalDays,
   addZonedDays,
   type Clock,
   DEFAULT_TIMEZONE,
@@ -74,6 +75,13 @@ import {
 } from '@unicontext/task-engine';
 import { additionViaOfAuthority } from './additions.js';
 import { readAnnouncementExtra } from './announcements.js';
+import {
+  computeNextActions,
+  type NextActionHost,
+  type NextActionOptions,
+  type NextActionsContext,
+  summarizeNextActions,
+} from './next-action.js';
 import {
   CHANGE_LIMITS,
   changeRank,
@@ -1165,7 +1173,12 @@ export class ContextEngine {
 
   /** getTodayContext() → {classes, changes, deadlines, tasks, importantAnnouncements, preparation, conflicts, pacing} (§17). */
   today(): TodayContext {
-    return { ...this.day('today', 0), pacing: this.pacing(), coverage: this.deadlineCoverage() };
+    return {
+      ...this.day('today', 0),
+      pacing: this.pacing(),
+      coverage: this.deadlineCoverage(),
+      next: summarizeNextActions(this.nextActions()),
+    };
   }
 
   /** Sources from the health store only (no connector metadata): their capabilities are unknown. */
@@ -1247,6 +1260,72 @@ export class ContextEngine {
         return `${p.month}/${p.day} ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
       },
     });
+  }
+
+  /**
+   * What to do now (next-action.ts): one recommended action and the next few, ranked
+   * deterministically from deadlines, effort, free time, submission state and source coverage.
+   */
+  nextActions(options: NextActionOptions = {}): NextActionsContext {
+    return computeNextActions(this.nextActionHost(), options);
+  }
+
+  /** The read model of the next-action engine (also used by the student-state / attention views). */
+  nextActionHost(): NextActionHost {
+    const enrolled = this.enrolledIdSet();
+    const dropped = new Set(
+      this.entities
+        .list('enrollment')
+        .filter((e) => e.status === 'dropped' && e.role === 'student')
+        .flatMap((e) => this.linkedIdsOf(e.courseOfferingId)),
+    );
+    const schedule = this.tasks.schedule;
+    const offerings = schedule.enrolledOfferings();
+    return {
+      now: this.now(),
+      timezone: this.timezone,
+      openTasks: () => this.tasks.list({ statuses: OPEN_STATUSES }),
+      assignment: (id) => this.entities.getOfKind('assignment', id),
+      submission: (assignmentId) =>
+        this.entities
+          .list('submission', { where: { assignmentId } })
+          .sort((a, b) => (b.submittedAt ?? '').localeCompare(a.submittedAt ?? ''))[0],
+      exam: (id) => this.entities.getOfKind('exam', id),
+      courseRef: (id) => this.courseRef(id),
+      citations: (t) => this.taskCitations(t),
+      recorded: (t) => this.recordedMarker(t),
+      notTaken: (id) => {
+        const linked = this.linkedIdsOf(id);
+        if (linked.some((x) => enrolled.has(x))) return false;
+        return linked.some((x) => dropped.has(x)) || this.isCatalogOnly(id, enrolled);
+      },
+      halfOver: (id, date) => {
+        const linked = new Set(this.linkedIdsOf(id));
+        const e = offerings.find((o) => o.ids.some((x) => linked.has(x)));
+        if (!e?.termParts || !e.term || e.term.end < date) return false;
+        return !schedule.runsOn(e, date) && schedule.currentHalf(date)?.half === '後半';
+      },
+      classes: (from, to) => {
+        const out: ClassItem[] = [];
+        for (let d = from; d <= to; d = addLocalDays(d, 1))
+          out.push(...this.sessionsOn(d).map((s) => this.classItem(s)));
+        return out;
+      },
+      preparation: (item) => this.preparationFor(item),
+      pacing: () => this.pacing(),
+      coverage: () => this.deadlineCoverage(),
+      sourceUrl: (sourceId) => {
+        const url = this.entities
+          .list('assignment')
+          .find((a) => a.url && this.entities.meta(a.id)?.sourceId === sourceId)?.url;
+        try {
+          return url ? new URL(url).origin : undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      sourceLabelOf: (entityId) => this.citationsFor([entityId])[0]?.sourceLabel,
+    };
   }
 
   paceSlotView(slot: PaceSlot): PaceSlotView {
@@ -1395,6 +1474,7 @@ export class ContextEngine {
         { limit: CHANGE_LIMITS.week, mine: true },
       ),
       conflicts: this.currentConflicts(),
+      next: summarizeNextActions(this.nextActions()),
     };
   }
 

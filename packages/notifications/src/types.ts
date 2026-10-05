@@ -9,6 +9,10 @@ export const NOTIFICATION_KINDS = [
   'new_assignment',
   'deadline_changed',
   'deadline_approaching',
+  /** Unsubmitted assignment inside an escalation window (72h / 24h / 6h), with the first step. */
+  'deadline_escalation',
+  /** Morning digest: today's top action and what is due soon. */
+  'next_action_digest',
   'pace_behind',
   'exam_announced',
   'important_announcement',
@@ -90,6 +94,16 @@ export interface NotificationServiceOptions {
   minPriority?: NotificationPriority;
   /** Durations such as '24h', '3h' (core parseDuration). Default ['24h', '3h', '1h']. */
   deadlineLeadTimes?: string[];
+  /**
+   * Local time ('HH:MM') from which the morning digest (today's top action + due-soon list) is
+   * sent, once a day until noon. Omit to turn it off.
+   */
+  morningDigestAt?: string;
+  /**
+   * Escalation windows for unsubmitted assignments ('72h', '24h', '6h'), each firing once per due
+   * date; they replace `deadline_approaching` for those assignments. Omit to turn them off.
+   */
+  escalationLeadTimes?: string[];
   /** Default 5 minutes. */
   deadlineCheckIntervalMs?: number;
   logger?: Logger;

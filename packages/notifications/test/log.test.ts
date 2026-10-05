@@ -42,7 +42,7 @@ function n(i: number, over: Partial<Notification> = {}): Notification {
 
 describe('priorities', () => {
   it('exports the kinds and a most-urgent-first ordering', () => {
-    expect(NOTIFICATION_KINDS).toHaveLength(12);
+    expect(NOTIFICATION_KINDS).toHaveLength(14);
     expect([...PRIORITIES]).toEqual(['critical', 'high', 'normal', 'low']);
     expect(
       ['low', 'critical', 'normal', 'high'].sort((a, b) => comparePriority(a as never, b as never)),

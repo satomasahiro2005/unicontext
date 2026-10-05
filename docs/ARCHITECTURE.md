@@ -652,6 +652,84 @@ candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `Task
   view, usable as MCP tool input schemas), `getView(engine, name, params)` (validated dispatcher),
   `isContextViewName`.
 
+### 3.13 Next action, student state and attention (`next-action.ts`, `attention.ts`)
+
+The student does not prioritise; UniContext decides. Everything here is deterministic (no LLM)
+and read-only over tasks, assignments, submissions, exams, classes and source health.
+
+- `context.nextActions({count?, effortMinutes?, courseOfferingId?})` → `NextActionsContext {top,
+next, urgent, line, dueSoon, coverage: {trusted, gaps}, considered}` (view `next-action`).
+  Each `NextAction` has `what` (a step startable in about 5 minutes, e.g.
+  「小レポート1: 課題文を開いて設問を読む（10分）」), `why` (≤ 3 fragments: 締切まで27時間・未提出・配点10点),
+  `dueAt`/`dueText`, `effort {stepMinutes, remainingMinutes, totalMinutes, basis}`, `steps`,
+  `freeHoursBeforeDue`, `link {url, label}` (assignment URL, else the first citation URL;
+  redacted), `course`, `score`, `reasons`, citations. `urgent` = an unsubmitted assignment is due
+  within 48 h. `today()` / `week()` carry `next: NextActionSummary {line, urgent, top, then,
+coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and the views below.
+- Candidates: open tasks (`pending`/`in_progress`/`unknown`; submitted, completed, cancelled and
+  `expired_past_term` never appear; an assignment whose latest Submission says
+  submitted/late/graded/returned is skipped too), classes starting within 45 min (「…に出る」),
+  preparation for today's later and tomorrow's classes when there are materials or notices (one
+  per course) and coverage gaps. Tasks of courses the student does not take (catalog-only, or only
+  a `dropped` enrollment) are left out; overdue work of a 前半-only course is left out once 後半
+  has started.
+- Effort: `classifyWork` by task kind and title (小テスト 20, 小レポート 60, レポート 180, 実験レポート 360,
+  課題 60, 試験勉強 480, 小テスト対策 30, 今週分 90, 授業準備 15, やること 30 minutes;
+  `DEFAULT_EFFORT_MINUTES`). Overrides: `options.effortMinutes[kind]`, else
+  `assignment.extra.estimatedMinutes`. Each kind has fixed first steps (`stepsFor`); the largest
+  step absorbs an override; `in_progress` skips the first step.
+- Free time (`freeMinutes`): awake hours 08:00–24:00 local from now to the deadline, minus the
+  student's class times (cancelled classes and self-study slots do not count); half of it is
+  assumed usable for one item.
+- Score (higher first; ties: earlier due, then id):
+  - dated and ahead: `(1000 / (1 + h/6) + 300·min(remaining / usable, 2)) × kindFactor`
+    (1; 小テスト対策 0.9; 今週分 and やること 0.8; 授業準備 0.6); `cannot_finish` when remaining ≥ usable;
+  - unknown due (assignment / exam): ranked as if due in 48 h (+20) with the step
+    「課題ページを開いて締切と内容を確認する（5分）」 — never pushed down for being unknown;
+  - overdue assignment: 「遅れて提出できるか確認する（5分）」, 180 decaying over 10 days (40 after 7
+    days); an `extra.lateDueAt|lateDue|cutoffAt|closesAt` still ahead becomes the deadline;
+  - +50 unsubmitted assignment, +min(points, 50), +150 midterm/final, +30 quiz, +250 for 今週分
+    while its self-study slot is on;
+  - attend 700 (≤ 20 min) / 500 (≤ 45 min); prep `1000/(1+h/6) × 0.6`;
+  - coverage gaps from `deadlineCoverage()` (coverage.ts; undated assignments are actions of their
+    own): a deadline source that needs login, fails or never synced 320, a stale one 230 —
+    「EdStemの課題一覧を開いて、締切が漏れていないか確認する（5分）」 with the platform origin as link;
+    a course on a platform whose assignments are not synced 150 — 「EdStemで「…」の課題と締切を確認する（5分）」.
+    `coverage.trusted` is false when such a gap exists.
+- `studentState(uc)` (MCP `get_student_state`): current / next class, today's and tomorrow's
+  classes (room, disagreeing rooms, 休講), open assignments (undated, overdue ≤ 14 d, due ≤ 45 d)
+  with effort, submission and link, exams ≤ 60 d, other tasks (≤ 20), changes, important notices,
+  pacing, the student's notes (`additions.notes`, 10), conflicts, coverage and the ranked next
+  actions as `suggestion` (the AI may re-rank).
+- `attentionRequired(uc, clientId, {dryRun?, scope?})` (MCP `get_attention_required`): alerts that
+  are true now — unsubmitted assignments due ≤ 24 h (warning) / ≤ 6 h (critical), a class within
+  60 min with its room (warning when sources disagree), 休講 today/tomorrow, room changes and
+  high/critical notices in the change log since the client's last call (first call: 24 h back),
+  pace behind, sources with an expired login or failing sync — each with a ready-to-send `line`.
+  Per client (the OAuth client id on the remote surface, `local:<client name>` locally) the table
+  `client_marks` (created on first use, outside the migrations) keeps the last call and the
+  severity already told per alert key; an alert repeats only when its severity rises.
+  `nothingImportant` = nothing new; `text` ≤ about 300 characters.
+- `briefing(uc, clientId, {kind?, dryRun?})` (MCP `get_briefing`): thin wrapper over the two —
+  morning (< 11:00) / evening (≥ 17:00) / check by local time; classes of the day, top action,
+  must-do, unsubmitted ≤ 72 h, news since the client's last briefing (its own `briefing` scope of
+  the marks), coverage gaps, `text`, `nothingImportant`.
+- MCP `get_next_action {count?, course?}`, `get_student_state {}`, `get_attention_required
+{dryRun?}`, `get_briefing {kind?, dryRun?}` (apps/mcp `next-action.ts`) — all `readOnlyHint: true`
+  and on the remote surface, so scheduled ChatGPT tasks never wait for approval. The server
+  instructions (local and remote) tell the AI to call `get_next_action` for 何すればいい／暇／やること,
+  never to make the student choose, to open a conversation with the top action in one line when
+  `urgent`, and to stay silent in scheduled tasks when `nothingImportant`. CLI
+  `unicontext next [--count n] [--course c]` (`--json` = the context); `unicontext today` prints
+  `next.line` first. REST `GET /api/v1/next`; the Web UI Today page shows the top card.
+- Notifications (internal: log + console/desktop sinks): `NotificationService` options
+  `morningDigestAt` ('HH:MM', once a day until noon, kind `next_action_digest`; `morningDigest()`
+  builds the object without sending) and `escalationLeadTimes` (kind `deadline_escalation` for
+  unsubmitted assignments per window, priority normal / high ≤ 24 h / critical ≤ 6 h, with the
+  first step; those assignments get no `deadline_approaching`). Both are off unless passed; the
+  daemon passes config `notifications.morningDigestAt` (default '08:00', '' = off) and
+  `notifications.escalationLeadTimes` (default 72h / 24h / 6h).
+
 ## 3.12 Apps and notifications (lane b)
 
 - `@unicontext/notifications`: `NotificationService({uc, sinks, logFile?, minPriority?, deadlineLeadTimes?})`

@@ -10,6 +10,7 @@ import type {
 } from '@unicontext/canonical-model';
 import type { Citation } from '@unicontext/provenance';
 import type { DeadlineCoverage } from './coverage.js';
+import type { NextActionSummary } from './next-action.js';
 
 export type { Citation } from '@unicontext/provenance';
 
@@ -392,6 +393,8 @@ export interface TodayContext extends DayContext<'today'> {
   pacing: PaceItem[];
   /** Which sources the deadlines come from and what is missing (never read "none" as "no deadline"). */
   coverage: DeadlineCoverage;
+  /** What to do now (next-action engine), compact. */
+  next?: NextActionSummary | undefined;
 }
 export type TomorrowContext = DayContext<'tomorrow'>;
 
@@ -408,6 +411,8 @@ export interface WeekContext extends BundleBase<'week'> {
   changesTotal?: number | undefined;
   changesOmitted?: number | undefined;
   conflicts: ConflictItem[];
+  /** What to do now (next-action engine), compact. */
+  next?: NextActionSummary | undefined;
 }
 
 export interface CourseContext extends BundleBase<'course'> {

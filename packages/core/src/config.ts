@@ -125,6 +125,10 @@ export const ConfigSchema = z.object({
       minPriority: z.enum(['low', 'normal', 'high', 'critical']).default('low'),
       /** How long before a due date a "deadline approaching" notification fires. */
       deadlineLeadTimes: z.array(z.string()).default(['24h', '3h']),
+      /** Local time of the morning digest (today's top action + due soon); '' turns it off. */
+      morningDigestAt: z.string().default('08:00'),
+      /** Escalation windows for unsubmitted assignments; [] turns them off. */
+      escalationLeadTimes: z.array(z.string()).default(['72h', '24h', '6h']),
       sinks: z
         .object({
           console: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
@@ -149,6 +153,8 @@ export const ConfigSchema = z.object({
       enabled: true,
       minPriority: 'low',
       deadlineLeadTimes: ['24h', '3h'],
+      morningDigestAt: '08:00',
+      escalationLeadTimes: ['72h', '24h', '6h'],
       sinks: {
         console: { enabled: true },
         desktop: { enabled: true },

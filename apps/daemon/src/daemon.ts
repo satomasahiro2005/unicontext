@@ -259,6 +259,10 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
         logFile: path.join(rt.paths.root, 'notifications.jsonl'),
         minPriority: rt.config.notifications.minPriority,
         deadlineLeadTimes: rt.config.notifications.deadlineLeadTimes,
+        ...(rt.config.notifications.morningDigestAt
+          ? { morningDigestAt: rt.config.notifications.morningDigestAt }
+          : {}),
+        escalationLeadTimes: rt.config.notifications.escalationLeadTimes,
         logger,
       });
       notifications.start();

@@ -252,6 +252,8 @@ const NOTIFICATION_KIND_LABELS: Record<string, string> = {
   new_assignment: '新しい課題',
   deadline_changed: '締切の変更',
   deadline_approaching: '締切が近い',
+  deadline_escalation: '未提出の締切',
+  next_action_digest: '今日やること',
   pace_behind: 'ペースの遅れ',
   exam_announced: '試験の告知',
   important_announcement: '重要なお知らせ',

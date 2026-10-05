@@ -66,6 +66,21 @@ import {
   type AssignmentFilter,
 } from './assignments.js';
 import { listCourses, resolveCourse } from './courses.js';
+import {
+  attentionShape,
+  BRIEFING_TOOL,
+  briefingShape,
+  ATTENTION_TOOL,
+  NEXT_ACTION_INSTRUCTIONS_EN,
+  NEXT_ACTION_INSTRUCTIONS_JA,
+  NEXT_ACTION_TOOL,
+  nextActionShape,
+  runAttention,
+  runBriefing,
+  runNextAction,
+  runStudentState,
+  STUDENT_STATE_TOOL,
+} from './next-action.js';
 import { trimCourseForAi } from './trim.js';
 import {
   buildEnvelope,
@@ -187,9 +202,11 @@ export const SERVER_INSTRUCTIONS = [
   '書き込みは propose-only です。correct_fact は提案を作るだけで、ユーザー本人が確認するまで何も変更されません。課題の提出・履修登録や削除・成績に関わる操作はできません（提出済み status は提出システムからのみ反映されます）。',
   'ユーザーが会話の中で言った締切・試験の日程・やること・覚えておきたいこと（例「レポートの締切10/20って登録しといて」）や、ユーザーと一緒に決めた勉強のTODOは add_deadline / add_task / add_note で、UniContextに登録できます。登録した内容は他の会話・クライアントからも get_today・get_week・get_deadlines・get_tasks・get_notes で見えます（大学のシステムには送られず、「チャットで登録」「録音から」と表示され、大学側の値は上書きしません）。',
   RECORDING_INSTRUCTION_JA,
+  NEXT_ACTION_INSTRUCTIONS_JA,
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only. Deadlines, to-dos and notes the student mentions in any chat can be registered with add_deadline / add_task / add_note so every other session sees them; they never override a university system.',
   RECORDING_INSTRUCTION_EN,
+  NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
 
 /** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */
@@ -200,8 +217,10 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
   '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、分からない締切はすぐ来るかもしれないものとして扱い、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
   'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
+  NEXT_ACTION_INSTRUCTIONS_JA,
   'Read-only: answers must cite sources and report conflicting sources instead of picking one.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
+  NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
 
 /** Instructions of the remote surface when the grant includes unicontext.write. */
@@ -216,9 +235,11 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   'evidence にはユーザーの言葉をそのまま引用してください。締切は言われたままの表現（10月20日17時・来週の金曜など）でよく、解決した日時が返るのでユーザーに伝えてください。',
   RECORDING_INSTRUCTION_JA,
   '保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
+  NEXT_ACTION_INSTRUCTIONS_JA,
   'Register deadlines, to-dos and notes the student mentions or plans in any chat (add_deadline / add_task / add_note) so every other session and client sees them. Writes go to UniContext only (never to a university system) and cannot change authoritative data, task status or grades.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   RECORDING_INSTRUCTION_EN,
+  NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
 
 // ---------- shared plumbing ----------
@@ -505,6 +526,17 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {},
     () => view('week'),
   );
+
+  // ----- what to do now / decision material for scheduled tasks -----
+
+  tool('get_next_action', NEXT_ACTION_TOOL, nextActionShape, (a) =>
+    runNextAction(uc, { ...a, courseOfferingId: courseId(a.course) }),
+  );
+  tool('get_student_state', STUDENT_STATE_TOOL, {}, () => runStudentState(uc));
+  tool('get_attention_required', ATTENTION_TOOL, attentionShape, (a) =>
+    runAttention(uc, caller().id, a),
+  );
+  tool('get_briefing', BRIEFING_TOOL, briefingShape, (a) => runBriefing(uc, caller().id, a));
 
   tool(
     'get_course',
