@@ -23,6 +23,14 @@ academicCalendar:
   # https://www.shizuoka.ac.jp/education/affairs/schedule/document/r08_schedule.pdf
   # Each weekday has 15 meetings + 1 exam (16) per term. `classes` = 授業開始 … last regular class,
   # `exams` = 定期試験 incl. 予備日. 夜間主コース (Saturday classes, other dates) is not modelled.
+  # Half-terms (前半/後半, `parts`): the 行事予定表 numbers each weekday's class days (月1 … 月14,
+  # 月15 = 定期試験). A half-term course (シラバス 開講時期 「後期後半」, 学務情報システム
+  # 「後期後半/月3・4」) meets on 第1–8回 (前半) or 第9回– (後半). Holidays shift the boundary per
+  # weekday, so `weekdays` holds each weekday's first/last day as printed (key 1 = 月 … 5 = 金):
+  #   前期: 第8回 金6/5 月6/8 火6/9 水6/10 木6/11; 第9回 金6/12 月6/15 火6/16 水6/17 木6/18
+  #   後期: 第8回 木11/19 金11/27 月11/30 火12/1 水12/2; 第9回 木11/26 金12/4 月12/7 火12/8 水12/9
+  # (same PDF, also linked from the 学生教務ポータル 情報学部 page as 2026/09/r08_schedule.pdf, read
+  # 2026-10-05). The university publishes no separate 前半/後半 date table; these are its counters.
   source: 令和8年度 行事予定表（静岡大学, 2026-02-09版）
   terms:
     - id: '2026-1'
@@ -33,6 +41,28 @@ academicCalendar:
       end: '2026-09-30'
       classes: { start: '2026-04-13', end: '2026-07-24' }
       exams: { start: '2026-07-27', end: '2026-08-03' }
+      # 前半 = each weekday's 第1–8回, 後半 = 第9回 – 第15回 (定期試験), as numbered in the 行事予定表.
+      parts:
+        - name: 前期前半
+          half: 前半
+          start: '2026-04-13'
+          end: '2026-06-11'
+          weekdays:
+            '1': { start: '2026-04-13', end: '2026-06-08' }
+            '2': { start: '2026-04-14', end: '2026-06-09' }
+            '3': { start: '2026-04-15', end: '2026-06-10' }
+            '4': { start: '2026-04-16', end: '2026-06-11' }
+            '5': { start: '2026-04-17', end: '2026-06-05' }
+        - name: 前期後半
+          half: 後半
+          start: '2026-06-12'
+          end: '2026-08-03'
+          weekdays:
+            '1': { start: '2026-06-15', end: '2026-07-27' }
+            '2': { start: '2026-06-16', end: '2026-07-28' }
+            '3': { start: '2026-06-17', end: '2026-07-29' }
+            '4': { start: '2026-06-18', end: '2026-07-30' }
+            '5': { start: '2026-06-12', end: '2026-07-31' }
     - id: '2026-2'
       name: '2026年度 後期'
       termCode: 後期
@@ -41,6 +71,27 @@ academicCalendar:
       end: '2027-03-31'
       classes: { start: '2026-10-01', end: '2027-01-28' }
       exams: { start: '2027-01-29', end: '2027-02-05' }
+      parts:
+        - name: 後期前半
+          half: 前半
+          start: '2026-10-01'
+          end: '2026-12-02'
+          weekdays:
+            '1': { start: '2026-10-05', end: '2026-11-30' }
+            '2': { start: '2026-10-06', end: '2026-12-01' }
+            '3': { start: '2026-10-07', end: '2026-12-02' }
+            '4': { start: '2026-10-01', end: '2026-11-19' }
+            '5': { start: '2026-10-02', end: '2026-11-27' }
+        - name: 後期後半
+          half: 後半
+          start: '2026-11-26'
+          end: '2027-02-05'
+          weekdays:
+            '1': { start: '2026-12-07', end: '2027-02-01' }
+            '2': { start: '2026-12-08', end: '2027-02-02' }
+            '3': { start: '2026-12-09', end: '2027-02-03' }
+            '4': { start: '2026-11-26', end: '2027-02-04' }
+            '5': { start: '2026-12-04', end: '2027-01-29' }
   # Weekdays inside the class weeks without regular classes. `campus`/`faculty` entries apply only
   # when config.yaml names that campus/faculty under `student:`; otherwise they are shown as notes.
   noClassDays:

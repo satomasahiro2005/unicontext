@@ -1,17 +1,32 @@
-import { type ClassSession, type CourseOffering, stableId } from '@unicontext/canonical-model';
+import {
+  type ClassSession,
+  type CourseOffering,
+  stableId,
+  TERM_SLOTS_PREDICATE,
+  type TermHalf,
+  TermSlotsValueSchema,
+} from '@unicontext/canonical-model';
 import {
   addLocalDays,
   type Clock,
   classDay,
   classWindow,
+  dayOfWeekOfDate,
   DEFAULT_TIMEZONE,
   expandWeeklySlots,
   findPeriod,
   findTerm,
+  halvesWindow,
+  inHalfSwitchover,
+  isWholeTerm,
+  normalizeHalves,
   type StudentScope,
   systemClock,
   type TermDefinition,
   termForDate,
+  termHalfOf,
+  termPart,
+  termPartLabel,
   type UniversityProfile,
   zonedDateString,
   zonedTime,
@@ -55,6 +70,47 @@ export interface EnrolledOffering {
   ids: string[];
   scheduleType: ScheduleType;
   term: TermDefinition | undefined;
+  /** Halves of the term (前半 / 後半) it meets in; undefined = not stated (whole term). */
+  termParts: OfferingTermParts | undefined;
+}
+
+/**
+ * The halves of its term (前半 / 後半) an offering meets in, from the best source across linked
+ * offerings: the academic system's per-slot text (term_slots fact, 「前期前半/金5・6」) first, then
+ * per-slot or offering-level termParts of a linked offering (the syllabus 開講時期).
+ */
+export interface OfferingTermParts {
+  /** Union over the slots, sorted (前半, 後半). */
+  halves: TermHalf[];
+  /** Per timetable slot when the source states it per slot. */
+  slots: { dayOfWeek: number; period?: number; halves: TermHalf[] }[];
+  /** Fact or offering the value comes from (its citations are the provenance). */
+  evidenceId: string;
+  via: 'term_slots' | 'offering';
+}
+
+/** The half of the term a date is in (for the timetable weekday that date follows). */
+export interface CurrentHalf {
+  term: TermDefinition;
+  half: TermHalf;
+  /** e.g. 後期前半 (the profile's name for the half). */
+  label: string;
+  /** In the switch-over weeks the half depends on the weekday (第8回 / 第9回 differ by weekday). */
+  switchover: boolean;
+}
+
+/** Halves a slot meets in: the slot's own entry, else the offering-level union. */
+export function slotHalves(
+  parts: OfferingTermParts | undefined,
+  slot: { dayOfWeek: number; period?: number | undefined },
+): TermHalf[] | undefined {
+  if (!parts) return undefined;
+  const own = parts.slots.filter(
+    (s) =>
+      s.dayOfWeek === slot.dayOfWeek &&
+      (s.period === undefined || slot.period === undefined || s.period === slot.period),
+  );
+  return own.length ? normalizeHalves(own.flatMap((s) => s.halves)) : parts.halves;
 }
 
 /**
@@ -141,9 +197,103 @@ export class ClassSchedule {
         .filter((o): o is CourseOffering => o !== undefined);
       const term =
         this.termOf(offering) ?? linked.map((o) => this.termOf(o)).find((t) => t !== undefined);
-      out.set(id, { offering, ids, scheduleType: this.scheduleTypeOf(ids), term });
+      out.set(id, {
+        offering,
+        ids,
+        scheduleType: this.scheduleTypeOf(ids),
+        term,
+        termParts: this.termPartsOf(ids),
+      });
     }
     return [...out.values()];
+  }
+
+  /**
+   * Halves of the term (前半 / 後半) across linked offerings: the latest term_slots fact (the
+   * academic system's per-slot text) wins over a linked offering's termParts (syllabus 開講時期).
+   */
+  termPartsOf(ids: readonly string[]): OfferingTermParts | undefined {
+    const facts = this.facts.active({ subjects: ids, predicate: TERM_SLOTS_PREDICATE });
+    for (const f of [...facts].reverse()) {
+      const v = TermSlotsValueSchema.safeParse(f.value);
+      if (!v.success || v.data.slots.length === 0) continue;
+      const bySlot = new Map<string, { dayOfWeek: number; period?: number; halves: TermHalf[] }>();
+      for (const s of v.data.slots) {
+        const key = `${s.dayOfWeek}|${s.period ?? ''}`;
+        const cur = bySlot.get(key) ?? {
+          dayOfWeek: s.dayOfWeek,
+          ...(s.period !== undefined ? { period: s.period } : {}),
+          halves: [],
+        };
+        cur.halves = normalizeHalves([...cur.halves, s.half]);
+        bySlot.set(key, cur);
+      }
+      const slots = [...bySlot.values()];
+      return {
+        halves: normalizeHalves(slots.flatMap((s) => s.halves)),
+        slots,
+        evidenceId: f.id,
+        via: 'term_slots',
+      };
+    }
+    const offs = ids
+      .map((id) => this.entities.getOfKind('courseOffering', id))
+      .filter((o): o is CourseOffering => o !== undefined);
+    for (const o of offs) {
+      const slots = o.schedule
+        .filter((s) => s.termParts?.length)
+        .map((s) => ({
+          dayOfWeek: s.dayOfWeek,
+          ...(s.period !== undefined ? { period: s.period } : {}),
+          halves: normalizeHalves(s.termParts ?? []),
+        }));
+      const halves = normalizeHalves([...(o.termParts ?? []), ...slots.flatMap((s) => s.halves)]);
+      if (halves.length) return { halves, slots, evidenceId: o.id, via: 'offering' };
+    }
+    return undefined;
+  }
+
+  /** Timetable weekday a date follows (振替: 11/25(水) 月曜授業 → 1). */
+  timetableDayOf(date: string): number {
+    const cal = this.calendar;
+    return cal ? classDay(cal, date).dayOfWeek : dayOfWeekOfDate(date);
+  }
+
+  /** The half of its term a date is in, or undefined (no halves defined / outside both). */
+  currentHalf(
+    date: string = zonedDateString(this.clock.now(), this.timezone),
+  ): CurrentHalf | undefined {
+    const cal = this.calendar;
+    const term = cal ? termForDate(cal, date) : undefined;
+    if (!cal || !term) return undefined;
+    const half = termHalfOf(term, date, classDay(cal, date).dayOfWeek);
+    if (!half) return undefined;
+    return {
+      term,
+      half,
+      label: termPart(term, half)?.name ?? termPartLabel(term.termCode, [half]) ?? half,
+      switchover: inHalfSwitchover(term, date),
+    };
+  }
+
+  /** Display label of an enrolled offering's halves (後期後半 / 後期（前半・後半）), if known. */
+  termPartLabelOf(
+    e: Pick<EnrolledOffering, 'offering' | 'term' | 'termParts'>,
+  ): string | undefined {
+    return termPartLabel(e.term?.termCode ?? e.offering.term, e.termParts?.halves);
+  }
+
+  /**
+   * Whether an offering has classes (or work) in the half of its term that contains the date. True
+   * when the halves or the date's half are unknown, and in the switch-over weeks.
+   */
+  runsOn(e: Pick<EnrolledOffering, 'term' | 'termParts'>, date: string): boolean {
+    const halves = e.termParts?.halves;
+    if (!e.term || isWholeTerm(halves)) return true;
+    const cal = this.calendar;
+    const half = termHalfOf(e.term, date, cal ? classDay(cal, date).dayOfWeek : undefined);
+    if (half === undefined || halves?.includes(half)) return true;
+    return inHalfSwitchover(e.term, date);
   }
 
   /** The student's weekly self-study slots for an offering (latest user fact wins). */
@@ -224,6 +374,12 @@ export class ClassSchedule {
           cal,
           { ...common, exams: term.exams },
         )) {
+          // A half-term course (前半 / 後半, per slot when the source says so) only meets in its half.
+          const halves = slotHalves(e.termParts, occ.slot);
+          if (!isWholeTerm(halves)) {
+            const half = termHalfOf(term, occ.date, occ.slot.dayOfWeek);
+            if (half && !halves?.includes(half)) continue;
+          }
           const key = occ.slot.period ? String(occ.slot.period) : (occ.slot.startTime ?? 'day');
           const room = occ.slot.room ?? e.offering.room;
           const note = [...(occ.cancelled ? [occ.cancelled] : []), ...occ.notes].join(' / ');
@@ -247,7 +403,10 @@ export class ClassSchedule {
         // or the current term when the offering's term is unknown.
         const t = term ?? this.currentTerm(fromDate);
         if (!t) continue;
-        const win = { start: classWindow(t).start, end: t.exams?.end ?? classWindow(t).end };
+        const whole = { start: classWindow(t).start, end: t.exams?.end ?? classWindow(t).end };
+        const win = !isWholeTerm(e.termParts?.halves)
+          ? halvesWindow(t, e.termParts?.halves)
+          : whole;
         for (const occ of expandWeeklySlots(
           pace,
           win,
@@ -348,6 +507,9 @@ export class ClassSchedule {
     if (!term) return '学期外';
     const mine = this.enrolledOfferings().filter((e) => e.term?.id === term.id);
     if (mine.length === 0) return `${term.name}に登録した科目はまだありません`;
+    const half = this.currentHalf(date);
+    if (half && !half.switchover && !mine.some((e) => this.runsOn(e, date)))
+      return `${half.label}に授業のある科目は登録されていません`;
     if (term.exams && term.exams.start <= date && date <= term.exams.end)
       return `${term.name}の定期試験期間`;
     const win = classWindow(term);

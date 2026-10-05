@@ -16,6 +16,8 @@ import {
   type Clock,
   DEFAULT_TIMEZONE,
   formatShortJa,
+  halvesWindow,
+  isWholeTerm,
   NotFoundError,
   parseZonedDate,
   PolicyViolationError,
@@ -466,7 +468,10 @@ export class TaskEngine {
       const term = e.term ?? this.schedule.currentTerm();
       if (!term) continue;
       const classes = classWindow(term);
-      const range = { start: classes.start, end: term.exams?.end ?? classes.end };
+      // A half-term course (前半 / 後半) has weekly work only in its half.
+      const range = isWholeTerm(e.termParts?.halves)
+        ? { start: classes.start, end: term.exams?.end ?? classes.end }
+        : halvesWindow(term, e.termParts?.halves);
       const where = { courseOfferingId: e.ids };
       const assignments = this.entities.list('assignment', { where });
       const announcements = this.entities.list('announcement', { where });

@@ -1,4 +1,11 @@
-import { isReexamLabel, type JsonValue, type ScheduleSlot } from '@unicontext/canonical-model';
+import {
+  type EntityId,
+  isReexamLabel,
+  type JsonValue,
+  type ScheduleSlot,
+  TERM_SLOTS_PREDICATE,
+  type TermSlotsValue,
+} from '@unicontext/canonical-model';
 import {
   detectSchemaDrift,
   type DriftFinding,
@@ -10,7 +17,13 @@ import {
   type RawItemView,
   type SourceRefSpec,
 } from '@unicontext/connector-sdk';
-import { classifyNoticeImportance, findPeriod, zonedTime } from '@unicontext/core';
+import {
+  classifyNoticeImportance,
+  findPeriod,
+  parseTermPartLabel,
+  TERM_HALVES,
+  zonedTime,
+} from '@unicontext/core';
 import type { z } from 'zod';
 import { type ContactKind, type LcuDeploymentProfile, lcuUrl } from './deployment.js';
 import { lcuGradeOutcome, parseLcuReportTerm } from './parsers/grades.js';
@@ -43,7 +56,8 @@ import {
   uniquePeriodOnDay,
 } from './text.js';
 
-export const NORMALIZER_VERSION = '5';
+// 6: term_slots facts (前半/後半 per timetable slot) from the subject text of notices/assignments.
+export const NORMALIZER_VERSION = '6';
 export const SELF_PERSON_KEY = 'self';
 
 export interface LiveCampusUNormalizerOptions {
@@ -94,6 +108,42 @@ function nextDay(date: string, tz: string): string | undefined {
 
 function prefixDrift(findings: DriftFinding[], prefix: string): DriftFinding[] {
   return findings.map((f) => ({ ...f, path: f.path === '$' ? prefix : `${prefix}.${f.path}` }));
+}
+
+/**
+ * 「前期前半/金5・6, 前期後半/金5・6」 in a notice/assignment subject → a term_slots fact on the
+ * offering: the half of the term each timetable slot meets in, as the academic system prints it.
+ */
+function termSlotsFact(
+  subject: EntityId | undefined,
+  subjectText: string,
+  ref: SourceRefSpec,
+): FactInput | undefined {
+  const parsed = subject ? parseSubjectText(subjectText) : undefined;
+  if (!subject || !parsed) return undefined;
+  const seen = new Map<string, TermSlotsValue['slots'][number]>();
+  for (const s of parsed.slots) {
+    const half = parseTermPartLabel(s.termPart)?.half;
+    if (!half) continue;
+    const slot = { half, dayOfWeek: s.dayOfWeek, ...(s.period ? { period: s.period } : {}) };
+    seen.set(`${half}|${s.dayOfWeek}|${s.period ?? ''}`, slot);
+  }
+  if (seen.size === 0) return undefined;
+  const slots = [...seen.values()].sort(
+    (a, b) =>
+      a.dayOfWeek - b.dayOfWeek ||
+      (a.period ?? 0) - (b.period ?? 0) ||
+      TERM_HALVES.indexOf(a.half) - TERM_HALVES.indexOf(b.half),
+  );
+  const value: TermSlotsValue = { slots };
+  return {
+    subject,
+    predicate: TERM_SLOTS_PREDICATE,
+    value: value as unknown as JsonValue,
+    origin: 'authoritative',
+    evidence: parsed.slots.map((s) => s.raw).join(', '),
+    ref,
+  };
 }
 
 function splitNames(s: string | undefined): string[] {
@@ -297,6 +347,8 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
             },
             ref,
           });
+          const termSlots = termSlotsFact(coId, subjectText, ref);
+          if (termSlots) facts.push(termSlots);
           const targetDate = slashDateToIso(imp?.targetDate || row?.targetDate);
           if (kind === 'cancellation' || kind === 'makeup' || kind === 'roomChange') {
             if (!targetDate) {
@@ -417,6 +469,8 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
             },
             ref,
           });
+          const termSlots = p.subjectText ? termSlotsFact(coId, p.subjectText, ref) : undefined;
+          if (termSlots) facts.push(termSlots);
           const st = p.submittalStatus;
           const status = /提出済|提出完了/.test(st)
             ? 'submitted'

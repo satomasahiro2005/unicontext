@@ -79,6 +79,8 @@ describe('syllabus normalizer', () => {
       title: 'データベースシステム論',
       instructorNames: ['教員 花子'],
       room: '共通講義棟３１',
+      // 開講時期 「後期前半 ～ 後期後半」: both halves of the term.
+      termParts: ['前半', '後半'],
     });
     // 木3・4 -> weekday 4, LCU period pair index 2 (10:20-11:50 in the Shizuoka profile).
     expect(offering?.entity.schedule).toEqual([

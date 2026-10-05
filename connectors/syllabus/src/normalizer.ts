@@ -7,7 +7,7 @@ import {
   type Normalizer,
   type RawItemView,
 } from '@unicontext/connector-sdk';
-import { findPeriod } from '@unicontext/core';
+import { findPeriod, parseTermSpan } from '@unicontext/core';
 import { parseDayPeriod } from './schedule.js';
 import {
   SYLLABUS_ENTRY,
@@ -90,7 +90,8 @@ export function syllabusSections(p: SyllabusEntryPayload): Section[] {
 export function createSyllabusNormalizer(): Normalizer {
   return {
     id: 'syllabus-normalizer',
-    version: '1',
+    // 2: courseOffering.termParts from the 開講時期 (前半/後半).
+    version: '2',
     sourceTypes: [SYLLABUS_ENTRY],
     normalize(item: RawItemView, ctx: NormalizeContext): NormalizeOutput {
       const drift = detectSchemaDrift(item.payload, SyllabusEntryPayloadSchema);
@@ -112,6 +113,8 @@ export function createSyllabusNormalizer(): Normalizer {
         ...d.coInstructors,
       ];
       const slots = d.slots.length ? d.slots : parseDayPeriod(p.row['曜日・時限'] ?? '');
+      // 開講時期 「後期前半 ～ 後期後半」 / 「後期後半」 → the halves the class meets in.
+      const termParts = parseTermSpan(d.termSpan);
       const ref = { url: p.url };
 
       const courseId = ctx.id('course', p.subjectCode);
@@ -152,6 +155,7 @@ export function createSyllabusNormalizer(): Normalizer {
               ...(def ? { startTime: pad(def.start), endTime: pad(def.end) } : {}),
             };
           }),
+          ...(termParts ? { termParts } : {}),
           ...(d.room ? { room: d.room } : {}),
           url: p.url,
           extra: compact({

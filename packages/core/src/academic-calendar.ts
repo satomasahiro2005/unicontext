@@ -1,4 +1,11 @@
-import type { NoClassDay, SubstituteDay, TermDefinition, UniversityProfile } from './profile.js';
+import type {
+  NoClassDay,
+  SubstituteDay,
+  TermDefinition,
+  TermPartDefinition,
+  UniversityProfile,
+} from './profile.js';
+import type { TermHalf } from './term-parts.js';
 
 /**
  * Academic calendar arithmetic on local dates ('YYYY-MM-DD'): which term a date is in, whether a
@@ -176,4 +183,69 @@ export function expandWeeklySlots<S extends WeeklySlot>(
     }
   }
   return out;
+}
+
+function partRange(part: TermPartDefinition, dayOfWeek: number): { start: string; end: string } {
+  return part.weekdays?.[String(dayOfWeek)] ?? { start: part.start, end: part.end };
+}
+
+/**
+ * Which half (前半 / 後半) of the term a class day belongs to, for the timetable weekday it follows
+ * (after 振替; default: the date's own weekday). The boundary is per weekday (the profile's
+ * `weekdays`), so in the switch-over weeks a Thursday class can be in 後半 while the Monday class
+ * of the same week is still in 前半. A Saturday follows the Friday before it and a Sunday the
+ * Monday after it. Undefined when the term has no halves or the date lies outside both.
+ */
+export function termHalfOf(
+  term: TermDefinition,
+  date: string,
+  dayOfWeek: number = dayOfWeekOfDate(date),
+): TermHalf | undefined {
+  const parts = term.parts;
+  if (!parts || parts.length === 0) return undefined;
+  const key = String(dayOfWeek);
+  const hasOwn = parts.some((p) => p.weekdays?.[key]);
+  if (!hasOwn && parts.some((p) => p.weekdays) && (dayOfWeek === 6 || dayOfWeek === 0)) {
+    const shifted = dayOfWeek === 6 ? 5 : 1;
+    const hit = termHalfOf(term, addLocalDays(date, dayOfWeek === 6 ? -1 : 1), shifted);
+    if (hit) return hit;
+  }
+  const hits = parts.filter((p) => {
+    const r = partRange(p, dayOfWeek);
+    return r.start <= date && date <= r.end;
+  });
+  return hits[0]?.half;
+}
+
+/** The half's definition in a term. */
+export function termPart(term: TermDefinition, half: TermHalf): TermPartDefinition | undefined {
+  return term.parts?.find((p) => p.half === half);
+}
+
+/**
+ * True in the switch-over weeks where both halves have classes depending on the weekday (the date
+ * lies inside both halves' overall spans).
+ */
+export function inHalfSwitchover(term: TermDefinition, date: string): boolean {
+  const parts = term.parts ?? [];
+  return parts.length > 1 && parts.every((p) => p.start <= date && date <= p.end);
+}
+
+/**
+ * Dates a course that meets only in the given halves can have classes or work: the union of those
+ * halves' spans, else the term's class weeks (whole term, or no halves defined).
+ */
+export function halvesWindow(
+  term: TermDefinition,
+  halves: readonly TermHalf[] | undefined,
+): { start: string; end: string } {
+  const parts = (term.parts ?? []).filter((p) => halves?.includes(p.half));
+  if (!halves || halves.length === 0 || parts.length === 0) return classWindow(term);
+  return {
+    start: parts.map((p) => p.start).sort()[0] as string,
+    end: parts
+      .map((p) => p.end)
+      .sort()
+      .at(-1) as string,
+  };
 }

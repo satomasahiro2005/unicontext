@@ -135,7 +135,11 @@ roots?}` plus any connector-specific keys (passthrough). `~` in `roots` is expan
 noClassDays, substituteDays, source?}, sources: Record<role, {product}>, products: Record<product,
 settings>, authorityRules?, privacy: {studentIdPattern?}}`. A term is `{id, name, year, termCode?
 (前期/後期, matches CourseOffering.term), start, end (学年暦), classes?: {start, end} (授業開始 … last
-regular class), exams?: {start, end} (定期試験 incl. 予備日)}`. `noClassDays: [{date, note, campus?,
+regular class), exams?: {start, end} (定期試験 incl. 予備日), parts?: [{half: 前半|後半, name (後期前半),
+start, end, weekdays?: {"1".."5": {start, end}}}]}` — the half-terms (about 8 class weeks each);
+  `weekdays` holds each timetable weekday's own first/last class day of the half, because holidays
+  shift the boundary per weekday (Shizuoka: from the 行事予定表 class counters, 第1–8回 = 前半).
+  `noClassDays: [{date, note, campus?,
 faculty?, fromPeriod?}]` are weekdays without regular classes (holidays, 大学祭, 補講日 …; `campus` /
   `faculty` limit them to students whose config names that campus/faculty, `fromPeriod` makes them
   partial); `substituteDays: [{date, dayOfWeek, note?}]` follow another weekday's timetable (月曜授業).
@@ -146,7 +150,13 @@ faculty?, fromPeriod?}]` are weekdays without regular classes (holidays, 大学�
 date)`, `findTerm(cal, year, label)` (id, termCode, name or a label containing the termCode, e.g.
   前学期), `classWindow(term)`, `classDay(cal, date, {holidays?, student?}) → {dayOfWeek (after
 substitution), noClasses?, cancelledFrom?, note?, scopedNotes}`, `expandWeeklySlots(slots, window,
-{from, to}, cal, {holidays?, student?, exams?})`, `dayOfWeekOfDate`, `addLocalDays`.
+{from, to}, cal, {holidays?, student?, exams?})`, `dayOfWeekOfDate`, `addLocalDays`;
+  half-terms: `termHalfOf(term, date, timetableWeekday?)` (Saturday follows the Friday before,
+  Sunday the Monday after), `termPart(term, half)`, `inHalfSwitchover(term, date)`,
+  `halvesWindow(term, halves)`.
+- Half-term text (`term-parts.ts`): `TERM_HALVES`, `parseTermPartLabel('後期前半')`,
+  `parseTermSpan('後期前半　～　後期後半') → [前半, 後半]` (undefined when the text names no half),
+  `termPartLabel(term, halves)` (後期後半 / 後期（前半・後半）), `isWholeTerm`, `normalizeHalves`.
 - Notice importance (`importance.ts`): `classifyNoticeImportance({title, body?, kind?, courseLinked?,
 flaggedImportant?}) → {importance, rule}`. Rule-based, no AI: class changes (休講・補講・教室変更・
   試験), course-linked notices, reminders and personal procedures (履修登録, 学生証, 授業料納付 …)
@@ -177,7 +187,12 @@ flaggedImportant?}) → {importance, rule}`. Rule-based, no AI: class changes (�
   (defaults optional), `EntityOfKind[K]`, `EntityInputOfKind[K]`, and named types (`CourseOffering`,
   `ClassSession`, …). Course vs CourseOffering are separate (§8): `Course {courseCode?, title,
 department?}`; `CourseOffering {courseId?, termId?, academicYear?, term?, title, courseCode?,
-instructorIds, instructorNames, schedule: ScheduleSlot[], room?, url?}`. Notable fields:
+instructorIds, instructorNames, schedule: ScheduleSlot[], scheduleType?, termParts?: (前半|後半)[],
+room?, url?}` (`termParts` = the halves of the term it meets in as the source states it; absent =
+  not stated, treated as the whole term; `ScheduleSlot.termParts` overrides it per slot). Fact
+  predicate `TERM_SLOTS_PREDICATE` (`term_slots`, value `TermSlotsValue {slots: [{half, dayOfWeek,
+period?}]}`) carries the academic system's per-slot halves (「前期前半/金5・6, 前期後半/金5・6」,
+  emitted by the LiveCampusU normalizer from notice/assignment subjects). Notable fields:
   `ClassSession {courseOfferingId, date, period?, startsAt?, endsAt?, room?, status:
 scheduled|cancelled|makeup|online|changed}`, `Announcement {importance, scope:
 university|faculty|course|other}`, `Message {isQuestion?, lectureId?}`, `Material {materialKind,
@@ -523,9 +538,14 @@ date, period)`. A stored session with a period replaces the generated one; one w
     class sessions; the student's own weekly slots (user fact `pace_slots`, value `{slots:
 [{dayOfWeek, startTime?, endTime?, period?}]}`) add `sessionKind: 'self_study'` sessions.
     `sessionsOn(date)`, `sessionsBetween(from, to, courseIds?)`, `generated(…)`,
-    `enrolledOfferings()`, `scheduleTypeOf(ids)`, `termOf(offering)`, `currentTerm(date?)`,
-    `paceSlots(ids)`, `noClassesReason(date)` (学期外 / nothing registered for the term / exam
-    period / outside the class weeks / the no-class day's note).
+    `enrolledOfferings()` (each with `termParts`), `scheduleTypeOf(ids)`, `termOf(offering)`,
+    `currentTerm(date?)`, `paceSlots(ids)`, `noClassesReason(date)` (学期外 / nothing registered
+    for the term / nothing registered in this half / exam period / outside the class weeks / the
+    no-class day's note). Half-terms: `termPartsOf(ids)` → `{halves, slots, evidenceId, via}`
+    (latest `term_slots` fact first, then a linked offering's `termParts`, e.g. the syllabus
+    開講時期), `currentHalf(date?)` → `{term, half, label, switchover}`, `runsOn(e, date)`,
+    `termPartLabelOf(e)`, `timetableDayOf(date)`. Generated classes, self-study sessions and weekly
+    「今週分」 tasks of a half-term course stay inside its half (per slot and per weekday).
 
 ### 3.11 `@unicontext/context-engine`
 
@@ -537,6 +557,10 @@ scheduler, bus, identity, resolver, tasks, search, context, runPipeline(), close
   events) → tasks). `dataDir` opens `<dataDir>/unicontext.db` with blobs in `<dataDir>/blobs`.
 - `ContextEngine` views (§17, §18) — all return plain JSON-serializable objects with `view`,
   `generatedAt`, `timezone`, and items that each carry `citations: Citation[]`:
+  - `term` of today/tomorrow/week is `TermOfDate {id, name, part? (後期前半), partNote? (week
+containing the per-weekday switch-over)}`; `ClassItem.termPart` is the course's halves
+    (後期後半 / 後期（前半・後半）, per slot when the source says so) and a half-only course's summary
+    says 「［後期後半のみ］」.
   - `today()` / `tomorrow()` → `{date, term?, classes, noClassesReason?, changes, deadlines, tasks,
 importantAnnouncements, preparation, conflicts}` (classes from `TaskEngine.schedule`; changes =
     since start of yesterday; deadlines = overdue ≤7 days and due in the next 15 days; important =
@@ -544,7 +568,8 @@ importantAnnouncements, preparation, conflicts}` (classes from `TaskEngine.sched
   - `week()` → `{from, to, term?, days: [{date, classes, noClassesReason?}], deadlines, exams,
 changes, conflicts}`.
   - `course(courseOfferingId)` (identity-expanded) → instructors, schedule (empty unless
-    `scheduleType` is regular), `scheduleType`, `academicYear`, `term`, `termId`, `enrolled`,
+    `scheduleType` is regular; per-slot `termPart` when slots differ), `scheduleType`,
+    `academicYear`, `term`, `termId`, `termPart?`, `termPartCitations?`, `enrolled`,
     `retake`, resolved room,
     per-source ids, upcoming classes, recent lectures, deadlines, announcements, materials,
     changes, conflicts, `pendingLinks` (suggested identity links to confirm).

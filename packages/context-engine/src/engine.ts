@@ -32,6 +32,7 @@ import {
   startOfZonedDay,
   startOfZonedWeek,
   systemClock,
+  termPartLabel,
   type UniversityProfile,
   zonedDateString,
   zonedParts,
@@ -56,6 +57,8 @@ import type { SearchService } from '@unicontext/search';
 import {
   type EnrolledOffering,
   formatPaceSlot,
+  type OfferingTermParts,
+  slotHalves,
   PACE_PREDICATE,
   type PaceSlot,
   type TaskEngine,
@@ -108,6 +111,7 @@ import type {
   SourceStatus,
   TaskItem,
   TeamsActivityContext,
+  TermOfDate,
   TodayContext,
   TomorrowContext,
   WeekContext,
@@ -341,6 +345,63 @@ export class ContextEngine {
     return `${v.value ?? '不明'}${cite ? `（根拠: ${cite}）` : ''}`;
   }
 
+  /**
+   * 前半 / 後半 of a course group (any linked ids): the halves, the display label (後期後半,
+   * 後期（前半・後半）) and the term code they belong to.
+   */
+  termPartsFor(
+    ids: readonly string[],
+  ):
+    | { parts: OfferingTermParts; label: string | undefined; termCode: string | undefined }
+    | undefined {
+    const schedule = this.tasks.schedule;
+    const parts = schedule.termPartsOf(ids);
+    if (!parts) return undefined;
+    let termCode: string | undefined;
+    for (const id of ids) {
+      const o = this.entities.getOfKind('courseOffering', id);
+      if (!o) continue;
+      termCode = schedule.termOf(o)?.termCode ?? o.term;
+      if (termCode) break;
+    }
+    return { parts, label: termPartLabel(termCode, parts.halves), termCode };
+  }
+
+  /** Where an offering's 前半 / 後半 comes from: the term_slots fact's source or the offering's. */
+  private termPartCitations(parts: OfferingTermParts): Citation[] {
+    if (parts.via === 'offering') return this.citationsFor([parts.evidenceId]);
+    return this.resolver.facts
+      .withSources(this.resolver.facts.getMany([parts.evidenceId]))
+      .flatMap((f) => (f.source ? [toCitation(f.source, this.timezone)] : []));
+  }
+
+  /**
+   * Term (and half) of a local date, for the `term` field of the day/week views. `span` (the week's
+   * weekdays) adds a note when the half changes inside it: the boundary is per weekday.
+   */
+  termOfDate(date: string, span: readonly string[] = []): TermOfDate | undefined {
+    const schedule = this.tasks.schedule;
+    const term = schedule.currentTerm(date);
+    if (!term) return undefined;
+    const half = schedule.currentHalf(date);
+    const labels = new Set(
+      [date, ...span]
+        .map((d) => schedule.currentHalf(d))
+        .filter((h) => h?.term.id === term.id)
+        .map((h) => h?.label),
+    );
+    return {
+      id: term.id,
+      name: term.name,
+      ...(half ? { part: half.label } : {}),
+      ...(labels.size > 1
+        ? {
+            partNote: `この週は${[...labels].sort((a, b) => Number(b?.endsWith('前半')) - Number(a?.endsWith('前半'))).join('と')}の切り替わり: 前半と後半の境目は曜日ごとに違う（第8回までが前半、第9回からが後半）。各授業のtermPartを参照`,
+          }
+        : {}),
+    };
+  }
+
   classItem(session: ClassSession): ClassItem {
     const course = this.courseRef(session.courseOfferingId) ?? {
       id: session.courseOfferingId,
@@ -362,14 +423,29 @@ export class ContextEngine {
     );
     const cancelled = status.status === 'resolved' && status.value === 'cancelled';
     const selfStudy = session.sessionKind === 'self_study';
+    // 前半 / 後半 of this meeting's slot (per slot when the source says so), else of the course.
+    const tp = this.termPartsFor(course.linkedIds);
+    const termPart = tp
+      ? (termPartLabel(
+          tp.termCode,
+          selfStudy
+            ? tp.parts.halves
+            : slotHalves(tp.parts, {
+                dayOfWeek: this.tasks.schedule.timetableDayOf(session.date),
+                period: session.period,
+              }),
+        ) ?? tp.label)
+      : undefined;
     const time = session.period
       ? `${session.period}限`
       : session.startsAt
         ? formatShortJa(new Date(session.startsAt), this.timezone)
         : session.date;
+    // A half-term course says so in the summary (「［後期後半のみ］」).
+    const halfOnly = termPart !== undefined && /[前後]半$/.test(termPart);
     const summary = selfStudy
       ? `${formatDateJa(parseZonedDate(session.date, this.timezone), this.timezone)} ${time} ${course.title}（自習・本人が設定した時間）`
-      : `${formatDateJa(parseZonedDate(session.date, this.timezone), this.timezone)} ${time} ${course.title}${cancelled ? '（休講）' : ''} / 教室: ${this.describeValue(room)}`;
+      : `${formatDateJa(parseZonedDate(session.date, this.timezone), this.timezone)} ${time} ${course.title}${halfOnly ? `［${termPart}のみ］` : ''}${cancelled ? '（休講）' : ''} / 教室: ${this.describeValue(room)}`;
     return {
       sessionId: session.id,
       course,
@@ -382,6 +458,7 @@ export class ContextEngine {
       cancelled,
       note: session.note,
       sessionKind: selfStudy ? 'self_study' : 'class',
+      ...(termPart ? { termPart } : {}),
       summary,
       citations: uniqueCitations([
         ...this.citationsFor([session.id]),
@@ -935,12 +1012,12 @@ export class ContextEngine {
         (a.scope === 'university' && a.importance !== 'low'),
     );
     const preparation = classes.filter((c) => !c.cancelled).map((c) => this.preparationFor(c));
-    const term = this.tasks.schedule.currentTerm(date);
+    const term = this.termOfDate(date);
     const reason = classes.length === 0 ? this.tasks.schedule.noClassesReason(date) : undefined;
     return {
       ...this.base(view),
       date,
-      ...(term ? { term: { id: term.id, name: term.name } } : {}),
+      ...(term ? { term } : {}),
       ...(reason ? { noClassesReason: reason } : {}),
       classes,
       changes,
@@ -983,8 +1060,11 @@ export class ContextEngine {
   /** Offerings without a weekly class time that the student is falling behind in. */
   pacing(): PaceItem[] {
     const out: PaceItem[] = [];
+    const today = zonedDateString(this.now(), this.timezone);
     for (const e of this.currentTermOfferings()) {
       if (e.scheduleType === 'regular') continue;
+      // A half-term course (前半 / 後半) is not behind outside its half.
+      if (!this.tasks.schedule.runsOn(e, today)) continue;
       const course = this.courseRef(e.offering.id);
       if (!course) continue;
       const st = this.tasks.paceStatusOf(e.offering.id);
@@ -1081,11 +1161,14 @@ export class ContextEngine {
       const reason = classes.length === 0 ? this.tasks.schedule.noClassesReason(date) : undefined;
       return { date, classes, ...(reason ? { noClassesReason: reason } : {}) };
     });
-    const term = this.tasks.schedule.currentTerm(zonedDateString(now, this.timezone));
+    const term = this.termOfDate(
+      zonedDateString(now, this.timezone),
+      days.slice(0, 5).map((d) => d.date),
+    );
     const all = this.deadlines(from, to);
     return {
       ...this.base('week'),
-      ...(term ? { term: { id: term.id, name: term.name } } : {}),
+      ...(term ? { term } : {}),
       from: from.toISOString(),
       to: to.toISOString(),
       days,
@@ -1128,22 +1211,40 @@ export class ContextEngine {
       .reverse()
       .map((l) => this.lectureBundle(l));
     const files = this.filesFor(ids);
+    const tp = this.termPartsFor(ids);
+    const slotPart = (s: { dayOfWeek: number; period?: number | undefined }): string | undefined =>
+      tp && tp.parts.slots.length > 0
+        ? termPartLabel(tp.termCode, slotHalves(tp.parts, s))
+        : undefined;
+    const perSlot =
+      new Set(c.offering.schedule.map((s) => slotPart(s) ?? '')).size > 1 ||
+      c.offering.schedule.some((s) => slotPart(s) !== undefined && slotPart(s) !== tp?.label);
     return {
       ...this.base('course'),
       course: { id: c.id, title: c.title, courseCode: c.courseCode, linkedIds: c.linkedIds },
       instructors: [...new Set(offerings.flatMap((o) => o.instructorNames))],
       schedule:
         scheduleType === 'regular'
-          ? c.offering.schedule.map((s) => ({
-              dayOfWeek: s.dayOfWeek,
-              period: s.period,
-              room: s.room,
-            }))
+          ? c.offering.schedule.map((s) => {
+              const part = perSlot ? slotPart(s) : undefined;
+              return {
+                dayOfWeek: s.dayOfWeek,
+                period: s.period,
+                room: s.room,
+                ...(part ? { termPart: part } : {}),
+              };
+            })
           : [],
       scheduleType,
       academicYear: termOffering?.academicYear ?? c.offering.academicYear,
       term: termOffering?.term ?? c.offering.term,
       termId: termOffering ? schedule.termOf(termOffering)?.id : undefined,
+      ...(tp?.label
+        ? {
+            termPart: tp.label,
+            termPartCitations: this.termPartCitations(tp.parts),
+          }
+        : {}),
       enrolled,
       retake: offerings.some((o) => (o.extra as { retake?: unknown } | undefined)?.retake === true),
       paceSlots: schedule.paceSlots(ids).map((x) => this.paceSlotView(x)),
