@@ -1,6 +1,7 @@
 import { ADDITION_STATUSES, type AdditionStatus } from '@unicontext/canonical-model';
 import {
   ADDITION_LIMITS,
+  ADDITION_VIAS,
   type AdditionClient,
   type AdditionResult,
   type AdditionView,
@@ -11,9 +12,11 @@ import { resolveCourse } from './courses.js';
 
 /*
  * MCP write tools (record_lecture, add_deadline, add_note, add_task, list_my_additions,
- * retract_addition): what an AI client heard in a lecture recording goes into UniContext's own
- * database only — never to a university system — as unconfirmed, origin=extracted data that the
- * owner confirms or rejects (`unicontext additions`, Web UI). See AdditionsService.
+ * retract_addition): deadlines, to-dos, notes and lecture summaries that the student states or
+ * plans in any chat (via chat) or that an AI client heard in a lecture recording (via recording)
+ * go into UniContext's own database only — never to a university system — so every other session
+ * and client sees them. They are origin=extracted data that never override a system and that the
+ * owner can confirm or reject (`unicontext additions`, Web UI). See AdditionsService.
  */
 
 const L = ADDITION_LIMITS;
@@ -25,6 +28,17 @@ const course = z
   .describe(
     '科目名（「データベース」など一部でよい）・科目コード・courseOffering:… の id / Course name, code or id',
   );
+const optionalCourse = course
+  .optional()
+  .describe(
+    '科目名（一部でよい）・科目コード・id。科目に関係ない個人の締切・やること・メモなら省略 / Course name, code or id; omit for personal items',
+  );
+const via = z
+  .enum(ADDITION_VIAS)
+  .optional()
+  .describe(
+    'chat=この会話でユーザーが言った・ユーザーと一緒に決めた（既定）／recording=講義の録音で聞いた（recordingTimestamp を付けると既定でこちら） / chat = the student said or planned it in this conversation (default); recording = heard in a lecture recording',
+  );
 const localDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -33,17 +47,19 @@ const recordingTimestamp = z
   .string()
   .max(16)
   .optional()
-  .describe('録音の中の位置 "HH:MM:SS" / Position in the recording');
+  .describe('録音の中の位置 "HH:MM:SS"（録音のときだけ） / Position in the recording');
 const lectureDate = localDate
   .optional()
   .describe(
-    'その話があった講義の日付（相対的な締切の基準。省略時は今日） / Date of the lecture it was said in (anchor for relative dates; default today)',
+    'その話があった日（講義の日・会話の日。相対的な締切の基準。省略時は今日） / Date of the lecture or conversation it was said in (anchor for relative dates; default today)',
   );
 const source = z
   .string()
   .max(L.source)
   .optional()
-  .describe('録音の出どころ。省略時は「ChatGPT Record」 / Recording source name');
+  .describe(
+    '出どころの名前。省略時は録音なら「ChatGPT Record」、会話なら「ChatGPTとの会話」など / Source name (default: ChatGPT Record / ChatGPTとの会話)',
+  );
 const idempotencyKey = z
   .string()
   .min(1)
@@ -56,13 +72,16 @@ const evidence = z
   .string()
   .min(1)
   .max(L.evidence)
-  .describe('根拠になった発言をそのまま引用 / Verbatim quote of what was said');
+  .describe(
+    '根拠をそのまま引用：会話ならユーザーの言葉（「レポートの締切10/20」など）、録音なら先生の発言 / Verbatim quote: the student’s own words in the chat, or what was said in the lecture',
+  );
 
 const AdditionOutput = z.looseObject({
   id: z.string(),
   tool: z.string(),
   kind: z.string(),
   status: z.enum(ADDITION_STATUSES),
+  via: z.enum(ADDITION_VIAS),
   title: z.string(),
 });
 
@@ -109,19 +128,22 @@ export const recordLectureShape = {
     .optional()
     .describe('タイムスタンプつきの文字起こし / Timestamped transcript segments'),
   recordingTimestamp,
+  via: via.describe(
+    'recording=講義の録音から（既定）／chat=ユーザーが会話で講義の内容を話した / recording (default) or chat',
+  ),
   source,
   idempotencyKey,
 };
 
 export const addDeadlineShape = {
-  course,
+  course: optionalCourse,
   title: z.string().min(1).max(L.title).describe('課題・試験などの名前 / Title'),
   dueAt: z
     .string()
     .min(1)
     .max(100)
     .describe(
-      '締切・日時。ISO-8601（2026-10-15T23:59:00+09:00）か、聞いたままの日本語（来週の金曜 / 次回 / 10月15日17時）。相対表現は講義日・時間割・学年暦で解決して返す / Absolute ISO-8601, or the Japanese expression as heard; relative ones are resolved with the lecture date, timetable and academic calendar',
+      '締切・日時。ISO-8601（2026-10-15T23:59:00+09:00）か、言われたままの日本語（10月20日17時 / 来週の金曜 / 次回）。相対表現は会話・講義の日、時間割、学年暦で解決して返す（「次回」は科目が必要） / Absolute ISO-8601, or the Japanese expression as said; relative ones are resolved with the date, timetable and academic calendar (次回 needs a course)',
     ),
   kind: z
     .enum(['assignment', 'report', 'quiz', 'exam', 'prep'])
@@ -129,6 +151,7 @@ export const addDeadlineShape = {
       'assignment=課題, report=レポート, quiz=小テスト, exam=試験, prep=授業までの準備 / What it is',
     ),
   evidence,
+  via,
   recordingTimestamp,
   lectureDate,
   notes: z.string().max(L.notes).optional().describe('補足（範囲・形式など） / Notes'),
@@ -137,10 +160,11 @@ export const addDeadlineShape = {
 };
 
 export const addNoteShape = {
-  course,
+  course: optionalCourse,
   title: z.string().max(L.title).optional().describe('メモの題 / Title'),
   text: z.string().min(1).max(L.noteText).describe('メモの本文 / Note text'),
   evidence: evidence.optional(),
+  via,
   lectureDate,
   recordingTimestamp,
   source,
@@ -148,15 +172,32 @@ export const addNoteShape = {
 };
 
 export const addTaskShape = {
-  course,
+  course: optionalCourse,
   title: z.string().min(1).max(L.title).describe('やること / What to do'),
-  dueAt: addDeadlineShape.dueAt.optional(),
+  dueAt: addDeadlineShape.dueAt.optional().describe('期限（なければ省略） / Due date, if any'),
   notes: z.string().max(L.notes).optional(),
   evidence: evidence.optional(),
+  via,
   lectureDate,
   recordingTimestamp,
   source,
   idempotencyKey,
+};
+
+export const getNotesShape = {
+  course: optionalCourse.describe('科目で絞る / Only this course'),
+  personal: z
+    .boolean()
+    .optional()
+    .describe('true で科目に関係ない個人メモだけ / Only notes without a course'),
+  query: z.string().min(1).max(200).optional().describe('この文字列を含むメモ / Text filter'),
+  id: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('1件を全文で（document:… か addition:… の id） / One note, full text'),
+  limit: z.number().int().positive().max(100).optional().describe('既定20 / Default 20'),
 };
 
 export const listAdditionsShape = {
@@ -193,31 +234,31 @@ export const retractAdditionShape = {
 };
 
 const COMMON_DESC =
-  'UniContext自身のデータベースにだけ保存し、大学のシステムには何も送らない。保存した内容は「録音から」の未確認情報として扱われ、学務情報システムなどの値を上書きせず、食い違うときは食い違いとして表示される。本人が確認（unicontext additions confirm / Web UI）するまで確定しない。課題の提出状態・成績・履修は変更できない。';
+  '保存先はUniContextだけで、大学のシステムには何も送らない。保存した内容はChatGPTの他の会話やClaudeなど、UniContextにつながる全てのセッションから get_today・get_week・get_deadlines・get_tasks・get_course・get_notes で見える。会話でユーザーが言った・一緒に決めたものは「チャットで登録」、講義の録音で聞いたものは「録音から」と表示される。学務情報システムやLMSの値は上書きせず、食い違うときは食い違いとして表示される（本人が確認すると本人の情報として優先される）。課題の提出状態・成績・履修は変更できない。';
 const COMMON_EN =
-  'Stored only in UniContext’s local database; nothing is sent to any university system. Stored as unconfirmed extracted data (shown as 「録音から」) that never overrides an authoritative source — disagreements become conflicts — until the owner confirms it. Cannot change submission/completion status, grades or enrolment.';
+  'Stored only in UniContext (nothing is sent to any university system) and visible to every other session and client connected to UniContext — other ChatGPT chats, Claude — through get_today, get_week, get_deadlines, get_tasks, get_course and get_notes. Labelled 「チャットで登録」 (said or planned in a chat) or 「録音から」 (heard in a lecture recording). Never overrides LiveCampusU/LMS data — disagreements become conflicts — unless the owner confirms it. Cannot change submission/completion status, grades or enrolment.';
 
 export const WRITE_TOOLS = {
   record_lecture: {
     title: '講義の記録を保存',
-    description: `録音で聞いた講義の要約・要点（任意でタイムスタンプつきの文字起こし）を、その日の授業に結びつけて保存する。同じ科目・日付・時限なら更新。${COMMON_DESC} / Save a lecture summary, key points and optional timestamped transcript for that day's class. ${COMMON_EN}`,
+    description: `講義の要約・要点（任意でタイムスタンプつきの文字起こし）を、その日の授業に結びつけて保存する。録音で聞いた講義のほか、ユーザーが会話で講義の内容を話したとき（via=chat）にも使う。同じ科目・日付・時限なら更新。${COMMON_DESC} / Save a lecture summary, key points and optional timestamped transcript for that day's class (from a recording, or told in the chat with via=chat). ${COMMON_EN}`,
   },
   add_deadline: {
-    title: '締切・試験・準備を追加',
-    description: `録音で聞いた課題の締切・レポート・小テスト・試験・授業までの準備を追加する。dueAt は ISO-8601 か聞いたままの日本語（来週の金曜・次回など）で、解決した日時を返すので必ずユーザーに伝える。evidence に発言の引用、recordingTimestamp に録音の位置を入れる。同じ科目・題名・近い締切なら二重にせず更新する。${COMMON_DESC} / Add a deadline, exam or preparation item heard in a lecture; returns the resolved date. ${COMMON_EN}`,
+    title: '締切・試験を登録',
+    description: `どの会話でも、ユーザーが課題・レポートの締切、小テスト・試験の日程、授業までの準備を言ったら（例「レポートの締切10/20って登録しといて」「来週の金曜に小テスト」）、これで登録する。ユーザーが頼んでいなくても、UniContextにまだない締切が話に出たら登録を提案する。講義の録音で聞いた締切にも使う（via=recording、recordingTimestamp に録音の位置）。dueAt は ISO-8601 か言われたままの日本語（10月20日17時・来週の金曜・次回）で、解決した日時が返るので必ずユーザーに伝える。course は分かれば科目名で、科目に関係ない締切（奨学金・就活など）なら省略。evidence にユーザーの言葉や発言をそのまま引用する。同じ科目・題名・近い締切なら二重にせず更新する。${COMMON_DESC} / Register a deadline, exam or preparation item the student mentions in ANY chat (or heard in a lecture recording) so every other session sees it; returns the resolved date — tell it to the user. ${COMMON_EN}`,
   },
   add_note: {
-    title: '講義メモを追加',
-    description: `講義で聞いたその他のメモ（連絡事項・ヒントなど）を科目に追加する。検索で見つかるようになる。${COMMON_DESC} / Add a note heard in a lecture. ${COMMON_EN}`,
+    title: 'メモを保存',
+    description: `メモを保存する。科目のメモ（講義のポイント・先生からの連絡・ヒント）でも、科目に関係ない個人のメモ（覚えておきたいこと・勉強のメモ・決めたこと）でもよい（そのときは course を省略）。ユーザーが「メモしといて」「覚えておいて」と言ったときに使う。保存したメモは get_notes と search で、他の会話・クライアントからも読める。${COMMON_DESC} / Save a note — about a course, or a personal one without a course — that the student asks to keep; readable from every session via get_notes and search. ${COMMON_EN}`,
   },
   add_task: {
-    title: 'やることを追加',
-    description: `講義で言われたやること（期限なしも可）をタスクとして追加する。${COMMON_DESC} / Add a to-do heard in a lecture. ${COMMON_EN}`,
+    title: 'やることを登録',
+    description: `やること（期限なしも可）を登録する。ユーザーが「〜をやらなきゃ」と言ったこと、会話でユーザーと一緒に立てた勉強計画のTODO、講義で言われた準備に使う。科目に関係ないものは course を省略。期限があれば dueAt に入れる（解決した日時が返るのでユーザーに伝える）。${COMMON_DESC} / Register a to-do the student mentions or plans with you in ANY chat (or heard in a lecture), so every other session sees it in get_tasks / get_today. ${COMMON_EN}`,
   },
   list_my_additions: {
     title: '自分が追加した内容',
     description:
-      'この接続（クライアント）が追加した内容と、その状態（unconfirmed=未確認 / confirmed=本人が確認済み / rejected=本人が却下 / retracted=取り消し済み）を新しい順に返す。他のクライアントの追加は見えない。 / This client’s own additions and their status.',
+      'この接続（クライアント）が追加した内容と、その状態（unconfirmed=未確認 / confirmed=本人が確認済み / rejected=本人が却下 / retracted=取り消し済み）を新しい順に返す。取り消し（retract_addition）の対象を探すときに使う。他の会話・クライアントが登録したものも含めて見るなら get_deadlines・get_tasks・get_notes。 / This client’s own additions and their status (to find one to retract). Everything from every client: get_deadlines, get_tasks, get_notes.',
   },
   open_announcement: {
     title: 'お知らせの本文を取得（LiveCampusUで既読になる）',
@@ -244,7 +285,7 @@ export function compactAddition(v: AdditionView): Record<string, unknown> {
 }
 
 const STATUS_HINT: Record<AdditionResult['status'], string> = {
-  created: '保存しました。',
+  created: '保存しました。UniContextにつながる他の会話・クライアントからも見えます。',
   updated: '同じ項目が既にあったので更新しました（二重には登録していません）。',
   duplicate: '同じ項目が既に登録されているため、何も変更していません。',
   replayed: 'この呼び出しは既に処理済みです（同じ idempotencyKey）。',
@@ -260,7 +301,7 @@ export function writeHint(r: AdditionResult): string {
     parts.push(`日時は${a.dueText}として登録されています。この日時をユーザーに伝えてください。`);
   if (a.attachedTo)
     parts.push(
-      `大学側の既存の項目「${a.attachedTo.title}」に、録音からの日時として添えました（大学側の値は変わりません）。`,
+      `大学側の既存の項目「${a.attachedTo.title}」に、${a.label}の日時として添えました（大学側の値は変わりません）。`,
     );
   if (a.conflicts.length > 0)
     parts.push(
@@ -268,7 +309,9 @@ export function writeHint(r: AdditionResult): string {
     );
   if (r.status === 'created' || r.status === 'updated')
     parts.push(
-      '本人が確認するまでは「録音から」の未確認情報です。大学のシステムには何も送っていません。',
+      a.via === 'chat'
+        ? '「チャットで登録」として表示されます。大学のシステムには何も送っていません。'
+        : '本人が確認するまでは「録音から」の未確認情報です。大学のシステムには何も送っていません。',
     );
   return parts.join('');
 }
@@ -281,9 +324,18 @@ export function writeOutput(r: AdditionResult): Record<string, unknown> {
   };
 }
 
-export function courseIdForWrite(uc: UniContext, input: string): string {
+export function courseIdForWrite(uc: UniContext, input: string): string;
+export function courseIdForWrite(uc: UniContext, input: string | undefined): string | undefined;
+export function courseIdForWrite(uc: UniContext, input: string | undefined): string | undefined {
+  if (input === undefined || input.trim() === '') return undefined;
   return resolveCourse(uc, input, { preferEnrolled: true }).ref.id;
 }
+
+export const GET_NOTES_TOOL = {
+  title: 'メモ一覧',
+  description:
+    'UniContextに保存されたメモ（add_note）と講義の要約（record_lecture）を、どの会話・クライアントが保存したものでも新しい順に返す。「前にメモしたこと」「〜について何かメモしてた？」に使う。course で科目を絞る、personal=true で科目に関係ない個人メモだけ、query で文字列を含むもの、id で1件を全文で。text は一覧では500字まで（truncated=true なら id で全文）。 / Notes and lecture summaries saved by any chat or client, newest first; filter by course, personal, query, or fetch one by id in full.',
+} as const;
 
 export function toStatuses(
   s: AdditionStatus | AdditionStatus[] | undefined,

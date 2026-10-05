@@ -581,9 +581,14 @@ overdue, hoursLeft, evidence, summary}`; `ConflictItem {subject, subjectLabel, p
 candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `TaskItem`,
     `PreparationItem`, `SegmentItem`, `QuestionItem`, `FactItem`. `summary` strings embed the
     first citation (`…（根拠: 学務情報システム 10/1 09:42取得）`, §75).
-- AI additions (`additions.ts`, `uc.additions: AdditionsService`): what an MCP client heard in a
-  lecture recording, stored only in UniContext under source id `mcp-additions` (§11, §19–22,
-  §47–49, §74). `recordLecture` (Lecture linked to the day's ClassSession, a 講義メモ Document,
+- AI additions (`additions.ts`, `uc.additions: AdditionsService`): deadlines, to-dos, notes and
+  lectures that the student states or plans with an MCP client in any chat (`via: chat`, authority
+  `student-statement`, label 「チャットで登録」) or that the client heard in a lecture recording
+  (`via: recording`, authority `transcript`, label 「録音から」), stored only in UniContext under
+  source id `mcp-additions` and read by every client through the views (§11, §19–22, §47–49, §74).
+  The course is optional for deadlines, to-dos and notes (personal to-dos are `todo` facts on
+  `PERSONAL_TODO_SUBJECT`); `notes()` lists notes and lecture summaries of every client (MCP
+  `get_notes`). `recordLecture` (Lecture linked to the day's ClassSession, a 講義メモ Document,
   LectureTranscript + LectureSegments with per-segment timestamped references), `addDeadline`
   (`kind` assignment/report → Assignment, quiz/exam → Exam, prep → `todo` fact; a title match on
   the course's existing assignment/exam attaches an extracted `assignment_due`/`exam_at` fact to it
@@ -591,14 +596,27 @@ candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `Task
   `listFor`/`retract` (the client's own, unconfirmed), and for the owner `list`/`get`/`confirm`
   (claims become origin=user facts via `resolver.correct`, todos are re-put as user facts) /
   `reject` (facts retracted, own entities soft-deleted). Every fact is origin `extracted`, producer
-  `ai`, with one SourceReference per addition (`sourceSystem` "ChatGPT Record" or the client name,
-  `sourceItemId` `<client id>#<addition id>`, `location.timestamp`) and the quoted evidence.
+  `ai`, with one SourceReference per addition (`sourceSystem` "ChatGPT Record" / "ChatGPTとの会話"
+  or the client name, `sourceItemId` `<client id>#<addition id>`, `location.timestamp`) and the
+  quoted evidence.
   `resolveDue(course, expr, lectureDate?)` resolves ISO or Japanese (来週の金曜, 次回) against the
   class start of the lecture date and `TaskEngine.nextClassAt` (timetable + academic calendar).
   Dedupe by course + kind group + normalized title within 36 h; idempotency key per client; write
   budget per client. Writes run `runPipeline()`. Views: `DeadlineItem.recorded` / `TaskItem.recorded`
-  (「録音から」, evidence, timestamp) when a task rests only on unconfirmed additions;
-  `LectureBundle.notes` (summaries and notes).
+  (「録音から」 / 「チャットで登録」, `via`, evidence, timestamp) when a task rests only on
+  unconfirmed additions; `LectureBundle.notes` (summaries and notes).
+- Change digest (`change-digest.ts`): views never pass the raw change log through. Index entries
+  (document chunks, transcript segments), catalogue courses and bookkeeping updates (a notice body
+  fetched later, `extra`) are hidden; the rest is folded to one item per entity, ranked (conflicts,
+  class / assignment / exam changes and important notices first) and capped (`CHANGE_LIMITS`: day
+  30, week 25, course 20, `changesSince` 50 or `limit` ≤ 200) with `changesTotal` /
+  `changesOmitted`; `ChangeItem.before/after` keep only short scalar values of the changed fields
+  and `summary` is cut to 200 characters. Today/tomorrow/week keep changes and conflicts of the
+  current term's courses (grades: any enrolled course) and important or new university-wide
+  notices; conflicts whose dates are all past are left to `get_conflicts`. The MCP layer then
+  compacts every tool result (`compactEnvelope`: citations `{sourceReferenceId, label, url}` with
+  the url once, settled values without candidates, ≤ 20 top-level citations) and trims `get_course`
+  for AI clients (`trimCourseForAi`).
 - Announcement bodies on request (`announcement-open.ts`): `openAnnouncements(uc, ids)` sends the
   ids' raw items to their adapter's `openAnnouncements()` (SDK extension `OpenAnnouncementsAdapter`,
   implemented by LiveCampusU and serialized there with `sync()`), ingests the returned items and

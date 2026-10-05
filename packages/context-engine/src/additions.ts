@@ -38,7 +38,7 @@ import {
   type UniContextDatabase,
 } from '@unicontext/database';
 import type { IdentityResolver } from '@unicontext/identity';
-import { type ConflictResolver, factId } from '@unicontext/provenance';
+import { type Citation, type ConflictResolver, factId, toCitation } from '@unicontext/provenance';
 import {
   resolveDueExpression,
   type ResolvedDue,
@@ -48,13 +48,42 @@ import {
 } from '@unicontext/task-engine';
 
 /*
- * Writes from AI clients (§11, §19–22, §47–49, §74): what ChatGPT heard in a lecture recording —
- * lectures, deadlines, notes, things to do — stored in UniContext's own database only. Nothing is
- * ever sent to a university system. Every claim is origin=extracted with a SourceReference to the
- * recording (client, time, recording timestamp, evidence); it never overrides a system that states
- * the same thing, it opens a Conflict instead, and only the owner can confirm it (→ user fact) or
- * reject it. Task status, grades, submissions and authoritative entities are never written.
+ * Writes from AI clients (§11, §19–22, §47–49, §74): lectures, deadlines, notes and things to do
+ * that ChatGPT heard in a lecture recording (via `recording`) or that the student told it — or
+ * planned with it — in any chat (via `chat`), stored in UniContext's own database only, so every
+ * other session and client sees them. Nothing is ever sent to a university system. Every claim is
+ * origin=extracted with a SourceReference to the recording or the chat (client, time, recording
+ * timestamp, evidence); it never overrides a system that states the same thing, it opens a
+ * Conflict instead, and only the owner can confirm it (→ user fact) or reject it. Task status,
+ * grades, submissions and authoritative entities are never written.
  */
+
+/**
+ * Where an addition came from: heard in a lecture recording (ChatGPT Record …) or told / created
+ * in a chat with the student. Both are shown and shared at once; confirming is only needed to let
+ * an item win over a system that says something else.
+ */
+export const ADDITION_VIAS = ['recording', 'chat'] as const;
+export type AdditionVia = (typeof ADDITION_VIAS)[number];
+
+/** How an unconfirmed addition is labelled on Today, in deadlines and in notifications. */
+export const ADDITION_VIA_LABELS: Record<AdditionVia, string> = {
+  recording: '録音から',
+  chat: 'チャットで登録',
+};
+
+/** SourceReference authority per channel (see default-rules.yaml). */
+export const ADDITION_VIA_AUTHORITY: Record<AdditionVia, string> = {
+  recording: 'transcript',
+  chat: 'student-statement',
+};
+
+export function additionViaOfAuthority(authority: string | undefined): AdditionVia {
+  return authority === ADDITION_VIA_AUTHORITY.chat ? 'chat' : 'recording';
+}
+
+/** Subject of to-dos that belong to no course (the student's own list). */
+export const PERSONAL_TODO_SUBJECT = stableId('person', ADDITIONS_SOURCE_ID, 'self');
 
 /** Who is writing: the OAuth client (remote) or `local:<name>` (stdio / local HTTP). */
 export interface AdditionClient {
@@ -91,7 +120,6 @@ export const ADDITION_RATE_LIMITS = {
 /** Two deadlines with the same course + title this close together are the same item. */
 export const DEDUPE_TOLERANCE_MS = 36 * 3_600_000;
 
-const AUTHORITY = 'transcript';
 const CONFIDENCE = 0.7;
 /** Predicates an addition may put on someone else's entity. Never grades, submissions, status. */
 const ATTACHABLE_PREDICATES = new Set(['assignment_due', 'exam_at']);
@@ -100,17 +128,27 @@ const OWN_PREDICATES = new Set(['assignment_due', 'exam_at', TODO_PREDICATE]);
 export type DeadlineKind = 'assignment' | 'report' | 'quiz' | 'exam' | 'prep';
 
 interface Common {
-  courseOfferingId: string;
-  /** Lecture date (YYYY-MM-DD) the item was heard in; default: today. */
+  /** The course it belongs to; optional except for record_lecture (personal deadlines/to-dos/notes). */
+  courseOfferingId?: string | undefined;
+  /**
+   * recording = heard in a lecture recording, chat = the student said it (or planned it) in a chat.
+   * Default: recording for record_lecture or when recordingTimestamp is given, else chat.
+   */
+  via?: AdditionVia | undefined;
+  /** Date (YYYY-MM-DD) of the lecture it was heard in / of the conversation; default: today. */
   lectureDate?: string | undefined;
   /** Position in the recording, "HH:MM:SS" (or "MM:SS"). */
   recordingTimestamp?: string | undefined;
-  /** Name of the recording source; default "ChatGPT Record" for ChatGPT, else the client name. */
+  /**
+   * Name of the source; default "ChatGPT Record" (recording, ChatGPT) or "ChatGPTとの会話" (chat),
+   * else from the client name.
+   */
   source?: string | undefined;
   idempotencyKey?: string | undefined;
 }
 
-export interface RecordLectureInput extends Omit<Common, 'lectureDate'> {
+export interface RecordLectureInput extends Omit<Common, 'lectureDate' | 'courseOfferingId'> {
+  courseOfferingId: string;
   date: string;
   period?: number | undefined;
   title?: string | undefined;
@@ -150,6 +188,10 @@ export interface AdditionView {
   tool: AdditionTool;
   kind: AdditionKind;
   status: AdditionStatus;
+  /** recording = heard in a lecture recording, chat = told / created in a chat. */
+  via: AdditionVia;
+  /** 「録音から」 / 「チャットで登録」 */
+  label: string;
   title: string;
   course: { id: string; title: string } | undefined;
   dueAt: string | undefined;
@@ -178,6 +220,32 @@ export interface AdditionResult {
   /** Ids touched by this call (audit log; never payload text). */
   audit: { additionId: string; entityIds: string[]; factIds: string[] };
 }
+
+/** A note (add_note) or lecture summary (record_lecture) as every client sees it (get_notes). */
+export interface NoteItem {
+  /** The document holding the note. */
+  id: string;
+  additionId: string;
+  kind: 'note' | 'lecture_summary';
+  title: string;
+  /** Cut to {@link NOTE_PREVIEW_CHARS} in lists; complete when one note is asked for by id. */
+  text: string;
+  truncated: boolean;
+  course: { id: string; title: string } | undefined;
+  via: AdditionVia;
+  /** 「録音から」 / 「チャットで登録」 */
+  label: string;
+  /** unconfirmed | confirmed (rejected / retracted notes are gone). */
+  status: AdditionStatus;
+  source: string;
+  client: string | undefined;
+  lectureDate: string | undefined;
+  createdAt: string;
+  updatedAt: string;
+  citations: Citation[];
+}
+
+export const NOTE_PREVIEW_CHARS = 500;
 
 export interface AdditionsServiceDeps {
   db: UniContextDatabase;
@@ -269,6 +337,20 @@ function examKindOf(kind: DeadlineKind, title: string): Exam['examKind'] {
 
 const LOCAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+function viaOf(input: Common): AdditionVia {
+  if (input.via) return input.via;
+  return input.recordingTimestamp?.trim() ? 'recording' : 'chat';
+}
+
+/** Additions stored before the chat channel existed were all heard in a recording. */
+export function viaOfAddition(a: Pick<Addition, 'data'>): AdditionVia {
+  return a.data.via === 'chat' ? 'chat' : 'recording';
+}
+
+function labelOf(a: Pick<Addition, 'data'>): string {
+  return ADDITION_VIA_LABELS[viaOfAddition(a)];
+}
+
 export class AdditionsService {
   readonly store: AdditionStore;
   private readonly entities: EntityStore;
@@ -296,7 +378,7 @@ export class AdditionsService {
   async recordLecture(client: AdditionClient, input: RecordLectureInput): Promise<AdditionResult> {
     if (!LOCAL_DATE.test(input.date)) throw new ValidationError('date must be YYYY-MM-DD');
     parseZonedDate(input.date, this.tz);
-    const course = this.course(input.courseOfferingId);
+    const course = this.requireCourse(input.courseOfferingId);
     const session = this.sessionOf(course, input.date, input.period);
     const period = input.period ?? session?.period;
     const title = input.title?.trim() || `${this.courseTitle(course)} ${input.date}`;
@@ -305,6 +387,7 @@ export class AdditionsService {
       tool: 'record_lecture',
       kind: 'lecture',
       input,
+      via: input.via ?? 'recording',
       course,
       title,
       dedupeKey: `lecture|${course}|${input.date}|${period ?? ''}`,
@@ -330,9 +413,10 @@ export class AdditionsService {
       tool: 'add_deadline',
       kind: input.kind,
       input,
+      via: viaOf(input),
       course,
       title,
-      dedupeKey: `${group}|${course}|${normTitle(title)}`,
+      dedupeKey: `${group}|${course ?? '-'}|${normTitle(title)}`,
       dueAt: due.dueAt,
       data: {
         dueInput: input.dueAt,
@@ -358,9 +442,10 @@ export class AdditionsService {
       tool: 'add_note',
       kind: 'note',
       input,
+      via: viaOf(input),
       course,
       title,
-      dedupeKey: `note|${course}|${normTitle(title)}`,
+      dedupeKey: `note|${course ?? '-'}|${normTitle(title)}`,
       dueAt: undefined,
       data: { text, ...(input.evidence ? { evidence: input.evidence } : {}) },
       apply: (a, ref) => this.applyNote(a, ref, course, title, text, input.lectureDate),
@@ -379,9 +464,10 @@ export class AdditionsService {
       tool: 'add_task',
       kind: 'task',
       input,
+      via: viaOf(input),
       course,
       title,
-      dedupeKey: `todo|${course}|${normTitle(title)}`,
+      dedupeKey: `todo|${course ?? '-'}|${normTitle(title)}`,
       dueAt: due?.dueAt,
       data: {
         ...(input.dueAt ? { dueInput: input.dueAt } : {}),
@@ -458,7 +544,7 @@ export class AdditionsService {
             subject: f.subject,
             predicate: f.predicate,
             value: f.value,
-            note: f.evidence ?? '録音から追加された内容を本人が確認',
+            note: f.evidence ?? 'AIクライアントが追加した内容を本人が確認',
           }).fact.id,
         );
     }
@@ -488,14 +574,14 @@ export class AdditionsService {
    * date and the next class from the timetable and the academic calendar.
    */
   resolveDue(
-    courseOfferingId: string,
+    courseOfferingId: string | undefined,
     expression: string,
     lectureDate?: string,
     recordingTimestamp?: string,
   ): { dueAt: string; resolution: Record<string, JsonValue> } {
-    const course = this.deps.identity.canonical(courseOfferingId);
+    const course = courseOfferingId ? this.deps.identity.canonical(courseOfferingId) : undefined;
     const reference = this.referenceTime(course, lectureDate, recordingTimestamp);
-    const next = this.deps.tasks.nextClassAt(course, reference);
+    const next = course ? this.deps.tasks.nextClassAt(course, reference) : undefined;
     const r: ResolvedDue | undefined = resolveDueExpression(expression, {
       reference,
       timezone: this.tz,
@@ -503,7 +589,11 @@ export class AdditionsService {
     });
     if (!r)
       throw new ValidationError(
-        `dueAt 「${expression}」 could not be read as a date: use ISO-8601 (2026-10-15T23:59+09:00) or a Japanese expression such as 来週の金曜 / 次回 / 10月15日17時`,
+        `dueAt 「${expression}」 could not be read as a date: use ISO-8601 (2026-10-15T23:59+09:00) or a Japanese expression such as 来週の金曜 / 10月15日17時${course ? ' / 次回' : ' (次回 needs a course)'}`,
+      );
+    if (!course && r.rule === 'next_class')
+      throw new ValidationError(
+        `dueAt 「${expression}」 (次回) needs a course to find the next class: give the course or a date`,
       );
     const t = Date.parse(r.dueAt);
     const span = 400 * 86_400_000;
@@ -532,7 +622,8 @@ export class AdditionsService {
       tool: AdditionTool;
       kind: AdditionKind;
       input: Common;
-      course: string;
+      via: AdditionVia;
+      course: string | undefined;
       title: string;
       dedupeKey: string;
       dueAt: string | undefined;
@@ -563,7 +654,7 @@ export class AdditionsService {
 
     this.assertBudget(client);
     const now = this.now().toISOString();
-    const source = this.sourceName(client, w.input.source);
+    const source = this.sourceName(client, w.input.source, w.via);
     const ts = w.input.recordingTimestamp?.trim();
     const tsMs = ts ? parseRecordingTimestamp(ts) : undefined;
     if (ts && tsMs === undefined)
@@ -588,12 +679,13 @@ export class AdditionsService {
     const addition: Addition = {
       ...base,
       title: w.title,
-      courseOfferingId: w.course as Addition['courseOfferingId'],
+      ...(w.course ? { courseOfferingId: w.course as Addition['courseOfferingId'] } : {}),
       ...(w.dueAt ? { dueAt: w.dueAt } : {}),
       dedupeKey: w.dedupeKey,
       ...(same ? {} : { idempotencyKey: key }),
       data: {
         ...w.data,
+        via: w.via,
         source,
         ...(w.input.lectureDate ? { lectureDate: w.input.lectureDate } : {}),
         ...(tsMs !== undefined ? { recordingTimestamp: hms(tsMs) } : {}),
@@ -601,6 +693,7 @@ export class AdditionsService {
       updatedAt: now,
     };
     if (!w.dueAt) delete addition.dueAt;
+    if (!w.course) delete addition.courseOfferingId;
 
     const ref = this.refFor(addition, client, source, undefined, tsMs);
     const applied = this.deps.db.transaction(() => {
@@ -759,12 +852,13 @@ export class AdditionsService {
   private applyAssignment(
     a: Addition,
     ref: SourceReference,
-    course: string,
+    course: string | undefined,
     title: string,
     input: AddDeadlineInput,
     due: { dueAt: string; resolution: Record<string, JsonValue> },
   ): Applied {
-    const match = this.matchAssignment(course, title, due.dueAt);
+    const label = labelOf(a);
+    const match = course ? this.matchAssignment(course, title, due.dueAt) : undefined;
     if (match) {
       const dueAt = this.alignTime(due, match.dueAt);
       const fact = this.putFact(a, ref, match.id, 'assignment_due', dueAt, input.evidence, false);
@@ -781,11 +875,11 @@ export class AdditionsService {
       {
         id,
         kind: 'assignment',
-        courseOfferingId: course as Assignment['courseOfferingId'],
+        ...(course ? { courseOfferingId: course as Assignment['courseOfferingId'] } : {}),
         title,
         description: input.notes
-          ? `${input.notes}\n（録音から: ${input.evidence}）`
-          : `録音から: ${input.evidence}`,
+          ? `${input.notes}\n（${label}: ${input.evidence}）`
+          : `${label}: ${input.evidence}`,
         dueAt: due.dueAt,
         ...(input.kind === 'report' ? { submissionType: 'report' } : {}),
         extra: { additionId: a.id, kind: input.kind, recorded: true },
@@ -799,7 +893,7 @@ export class AdditionsService {
         id,
         'assignment',
         course,
-        `録音から: 課題「${title}」（締切 ${formatShortJa(new Date(due.dueAt), this.tz)}）`,
+        `${label}: 課題「${title}」（締切 ${formatShortJa(new Date(due.dueAt), this.tz)}）`,
         ref,
       );
     return {
@@ -813,12 +907,13 @@ export class AdditionsService {
   private applyExam(
     a: Addition,
     ref: SourceReference,
-    course: string,
+    course: string | undefined,
     title: string,
     input: AddDeadlineInput,
     due: { dueAt: string; resolution: Record<string, JsonValue> },
   ): Applied {
-    const match = this.matchExam(course, title, due.dueAt);
+    const label = labelOf(a);
+    const match = course ? this.matchExam(course, title, due.dueAt) : undefined;
     if (match) {
       const at = this.alignTime(due, match.startsAt);
       const fact = this.putFact(a, ref, match.id, 'exam_at', at, input.evidence, false);
@@ -835,13 +930,13 @@ export class AdditionsService {
       {
         id,
         kind: 'exam',
-        courseOfferingId: course as Exam['courseOfferingId'],
+        ...(course ? { courseOfferingId: course as Exam['courseOfferingId'] } : {}),
         title,
         examKind: examKindOf(input.kind, title),
         startsAt: due.dueAt,
         notes: input.notes
-          ? `${input.notes}\n（録音から: ${input.evidence}）`
-          : `録音から: ${input.evidence}`,
+          ? `${input.notes}\n（${label}: ${input.evidence}）`
+          : `${label}: ${input.evidence}`,
         extra: { additionId: a.id, kind: input.kind, recorded: true },
       },
       a,
@@ -853,7 +948,7 @@ export class AdditionsService {
         id,
         'exam',
         course,
-        `録音から: 試験「${title}」（${formatShortJa(new Date(due.dueAt), this.tz)}）`,
+        `${label}: 試験「${title}」（${formatShortJa(new Date(due.dueAt), this.tz)}）`,
         ref,
       );
     return {
@@ -867,7 +962,7 @@ export class AdditionsService {
   private applyTodo(
     a: Addition,
     ref: SourceReference,
-    course: string,
+    course: string | undefined,
     title: string,
     kind: 'prep' | 'task',
     dueAt: string | undefined,
@@ -878,14 +973,14 @@ export class AdditionsService {
       additionId: a.id,
       title,
       kind,
-      courseOfferingId: course,
+      ...(course ? { courseOfferingId: course } : {}),
       ...(dueAt ? { dueAt } : {}),
       ...(notes ? { notes } : {}),
     };
     const fact = this.putFact(
       a,
       ref,
-      course,
+      course ?? PERSONAL_TODO_SUBJECT,
       TODO_PREDICATE,
       value as unknown as JsonValue,
       evidence,
@@ -902,16 +997,18 @@ export class AdditionsService {
   private applyNote(
     a: Addition,
     ref: SourceReference,
-    course: string,
+    course: string | undefined,
     title: string,
     text: string,
     lectureDate: string | undefined,
   ): Applied {
     const id = stableId('document', ADDITIONS_SOURCE_ID, a.id);
-    const ids = this.deps.identity.expand(course);
-    const lecture = lectureDate
-      ? this.entities.list('lecture', { where: { courseOfferingId: ids, date: lectureDate } })[0]
-      : undefined;
+    const lecture =
+      lectureDate && course
+        ? this.entities.list('lecture', {
+            where: { courseOfferingId: this.deps.identity.expand(course), date: lectureDate },
+          })[0]
+        : undefined;
     this.upsertOwn(
       {
         id,
@@ -919,11 +1016,12 @@ export class AdditionsService {
         title,
         mimeType: 'text/markdown',
         text,
-        courseOfferingId: course as Assignment['courseOfferingId'],
+        ...(course ? { courseOfferingId: course as Assignment['courseOfferingId'] } : {}),
         modifiedAt: this.now().toISOString(),
         extra: {
           additionId: a.id,
           recorded: true,
+          via: viaOfAddition(a),
           ...(lecture ? { lectureId: lecture.id } : {}),
           ...(lectureDate ? { lectureDate } : {}),
         },
@@ -1022,7 +1120,7 @@ export class AdditionsService {
       sourceSystem: source,
       sourceId: ADDITIONS_SOURCE_ID,
       sourceLabel: source,
-      authority: AUTHORITY,
+      authority: ADDITION_VIA_AUTHORITY[viaOfAddition(a)],
       sourceItemId: `${clientId}#${a.id}`.slice(0, 500),
       retrievedAt: this.now().toISOString(),
       ...(timestampMs !== undefined
@@ -1035,7 +1133,7 @@ export class AdditionsService {
   private recordCreated(
     entityId: string,
     kind: 'assignment' | 'exam',
-    course: string,
+    course: string | undefined,
     summary: string,
     ref: SourceReference,
   ): void {
@@ -1052,7 +1150,7 @@ export class AdditionsService {
       source: { sourceId: ADDITIONS_SOURCE_ID, sourceSystem: ref.sourceSystem },
       occurredAt: now,
       observedAt: now,
-      courseOfferingId: course as ChangeEvent['courseOfferingId'],
+      ...(course ? { courseOfferingId: course as ChangeEvent['courseOfferingId'] } : {}),
       summary,
     };
     this.changes.append(ev);
@@ -1101,7 +1199,12 @@ export class AdditionsService {
     return day(known) === day(due.dueAt) ? known : due.dueAt;
   }
 
-  private course(id: string): string {
+  private course(id: string | undefined): string | undefined {
+    const s = id?.trim();
+    return s ? this.requireCourse(s) : undefined;
+  }
+
+  private requireCourse(id: string): string {
     const canonical = this.deps.identity.canonical(id);
     if (
       !this.entities.getOfKind('courseOffering', canonical) &&
@@ -1130,7 +1233,7 @@ export class AdditionsService {
 
   /** When the thing was said: the class start (+ recording position) or, failing that, now / noon. */
   private referenceTime(
-    course: string,
+    course: string | undefined,
     lectureDate: string | undefined,
     ts: string | undefined,
   ): Date {
@@ -1139,7 +1242,7 @@ export class AdditionsService {
     const date = lectureDate?.trim() || today;
     if (!LOCAL_DATE.test(date)) throw new ValidationError('lectureDate must be YYYY-MM-DD');
     const offset = ts ? (parseRecordingTimestamp(ts) ?? 0) : 0;
-    const session = this.sessionOf(course, date, undefined);
+    const session = course ? this.sessionOf(course, date, undefined) : undefined;
     if (session?.startsAt) return new Date(Date.parse(session.startsAt) + offset);
     if (date === today) return now;
     const [y, m, d] = date.split('-').map(Number) as [number, number, number];
@@ -1179,11 +1282,19 @@ export class AdditionsService {
     return out.sort((a, b) => a.startMs - b.startMs);
   }
 
-  private sourceName(client: AdditionClient, given: string | undefined): string {
+  private sourceName(client: AdditionClient, given: string | undefined, via: AdditionVia): string {
     const s = given?.trim();
     if (s) return s.slice(0, ADDITION_LIMITS.source);
-    if (/chatgpt|openai/i.test(`${client.name ?? ''} ${client.id}`)) return 'ChatGPT Record';
-    return (client.name ?? 'MCP').slice(0, ADDITION_LIMITS.source);
+    const who = `${client.name ?? ''} ${client.id}`;
+    const chatgpt = /chatgpt|openai/i.test(who);
+    if (via === 'recording')
+      return chatgpt ? 'ChatGPT Record' : (client.name ?? 'MCP').slice(0, ADDITION_LIMITS.source);
+    const name = chatgpt
+      ? 'ChatGPT'
+      : /claude|anthropic/i.test(who)
+        ? 'Claude'
+        : (client.name ?? 'AI').slice(0, ADDITION_LIMITS.source - 6);
+    return `${name}との会話`;
   }
 
   private autoKey(tool: string, input: Common): string {
@@ -1246,11 +1357,14 @@ export class AdditionsService {
           source: x.sourceLabel ?? x.sourceSystem,
         })),
       }));
+    const via = viaOfAddition(a);
     return {
       id: a.id,
       tool: a.tool,
       kind: a.kind,
       status: a.status,
+      via,
+      label: ADDITION_VIA_LABELS[via],
       title: a.title,
       course,
       dueAt: a.dueAt,
@@ -1279,6 +1393,77 @@ export class AdditionsService {
       updatedAt: a.updatedAt,
       decidedAt: a.decidedAt,
     };
+  }
+
+  /**
+   * Notes and lecture summaries written by any client (read side, every client sees them):
+   * newest first, optionally one course (`courseOfferingId`, identity-expanded; `personal` = notes
+   * without a course), a text filter, or one note by document / addition id with its full text.
+   */
+  notes(
+    options: {
+      courseOfferingId?: string | undefined;
+      personal?: boolean | undefined;
+      query?: string | undefined;
+      id?: string | undefined;
+      limit?: number | undefined;
+    } = {},
+  ): { notes: NoteItem[]; total: number } {
+    const course = options.courseOfferingId
+      ? this.deps.identity.canonical(options.courseOfferingId)
+      : undefined;
+    const q = options.query?.normalize('NFKC').toLowerCase().trim();
+    const items: NoteItem[] = [];
+    for (const a of this.store.list({ statuses: ['unconfirmed', 'confirmed'] })) {
+      if (a.tool !== 'add_note' && a.tool !== 'record_lecture') continue;
+      const stored = a.data.stored;
+      const documentId =
+        stored && typeof stored === 'object' && !Array.isArray(stored)
+          ? typeof stored.documentId === 'string'
+            ? stored.documentId
+            : undefined
+          : undefined;
+      if (!documentId) continue;
+      if (options.id && options.id !== documentId && options.id !== a.id) continue;
+      const own = a.courseOfferingId ? this.deps.identity.canonical(a.courseOfferingId) : undefined;
+      if (course && own !== course) continue;
+      if (options.personal && own) continue;
+      const doc = this.entities.getOfKind('document', documentId);
+      if (!doc) continue;
+      const text = doc.text ?? '';
+      if (q && !`${doc.title}\n${text}`.normalize('NFKC').toLowerCase().includes(q)) continue;
+      const full = options.id !== undefined;
+      const ref = this.refs.get(this.refId(a, documentId));
+      const via = viaOfAddition(a);
+      items.push({
+        id: documentId,
+        additionId: a.id,
+        kind: a.tool === 'record_lecture' ? 'lecture_summary' : 'note',
+        title: doc.title,
+        text:
+          full || text.length <= NOTE_PREVIEW_CHARS
+            ? text
+            : `${text.slice(0, NOTE_PREVIEW_CHARS)}…`,
+        truncated: !full && text.length > NOTE_PREVIEW_CHARS,
+        course: own ? { id: own, title: this.courseTitle(own) } : undefined,
+        via,
+        label: ADDITION_VIA_LABELS[via],
+        status: a.status,
+        source: typeof a.data.source === 'string' ? a.data.source : (a.clientName ?? a.clientId),
+        client: a.clientName,
+        lectureDate:
+          typeof a.data.lectureDate === 'string'
+            ? a.data.lectureDate
+            : typeof a.data.date === 'string'
+              ? a.data.date
+              : undefined,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+        citations: ref ? [toCitation(ref, this.tz)] : [],
+      });
+    }
+    const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
+    return { notes: items.slice(0, limit), total: items.length };
   }
 
   /** Local "today" for the timezone (exposed for callers that default the lecture date). */

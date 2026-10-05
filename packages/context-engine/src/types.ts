@@ -62,13 +62,16 @@ export interface ClassItem extends Cited {
 }
 
 /**
- * The item was only heard in a lecture recording (an AI client wrote it through an MCP write
- * tool) and the owner has not confirmed it yet: show 「録音から」 with the evidence.
+ * The item rests only on what an AI client wrote through an MCP write tool — heard in a lecture
+ * recording (「録音から」) or told / created in a chat (「チャットで登録」) — and the owner has not
+ * confirmed it yet: show the label with the evidence. Every client and session sees these items.
  */
 export interface RecordedMarker {
-  label: '録音から';
+  label: '録音から' | 'チャットで登録';
+  /** recording = heard in a lecture recording, chat = told / created in a chat. */
+  via: 'recording' | 'chat';
   additionId: string | undefined;
-  /** e.g. "ChatGPT Record" */
+  /** e.g. "ChatGPT Record", "ChatGPTとの会話" */
   source: string;
   /** "HH:MM:SS" in the recording */
   timestamp: string | undefined;
@@ -88,7 +91,7 @@ export interface DeadlineItem extends Cited {
   hoursLeft: number;
   evidence: string | undefined;
   summary: string;
-  /** Present when the deadline comes only from a lecture recording and is not confirmed yet. */
+  /** Present when the deadline comes only from an AI client (recording or chat), unconfirmed. */
   recorded?: RecordedMarker | undefined;
 }
 
@@ -116,6 +119,18 @@ export interface ChangeItem extends Cited {
   occurredAt: string;
   observedAt: string;
   course: CourseRef | undefined;
+  /** How many events about this entity were folded into this item (when more than one). */
+  eventCount?: number | undefined;
+}
+
+/**
+ * Views list changes compactly (change-digest.ts): one item per entity, the decisive ones first,
+ * capped; `changesTotal` is how many there were, `changesOmitted` how many were left out.
+ */
+export interface ChangeDigest {
+  changes: ChangeItem[];
+  changesTotal?: number | undefined;
+  changesOmitted?: number | undefined;
 }
 
 export interface AnnouncementItem extends Cited {
@@ -231,7 +246,10 @@ export interface PreparationItem extends Cited {
   sessionId: string;
   course: CourseRef;
   startsAt: string | undefined;
+  /** Newest first, at most 10. */
   materials: MaterialItem[];
+  /** How many materials there were when `materials` was cut short. */
+  materialsTotal?: number | undefined;
   dueBeforeClass: DeadlineItem[];
   announcements: AnnouncementItem[];
 }
@@ -298,6 +316,9 @@ export interface DayContext<V extends 'today' | 'tomorrow'> extends BundleBase<V
   date: string;
   classes: ClassItem[];
   changes: ChangeItem[];
+  /** Relevant changes before the cap / how many of them are not listed (see ChangeDigest). */
+  changesTotal?: number | undefined;
+  changesOmitted?: number | undefined;
   deadlines: DeadlineItem[];
   tasks: TaskItem[];
   importantAnnouncements: AnnouncementItem[];
@@ -361,6 +382,9 @@ export interface WeekContext extends BundleBase<'week'> {
   deadlines: DeadlineItem[];
   exams: DeadlineItem[];
   changes: ChangeItem[];
+  /** Relevant changes before the cap / how many of them are not listed (see ChangeDigest). */
+  changesTotal?: number | undefined;
+  changesOmitted?: number | undefined;
   conflicts: ConflictItem[];
 }
 
@@ -395,6 +419,9 @@ export interface CourseContext extends BundleBase<'course'> {
   /** All assignments of the course, newest due first. */
   assignments: CourseAssignmentItem[];
   changes: ChangeItem[];
+  /** Relevant changes before the cap / how many of them are not listed (see ChangeDigest). */
+  changesTotal?: number | undefined;
+  changesOmitted?: number | undefined;
   conflicts: ConflictItem[];
   pendingLinks: IdentityLink[];
 }
@@ -431,6 +458,9 @@ export interface DeadlineContext extends BundleBase<'deadline'> {
 export interface ChangesContext extends BundleBase<'changes'> {
   since: string;
   changes: ChangeItem[];
+  /** Relevant changes before the cap / how many of them are not listed (see ChangeDigest). */
+  changesTotal?: number | undefined;
+  changesOmitted?: number | undefined;
   conflicts: ConflictItem[];
 }
 

@@ -1,5 +1,5 @@
 import type { FactOrigin, Task, TaskStatus } from '@unicontext/canonical-model';
-import type { Citation, CourseRef, UniContext } from '@unicontext/context-engine';
+import type { Citation, CourseRef, RecordedMarker, UniContext } from '@unicontext/context-engine';
 import { toCitation, uniqueCitations } from '@unicontext/provenance';
 
 /** One task/assignment as shown to AI clients and the REST twin (apps/daemon `AssignmentItem`). */
@@ -16,6 +16,8 @@ export interface AssignmentItem {
   hoursLeft: number | undefined;
   evidence: string | undefined;
   citations: Citation[];
+  /** Registered by an AI client (「チャットで登録」 / 「録音から」) and not confirmed by the owner. */
+  recorded?: RecordedMarker | undefined;
 }
 
 export interface AssignmentFilter {
@@ -76,6 +78,7 @@ export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}):
       const hoursLeft = t.dueAt
         ? Math.round(((new Date(t.dueAt).getTime() - now) / 3_600_000) * 10) / 10
         : undefined;
+      const recorded = uc.context.recordedMarker(t);
       return {
         taskId: t.id,
         title: t.title,
@@ -87,8 +90,9 @@ export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}):
         createdBy: t.createdBy,
         overdue: t.status !== PAST_TERM_STATUS && hoursLeft !== undefined && hoursLeft < 0,
         hoursLeft,
-        evidence: t.evidence,
+        evidence: t.evidence ?? recorded?.evidence,
         citations: taskCitations(uc, t),
+        ...(recorded ? { recorded } : {}),
       };
     });
 }

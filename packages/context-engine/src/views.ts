@@ -94,7 +94,11 @@ export const ContextViewParams = {
     })
     .strict(),
   changes: z
-    .object({ since: z.string().optional(), courseOfferingId: z.string().optional() })
+    .object({
+      since: z.string().optional(),
+      courseOfferingId: z.string().optional(),
+      limit: z.number().int().positive().max(200).optional(),
+    })
     .strict(),
   'class-preparation': z
     .object({ sessionId: z.string().optional(), courseOfferingId: z.string().optional() })
@@ -156,6 +160,7 @@ export function getView<N extends ContextViewName>(
         opt({
           since: p.since as string | undefined,
           courseOfferingId: p.courseOfferingId as string | undefined,
+          limit: p.limit as number | undefined,
         }),
       ),
     'class-preparation': () =>

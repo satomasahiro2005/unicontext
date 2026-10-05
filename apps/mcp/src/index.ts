@@ -27,8 +27,16 @@ export {
   type AssignmentFilter,
   type AssignmentItem,
 } from './assignments.js';
-export { buildEnvelope, collect, type EnvelopeOptions, type McpEnvelope } from './envelope.js';
+export {
+  buildEnvelope,
+  type CitationRef,
+  collect,
+  compactEnvelope,
+  type EnvelopeOptions,
+  type McpEnvelope,
+} from './envelope.js';
 export { listCourses, resolveCourse, type ResolvedCourse } from './courses.js';
+export { COURSE_LIMITS_FOR_AI, trimCourseForAi } from './trim.js';
 export {
   getCreditSummary,
   getSyllabus,

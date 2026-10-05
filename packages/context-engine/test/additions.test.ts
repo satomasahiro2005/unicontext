@@ -494,3 +494,111 @@ describe('safety', () => {
     ).rejects.toThrow(/HH:MM:SS/);
   });
 });
+
+describe('registrations from a chat (via chat)', () => {
+  it('stores the student’s own statement as 「チャットで登録」 with its own authority', async () => {
+    const { uc } = await setup();
+    const res = await uc.additions.addDeadline(CHATGPT, {
+      courseOfferingId: MON,
+      title: '中間レポート',
+      dueAt: '2026-11-20T17:00:00+09:00',
+      kind: 'report',
+      evidence: '中間レポートの締切11/20って登録しといて',
+    });
+    expect(res.addition).toMatchObject({
+      via: 'chat',
+      label: 'チャットで登録',
+      source: 'ChatGPTとの会話',
+      status: 'unconfirmed',
+    });
+    const [fact] = uc.resolver.facts.getMany(res.audit.factIds);
+    expect(fact?.origin).toBe('extracted');
+    const ref = uc.sync.stores.sourceRefs.get(fact?.sourceReferenceId ?? '');
+    expect(ref).toMatchObject({ sourceSystem: 'ChatGPTとの会話', authority: 'student-statement' });
+    expect(ref?.location).toBeUndefined();
+
+    const item = uc.context.week().deadlines.find((d) => d.title === '中間レポート');
+    expect(item?.recorded).toMatchObject({ label: 'チャットで登録', via: 'chat' });
+    expect(item?.summary).toMatch(/^【チャットで登録】/);
+    expect(item?.summary).toContain('（チャットで登録）');
+    expect(item?.summary).not.toContain('録音');
+    const created = uc.context
+      .week()
+      .changes.find((c) => c.entityId === res.addition.stored.assignmentId);
+    expect(created?.summary).toMatch(/^チャットで登録: 課題「中間レポート」/);
+  });
+
+  it('never overrides LiveCampusU: a different date told in a chat opens a conflict', async () => {
+    const { uc } = await setup();
+    const before = uc.sync.stores.entities.get(LCU_REPORT);
+    const res = await uc.additions.addDeadline(CHATGPT, {
+      courseOfferingId: MON,
+      title: 'レポート課題2',
+      dueAt: '2026-11-30T23:59:00+09:00',
+      kind: 'report',
+      evidence: 'レポート課題2は30日までだったはず',
+    });
+    expect(res.addition.attachedTo?.id).toBe(LCU_REPORT);
+    expect(res.addition.conflicts).toHaveLength(1);
+    expect(uc.resolver.resolve(LCU_REPORT, 'assignment_due').status).toBe('conflict');
+    // LiveCampusU's own entity is untouched.
+    expect(uc.sync.stores.entities.get(LCU_REPORT)).toEqual(before);
+  });
+
+  it('defaults: recording with a timestamp, chat without; old rows read as recording', async () => {
+    const { uc } = await setup();
+    const heard = await uc.additions.addTask(CHATGPT, {
+      courseOfferingId: MON,
+      title: '教科書2章',
+      recordingTimestamp: '00:10:00',
+    });
+    expect(heard.addition).toMatchObject({ via: 'recording', source: 'ChatGPT Record' });
+    const told = await uc.additions.addTask(CLAUDE, { courseOfferingId: MON, title: '過去問' });
+    expect(told.addition).toMatchObject({ via: 'chat', source: 'Claudeとの会話' });
+    const row = uc.additions.store.get(told.addition.id);
+    if (!row) throw new Error('missing');
+    const { via: _drop, ...data } = row.data;
+    expect(uc.additions.view({ ...row, data }).via).toBe('recording');
+  });
+
+  it('personal deadlines, to-dos and notes need no course', async () => {
+    const { uc } = await setup();
+    const d = await uc.additions.addDeadline(CHATGPT, {
+      title: '奨学金の継続手続き',
+      dueAt: '11月19日17時',
+      kind: 'assignment',
+      evidence: '奨学金の継続手続きが19日の17時まで',
+    });
+    expect(d.addition.course).toBeUndefined();
+    expect(d.addition.dueAt).toBe('2026-11-19T08:00:00.000Z');
+    const t = await uc.additions.addTask(CLAUDE, { title: 'TOEICの単語を30分' });
+    const n = await uc.additions.addNote(CHATGPT, { text: '研究室見学は12月第1週に申し込む' });
+
+    expect(uc.context.today().deadlines.map((x) => x.title)).toContain('奨学金の継続手続き');
+    const task = uc.tasks.get(t.addition.stored.taskId as string);
+    expect(task?.courseOfferingId).toBeUndefined();
+    expect(
+      uc.context.today().tasks.find((x) => x.title === 'TOEICの単語を30分')?.recorded,
+    ).toMatchObject({
+      label: 'チャットで登録',
+    });
+    const notes = uc.additions.notes({ personal: true });
+    expect(notes.notes.map((x) => x.additionId)).toEqual([n.addition.id]);
+    expect(notes.notes[0]).toMatchObject({ via: 'chat', course: undefined, kind: 'note' });
+    const hits = await uc.search.search('研究室見学');
+    expect(hits.hits.map((h) => h.id)).toContain(n.addition.stored.documentId);
+
+    // 次回 needs a course to be resolved.
+    await expect(
+      uc.additions.addDeadline(CHATGPT, {
+        title: '何かの提出',
+        dueAt: '次回',
+        kind: 'assignment',
+        evidence: '次回までに',
+      }),
+    ).rejects.toThrow(/needs a course/);
+    // The owner can still confirm a personal to-do (it becomes their own).
+    await uc.additions.confirm(t.addition.id);
+    expect(uc.tasks.get(t.addition.stored.taskId as string)?.origin).toBe('user');
+  });
+});

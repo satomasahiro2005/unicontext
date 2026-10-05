@@ -9,3 +9,4 @@ export * from './announcements.js';
 export * from './announcement-open.js';
 export * from './discussion.js';
 export * from './files.js';
+export * from './change-digest.js';

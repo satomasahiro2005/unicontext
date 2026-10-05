@@ -316,8 +316,8 @@ export class NotificationService {
     for (const item of upcoming) {
       if (item.overdue) continue;
       if (DONE_TASK_STATUSES.has(item.status)) continue;
-      // Course deadlines (incl. ones only heard in a lecture recording) notify only for courses
-      // the student takes.
+      // Course deadlines (incl. ones only heard in a recording or registered in a chat) notify
+      // only for courses the student takes; personal deadlines (no course) always notify.
       if (!this.inScope(item.course?.id)) continue;
       // The view rounds hoursLeft; compute it exactly from the due date.
       const hoursLeft = (Date.parse(item.dueAt) - nowMs) / HOUR_MS;
@@ -333,7 +333,7 @@ export class NotificationService {
       const due = formatShortJa(new Date(item.dueAt), tz);
       const subject = item.course ? `${item.course.title}「${item.title}」` : `「${item.title}」`;
       const recorded = item.recorded
-        ? `（録音から・未確認${item.recorded.evidence ? `:「${item.recorded.evidence.slice(0, 80)}」` : ''}）`
+        ? `（${item.recorded.via === 'chat' ? item.recorded.label : `${item.recorded.label}・未確認`}${item.recorded.evidence ? `:「${item.recorded.evidence.slice(0, 80)}」` : ''}）`
         : '';
       drafts.push({
         kind: 'deadline_approaching',
