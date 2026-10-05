@@ -440,7 +440,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '今日の予定',
       description:
-        '今日の授業（教室・状態）、昨日以降の変更、締切、未提出の課題、重要なお知らせ、授業準備、情報源の食い違いをまとめて返す。「今日の授業は？」「今日やることは？」に使う。 / Everything for today: classes (with room), changes, deadlines, tasks, important announcements, preparation and conflicts. Every item carries citations.',
+        '今日の授業（教室・状態）、昨日以降の変更、締切、未提出の課題、重要なお知らせ、授業準備、情報源の食い違いをまとめて返す。「今日の授業は？」「今日やることは？」に使う。学期（前期・後期）は約8週ずつの前半・後半に分かれる: term.part は今が後期前半か後期後半か、各授業の termPart はその科目の期間（後期前半・後期後半だけの科目と、後期（前半・後半）の通しの科目がある）。 / Everything for today: classes (with room), changes, deadlines, tasks, important announcements, preparation and conflicts. Every item carries citations. Each term is split into halves of about 8 weeks (前半/後半): term.part is the current half, termPart on a class is the half(s) the course meets in.',
     },
     {},
     () => view('today'),
@@ -462,7 +462,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '今週の予定',
       description:
-        "今週（月曜始まり）の時間割・締切・試験・変更・食い違いを返す。 / This week's timetable, deadlines, exams, changes and conflicts.",
+        "今週（月曜始まり）の時間割・締切・試験・変更・食い違いを返す。学期（前期・後期）は約8週ずつの前半・後半に分かれる: term.part は今が後期前半か後期後半か、各授業の termPart はその科目の期間（後期前半・後期後半だけの科目と、後期（前半・後半）の通しの科目がある）。 / This week's timetable, deadlines, exams, changes and conflicts. Each term is split into halves of about 8 weeks (前半/後半): term.part is the current half, termPart on a class is the half(s) the course meets in.",
     },
     {},
     () => view('week'),
@@ -473,7 +473,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '科目の全体像',
       description:
-        '1科目の全体像（担当・教室・今後の授業・直近の講義・締切・お知らせ・資料・Teamsの投稿・フォルダごとのファイル・課題と提出状況・変更・食い違い）を全ソース統合で返す。courseOfferingId には id のほか「データベース」のような科目名や科目コードも使える。 / One course across all sources, including Teams posts (discussion), files with folders, and assignments with submission status. Accepts an id or a fuzzy title / course code.',
+        '1科目の全体像（担当・教室・授業のある期間 termPart（後期前半・後期後半・後期（前半・後半））・今後の授業・直近の講義・締切・お知らせ・資料・Teamsの投稿・フォルダごとのファイル・課題と提出状況・変更・食い違い）を全ソース統合で返す。courseOfferingId には id のほか「データベース」のような科目名や科目コードも使える。 / One course across all sources, including Teams posts (discussion), files with folders, and assignments with submission status. Accepts an id or a fuzzy title / course code.',
     },
     { courseOfferingId: courseIdField },
     (a) => {

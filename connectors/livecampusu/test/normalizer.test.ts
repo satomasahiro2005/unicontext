@@ -166,7 +166,21 @@ describe('normalizer: notices', () => {
     // 金5・6 and 金7・8 → ambiguous period, so none.
     expect(s?.period).toBeUndefined();
     expect(out.entities.find((e) => e.entity.kind === 'classSession')?.origin).toBe('extracted');
-    expect(out.facts).toEqual([
+    // 「前期前半/金5・6, 前期前半/金7・8, 前期後半/金5・6, 前期後半/金7・8」 → per-slot halves.
+    expect(out.facts?.find((f) => f.predicate === 'term_slots')).toMatchObject({
+      subject: offeringId,
+      origin: 'authoritative',
+      value: {
+        slots: [
+          { half: '前半', dayOfWeek: 5, period: 3 },
+          { half: '後半', dayOfWeek: 5, period: 3 },
+          { half: '前半', dayOfWeek: 5, period: 4 },
+          { half: '後半', dayOfWeek: 5, period: 4 },
+        ],
+      },
+      evidence: '前期前半/金5・6, 前期前半/金7・8, 前期後半/金5・6, 前期後半/金7・8',
+    });
+    expect(out.facts?.filter((f) => f.predicate !== 'term_slots')).toEqual([
       expect.objectContaining({
         subject: offeringId,
         predicate: 'room',
@@ -178,7 +192,7 @@ describe('normalizer: notices', () => {
         evidence: '7/24(金) B班の教室を科学実験室から共41に変更します',
       }),
     ]);
-    expect(out.facts?.[0]?.ref?.location?.messageId).toBe('100003');
+    expect(out.facts?.find((f) => f.predicate === 'room')?.ref?.location?.messageId).toBe('100003');
   });
 
   it('university notices have scope university; a survey is low importance', async () => {

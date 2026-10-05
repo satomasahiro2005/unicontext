@@ -11,7 +11,15 @@ import {
   type GradePeriodTotals,
   type UniContext,
 } from '@unicontext/context-engine';
-import { NotFoundError, ValidationError } from '@unicontext/core';
+import {
+  NotFoundError,
+  normalizeHalves,
+  parseTermPartLabel,
+  TERM_HALVES,
+  type TermHalf,
+  termPartLabel,
+  ValidationError,
+} from '@unicontext/core';
 import { uniqueCitations, type Citation } from '@unicontext/provenance';
 import { z } from 'zod';
 import { matchScore } from './courses.js';
@@ -50,13 +58,13 @@ export const GET_SYLLABUS_TITLE = 'シラバス詳細';
 export const CREDIT_SUMMARY_TITLE = '単位の状況';
 
 export const SEARCH_SYLLABUS_DESCRIPTION =
-  '今学期・来学期に開講される科目をシラバスの一覧から検索する（履修中の科目に限らない）。キーワード（科目名・科目コード・教員名・シラバス本文）、曜日・時限、学年、必修/選択、単位数、学期、年度、学部で絞り込める。「木曜3限の選択科目は？」「1年生向けの2単位の科目」に使う。結果は短い一覧で、授業の内容は get_syllabus で読む。 / Search the course catalog (syllabus list) of the current and upcoming terms, not only the courses the student is taking. Filter by keyword, day and period, grade year, required/elective, credits, term, year and faculty. Use get_syllabus for the full syllabus of one course.';
+  '今学期・来学期に開講される科目をシラバスの一覧から検索する（履修中の科目に限らない）。キーワード（科目名・科目コード・教員名・シラバス本文）、曜日・時限、学年、必修/選択、単位数、学期、学期の前半・後半（termPart）、年度、学部で絞り込める。各結果の termPart は授業のある期間（後期前半・後期後半は約8週だけの科目、後期（前半・後半）は学期を通しての科目）。fitsMyTimetable で登録済みの時間割と重ならない科目だけにできる。「木曜3限の選択科目は？」「1年生向けの2単位の科目」「後期後半の空いているコマで取れる科目は？」に使う。結果は短い一覧で、授業の内容は get_syllabus で読む。 / Search the course catalog (syllabus list) of the current and upcoming terms, not only the courses the student is taking. Filter by keyword, day and period, grade year, required/elective, credits, term, half of the term (termPart: each 前期/後期 is split into 前半 and 後半 of about 8 weeks; some courses meet in one half only), year and faculty; fitsMyTimetable keeps only courses that fit the free slots of the registered timetable. Use get_syllabus for the full syllabus of one course.';
 
 export const GET_SYLLABUS_DESCRIPTION =
   '1科目のシラバス（担当・曜日時限・単位・授業の目標・学修内容・授業計画・成績評価・テキストなど）を返す。course には search_syllabus の id、科目コード、科目名（一部可）を使える。同じ名前の科目が複数あるときは候補の一覧を返す。 / The syllabus of one course (instructors, schedule, credits, goals, content, weekly plan, grading, textbook). `course` accepts an id from search_syllabus, a course code or a (partial) title; several matches return a candidate list.';
 
 export const CREDIT_SUMMARY_DESCRIPTION =
-  '過去の全年度・全学期の成績（科目ごとの全受験。不合格・再試・再履修も含む）、学期別・年度別・通算の修得単位、卒業要件の充足状況（学務情報システムの単位修得情報がある場合）、今学期の登録単位と上限の目安を返す。各成績は大学の表示どおりの評価（秀・不可・合・否・再試など）をevaluationに、集計用の区分をoutcome（passed/failed/in_progress/not_graded/withdrawn/transferred/unknown）に持つ。修得単位はpassedとtransferredだけを数え、unknownは合否どちらにも数えない。「ここまでに何単位とった？」「落とした科目は？」「卒業要件で足りない区分は？」「今学期あと何単位とれる？」に使う。 / Full grade history of every year and term (every attempt per course, failed ones and re-exams included), earned credits per term, per year and in total, graduation requirement status when the academic system provides it, and the current term registration with its cap. Each grade keeps the verbatim evaluation label and a normalized outcome; only passed and transferred count as earned, unknown is never counted.';
+  '過去の全年度・全学期の成績（科目ごとの全受験。不合格・再試・再履修も含む）、学期別・年度別・通算の修得単位、卒業要件の充足状況（学務情報システムの単位修得情報がある場合）、今学期の登録単位と上限の目安、今学期の時間割（科目ごとの前半・後半）と前半・後半それぞれの空きコマ（timetableThisTerm）を返す。各成績は大学の表示どおりの評価（秀・不可・合・否・再試など）をevaluationに、集計用の区分をoutcome（passed/failed/in_progress/not_graded/withdrawn/transferred/unknown）に持つ。修得単位はpassedとtransferredだけを数え、unknownは合否どちらにも数えない。「ここまでに何単位とった？」「落とした科目は？」「卒業要件で足りない区分は？」「今学期あと何単位とれる？」「後期後半に空いているコマは？」に使う。 / Full grade history of every year and term (every attempt per course, failed ones and re-exams included), earned credits per term, per year and in total, graduation requirement status when the academic system provides it, and the current term registration with its cap, plus the timetable of this term with the half of each course (前半/後半, about 8 weeks each) and the free slots of each half. Each grade keeps the verbatim evaluation label and a normalized outcome; only passed and transferred count as earned, unknown is never counted.';
 
 // ---------------------------------------------------------------------------------------------
 // input shapes
@@ -84,6 +92,19 @@ export const searchSyllabusShape = {
     .max(20)
     .nullish()
     .describe('学期: 前期 / 後期（部分一致。1 = 前期, 2 = 後期）/ Term: 前期 or 後期'),
+  termPart: z
+    .string()
+    .max(20)
+    .nullish()
+    .describe(
+      '学期の前半・後半（前期・後期はそれぞれ約8週の前半と後半に分かれる）: 「前半」「後半」「後期後半」。「後半」は後半に授業がある科目（学期を通しての科目も含む）、「後半のみ」は後半だけの科目 / Half of the term (each term has a first half 前半 and a second half 後半 of about 8 weeks): "後半" = meets in the second half (whole-term courses included), "後半のみ" = second half only',
+    ),
+  fitsMyTimetable: z
+    .boolean()
+    .nullish()
+    .describe(
+      'true: 登録済みの科目と曜日・時限が重ならない科目だけ（前半・後半を区別して判定。登録済みの科目自体は除く）/ Only courses whose slots are free in the registered timetable of that term, half by half',
+    ),
   dayOfWeek: z
     .union([z.number().int().min(0).max(6), z.string().max(10)])
     .nullish()
@@ -415,6 +436,107 @@ function sourceLabelOf(uc: UniContext, id: string): string | undefined {
 }
 
 // ---------------------------------------------------------------------------------------------
+// the student's timetable by half (前半 / 後半)
+// ---------------------------------------------------------------------------------------------
+
+interface MyTimetable {
+  academicYear: number;
+  term: string;
+  courses: { title: string; termPart: string | null; slots: string; credits: number | null }[];
+  /** `${half}|${dayOfWeek}|${period}` of every registered weekly slot. */
+  occupied: Set<string>;
+}
+
+function slotLabel(dayOfWeek: number, period: number | undefined): string {
+  return `${DAY_CHARS.charAt(dayOfWeek)}${period ?? ''}`;
+}
+
+/** Halves one slot meets in (per slot when the source says so); unknown = both. */
+function halvesOfSlot(
+  parts:
+    | { halves: TermHalf[]; slots: { dayOfWeek: number; period?: number; halves: TermHalf[] }[] }
+    | undefined,
+  slot: { dayOfWeek: number; period?: number | undefined },
+): TermHalf[] {
+  if (!parts || parts.halves.length === 0) return [...TERM_HALVES];
+  const own = parts.slots.filter(
+    (s) =>
+      s.dayOfWeek === slot.dayOfWeek &&
+      (s.period === undefined || slot.period === undefined || s.period === slot.period),
+  );
+  return own.length ? normalizeHalves(own.flatMap((s) => s.halves)) : parts.halves;
+}
+
+/** Registered courses of one term with their halves and slots (from the timetable + 前半/後半). */
+function myTimetable(uc: UniContext, academicYear: number, term: string): MyTimetable {
+  const schedule = uc.tasks.schedule;
+  const entities = uc.sync.stores.entities;
+  const key = termKey(term);
+  const out: MyTimetable = { academicYear, term: key, courses: [], occupied: new Set() };
+  for (const e of schedule.enrolledOfferings()) {
+    const o = e.offering;
+    const year = e.term?.year ?? o.academicYear;
+    const t = e.term?.termCode ?? o.term;
+    if (year !== academicYear || !t || termKey(t) !== key) continue;
+    const linked = e.ids
+      .map((id) => entities.getOfKind('courseOffering', id))
+      .filter((x): x is CourseOffering => x !== undefined);
+    const slots = o.schedule.length
+      ? o.schedule
+      : (linked.find((x) => x.schedule.length > 0)?.schedule ?? []);
+    let credits: number | undefined;
+    for (const x of [o, ...linked]) {
+      credits ??= num(x.extra?.['credits']);
+      if (credits === undefined && x.courseId)
+        credits = entities.getOfKind('course', x.courseId)?.credits;
+    }
+    const regular = e.scheduleType === 'regular';
+    if (regular)
+      for (const s of slots)
+        for (const h of halvesOfSlot(e.termParts, s))
+          out.occupied.add(`${h}|${s.dayOfWeek}|${s.period ?? ''}`);
+    out.courses.push({
+      title: o.title,
+      termPart: schedule.termPartLabelOf(e) ?? null,
+      slots: regular
+        ? slots.map((s) => slotLabel(s.dayOfWeek, s.period)).join(' ')
+        : e.scheduleType === 'intensive'
+          ? '集中講義'
+          : '時間割外',
+      credits: credits ?? null,
+    });
+  }
+  out.courses.sort((a, b) => a.slots.localeCompare(b.slots));
+  return out;
+}
+
+/** True when none of the offering's slots collides with a registered slot of the same half. */
+function fitsTimetable(o: CourseOffering, t: MyTimetable): boolean {
+  if (o.schedule.length === 0) return true;
+  const halves = o.termParts?.length ? o.termParts : [...TERM_HALVES];
+  return o.schedule.every((s) =>
+    halves.every((h) => !t.occupied.has(`${h}|${s.dayOfWeek}|${s.period ?? ''}`)),
+  );
+}
+
+/** Weekday periods 1–5 (月1 … 金5) not taken in each half of the term. */
+function freeSlotsByHalf(uc: UniContext, t: MyTimetable): Record<string, string> {
+  const term = uc.tasks.schedule.profile?.academicCalendar.terms.find(
+    (x) => x.year === t.academicYear && x.termCode !== undefined && termKey(x.termCode) === t.term,
+  );
+  const out: Record<string, string> = {};
+  for (const h of TERM_HALVES) {
+    const label = term?.parts?.find((p) => p.half === h)?.name ?? `${t.term}${h}`;
+    const free: string[] = [];
+    for (let day = 1; day <= 5; day++)
+      for (let period = 1; period <= 5; period++)
+        if (!t.occupied.has(`${h}|${day}|${period}`)) free.push(slotLabel(day, period));
+    out[label] = free.join(' ');
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------
 // search_syllabus
 // ---------------------------------------------------------------------------------------------
 
@@ -422,6 +544,9 @@ interface SearchFilters {
   terms: string[];
   year: number | undefined;
   term: string | undefined;
+  /** 前半 / 後半 wanted; `only` = that half only (not whole-term courses). */
+  half: { half: TermHalf; only: boolean } | undefined;
+  fitsMyTimetable: boolean;
   slots: { dayOfWeek: number | undefined; period: number | undefined }[] | undefined;
   grade: number | undefined;
   requirement: string | undefined;
@@ -444,10 +569,21 @@ function filtersOf(args: SearchSyllabusArgs): SearchFilters {
         (day === undefined || s.dayOfWeek === day) && (period === undefined || s.period === period),
     );
   const exact = args.credits ?? undefined;
+  // 「後期後半」 in either field names both the term and the half.
+  const partText = (args.termPart ?? '').normalize('NFKC').trim();
+  const only = /のみ|だけ|only/i.test(partText);
+  const part =
+    parseTermPartLabel(partText.replace(/のみ|だけ|only/gi, '')) ??
+    (args.term ? parseTermPartLabel(args.term) : undefined);
+  if (partText && !part)
+    throw new ValidationError(`termPart must be 前半 or 後半 (e.g. 後期後半): ${args.termPart}`);
+  const termText = args.term ?? part?.term;
   return {
     terms: (args.query ?? '').split(/\s+/).filter(Boolean),
     year: args.year ?? undefined,
-    term: args.term ? termKey(args.term) : undefined,
+    term: termText ? termKey(termText) : undefined,
+    half: part ? { half: part.half, only } : undefined,
+    fitsMyTimetable: args.fitsMyTimetable === true,
     slots,
     grade: args.grade ?? undefined,
     requirement: args.requirement ? args.requirement.normalize('NFKC').trim() : undefined,
@@ -464,6 +600,12 @@ function matchesStructured(e: SyllabusEntry, f: SearchFilters): boolean {
   if (f.term !== undefined) {
     const t = o.term ? termKey(o.term) : '';
     if (t !== f.term && !(t && norm(o.term ?? '').includes(f.term))) return false;
+  }
+  if (f.half) {
+    // Unknown halves (syllabus detail not fetched) never match a half filter.
+    const halves = o.termParts;
+    if (!halves?.includes(f.half.half)) return false;
+    if (f.half.only && halves.length !== 1) return false;
   }
   if (f.slots) {
     const hit = f.slots.some((want) =>
@@ -539,6 +681,7 @@ function itemOf(e: SyllabusEntry, uc: UniContext, enrolled: boolean): Record<str
     courseCode: e.offering.courseCode ?? null,
     title: e.offering.title,
     term: e.offering.term ?? null,
+    termPart: termPartLabel(e.offering.term, e.offering.termParts) ?? null,
     academicYear: e.offering.academicYear ?? null,
     instructors: e.offering.instructorNames,
     slots: slotsOf(e) ?? null,
@@ -588,8 +731,21 @@ export function searchSyllabus(uc: UniContext, args: SearchSyllabusArgs): Syllab
 
   const hitSets = f.terms.map((t) => documentHits(uc, t));
   const scored: { e: SyllabusEntry; score: number }[] = [];
+  const marks = enrolledMarkers(uc);
+  const timetables = new Map<string, MyTimetable>();
+  const timetableOf = (year: number, term: string): MyTimetable => {
+    const key = `${year}|${termKey(term)}`;
+    let t = timetables.get(key);
+    if (!t) timetables.set(key, (t = myTimetable(uc, year, term)));
+    return t;
+  };
   for (const e of catalog) {
     if (!matchesStructured(e, f)) continue;
+    if (f.fitsMyTimetable) {
+      const o = e.offering;
+      if (isEnrolled(e, marks) || o.academicYear === undefined || !o.term) continue;
+      if (!fitsTimetable(o, timetableOf(o.academicYear, o.term))) continue;
+    }
     let score = 0;
     let ok = true;
     for (const [i, term] of f.terms.entries()) {
@@ -606,8 +762,15 @@ export function searchSyllabus(uc: UniContext, args: SearchSyllabusArgs): Syllab
   scored.sort((a, b) => b.score - a.score || compareEntries(a.e, b.e));
 
   const shown = scored.slice(0, limit).map((s) => s.e);
-  const marks = enrolledMarkers(uc);
   const notes: string[] = [];
+  if (f.half)
+    notes.push(
+      'termPart で絞り込むと、開講時期（前半・後半）がシラバスで確認できない科目（詳細が未取得のもの）は含まれません。',
+    );
+  if (f.fitsMyTimetable)
+    notes.push(
+      '登録済みの時間割（学務情報システム）と曜日・時限が重ならない科目だけです。前半だけ・後半だけの科目は、その期間の時間割と比べています。',
+    );
   if (scored.length > shown.length)
     notes.push(
       `${scored.length}件のうち先頭${shown.length}件だけを返しています。曜日・時限・学年・学期などで絞り込んでください。`,
@@ -784,6 +947,7 @@ export function getSyllabus(uc: UniContext, args: GetSyllabusArgs): SyllabusTool
         titleEn: picked.course?.titleEn ?? null,
         academicYear: o.academicYear ?? null,
         term: o.term ?? null,
+        termPart: termPartLabel(o.term, o.termParts) ?? null,
         className: str(picked.extra['className']) ?? null,
         instructors: o.instructorNames,
         slots: slotsOf(picked) ?? null,
@@ -982,6 +1146,7 @@ export function getCreditSummary(uc: UniContext, args: CreditSummaryArgs): Sylla
     courses: thisTerm?.registeredCourses ?? 0,
     unknownCreditCourses: thisTerm?.unknownCreditCourses ?? 0,
   };
+  const thisTimetable = myTimetable(uc, current.academicYear, current.term);
   const capSetting = uc.profile?.registration?.creditCap;
   const cap = capSetting
     ? {
@@ -1094,6 +1259,12 @@ export function getCreditSummary(uc: UniContext, args: CreditSummaryArgs): Sylla
       cap,
       registeredThisTerm,
       remainingUnderCap,
+      timetableThisTerm: {
+        term: termLabel(current.academicYear, current.term),
+        courses: thisTimetable.courses,
+        freeSlots: freeSlotsByHalf(uc, thisTimetable),
+        note: '各学期は約8週ずつの前半・後半に分かれる。termPart が「後期前半」「後期後半」の科目はその期間だけ、「後期（前半・後半）」は学期を通して授業がある。freeSlots は平日1〜5限のうち登録済みの科目が無いコマ（月3 = 月曜3限）。',
+      },
       terms: shown.map((r) => {
         const g = gradeTerms.get(r.key);
         return {

@@ -55,6 +55,29 @@ export const CourseSchema = z.object({
   credits: z.number().optional(),
 });
 
+/**
+ * Half of a term (前半 / 後半, about 8 class weeks each). Universities such as Shizuoka split each
+ * 前期 / 後期 into halves; a course meets in one of them or in both.
+ */
+export const TermHalfSchema = z.enum(['前半', '後半']);
+export type TermHalf = z.infer<typeof TermHalfSchema>;
+
+/**
+ * Fact predicate on a course offering: the half of the term each timetable slot meets in, as the
+ * academic system prints it per slot (「前期前半/金5・6, 前期後半/金5・6」). Value: TermSlotsValue.
+ */
+export const TERM_SLOTS_PREDICATE = 'term_slots';
+export const TermSlotsValueSchema = z.object({
+  slots: z.array(
+    z.object({
+      half: TermHalfSchema,
+      dayOfWeek: z.number().int().min(0).max(6),
+      period: z.number().int().positive().optional(),
+    }),
+  ),
+});
+export type TermSlotsValue = z.infer<typeof TermSlotsValueSchema>;
+
 export const ScheduleSlotSchema = z.object({
   /** 0 = Sunday ... 6 = Saturday */
   dayOfWeek: z.number().int().min(0).max(6),
@@ -63,6 +86,8 @@ export const ScheduleSlotSchema = z.object({
   endTime: LocalTimeSchema.optional(),
   room: z.string().optional(),
   locationId: idSchema('location').optional(),
+  /** Halves of the term this slot meets in, when the source says so per slot (overrides the offering's). */
+  termParts: z.array(TermHalfSchema).optional(),
 });
 export type ScheduleSlot = z.infer<typeof ScheduleSlotSchema>;
 
@@ -84,6 +109,12 @@ export const CourseOfferingSchema = z.object({
    * class sessions; absent means regular when `schedule` is non-empty.
    */
   scheduleType: z.enum(['regular', 'unscheduled', 'intensive']).optional(),
+  /**
+   * Halves of the term (前半 / 後半) the offering meets in, as the source states it (e.g. the
+   * syllabus 開講時期 「後期後半」 → [後半], 「後期前半 ～ 後期後半」 → [前半, 後半]). Absent = the
+   * source does not say; consumers then treat the offering as running the whole term.
+   */
+  termParts: z.array(TermHalfSchema).optional(),
   room: z.string().optional(),
   url: z.string().optional(),
 });

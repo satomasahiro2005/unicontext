@@ -44,6 +44,19 @@ export interface ResolvedValue<T extends JsonValue = JsonValue> {
   candidates: ValueCandidate[];
 }
 
+/**
+ * Academic term of a date. Terms (前期 / 後期) may be split into halves of about 8 class weeks
+ * (前半 / 後半); `part` names the half the date is in (e.g. 後期前半).
+ */
+export interface TermOfDate {
+  id: string;
+  name: string;
+  /** e.g. 後期前半; absent when the term has no halves or the date is outside both. */
+  part?: string | undefined;
+  /** Switch-over weeks: which half a class is in depends on its weekday. */
+  partNote?: string | undefined;
+}
+
 export interface ClassItem extends Cited {
   sessionId: string;
   course: CourseRef;
@@ -57,6 +70,11 @@ export interface ClassItem extends Cited {
   note: string | undefined;
   /** class = a meeting of the course; self_study = the student's own study slot (自習). */
   sessionKind: 'class' | 'self_study';
+  /**
+   * Halves of the term the course meets in: 後期前半 / 後期後半 (half-term course, about 8 weeks)
+   * or 後期（前半・後半） (whole term). Absent when no source states it.
+   */
+  termPart?: string | undefined;
   /** One-line explanation with the source, e.g. "2限 データベースシステム論 / 教室: 21教室（根拠: 学務情報システム 10/1 09:42取得）". */
   summary: string;
 }
@@ -324,8 +342,8 @@ export interface DayContext<V extends 'today' | 'tomorrow'> extends BundleBase<V
   importantAnnouncements: AnnouncementItem[];
   preparation: PreparationItem[];
   conflicts: ConflictItem[];
-  /** Current term of the academic calendar, if the date is inside one. */
-  term?: { id: string; name: string } | undefined;
+  /** Current term (and half: 前半 / 後半) of the academic calendar, if the date is inside one. */
+  term?: TermOfDate | undefined;
   /** Why there are no classes (学期外, 未登録, 祝日 …) when `classes` is empty. */
   noClassesReason?: string | undefined;
 }
@@ -378,7 +396,7 @@ export interface WeekContext extends BundleBase<'week'> {
   from: string;
   to: string;
   days: { date: string; classes: ClassItem[]; noClassesReason?: string | undefined }[];
-  term?: { id: string; name: string } | undefined;
+  term?: TermOfDate | undefined;
   deadlines: DeadlineItem[];
   exams: DeadlineItem[];
   changes: ChangeItem[];
@@ -391,13 +409,26 @@ export interface WeekContext extends BundleBase<'week'> {
 export interface CourseContext extends BundleBase<'course'> {
   course: CourseRef;
   instructors: string[];
-  schedule: { dayOfWeek: number; period: number | undefined; room: string | undefined }[];
+  schedule: {
+    dayOfWeek: number;
+    period: number | undefined;
+    room: string | undefined;
+    /** Half of the term this slot meets in when it differs between slots (後期前半 …). */
+    termPart?: string | undefined;
+  }[];
   /** regular (weekly), unscheduled (時間割外) or intensive (集中講義). */
   scheduleType: 'regular' | 'unscheduled' | 'intensive';
   /** Academic year / term label and the profile term id when known. */
   academicYear: number | undefined;
   term: string | undefined;
   termId: string | undefined;
+  /**
+   * Halves of the term the course meets in: 後期前半 / 後期後半 (about 8 weeks) or 後期（前半・後半）;
+   * absent when no source states it (then it runs the whole term).
+   */
+  termPart?: string | undefined;
+  /** Where termPart comes from (学務情報システム per-slot text, or the syllabus 開講時期). */
+  termPartCitations?: Citation[] | undefined;
   /** The student is enrolled (the academic system lists it as theirs). */
   enrolled: boolean;
   /** 再履修 class. */

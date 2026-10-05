@@ -11,4 +11,5 @@ export * from './profile.js';
 export * from './ai.js';
 export * from './secrets.js';
 export * from './academic-calendar.js';
+export * from './term-parts.js';
 export * from './importance.js';

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { ConfigError, NotFoundError } from './errors.js';
+import { TERM_HALVES } from './term-parts.js';
 
 const HHMM = z.string().regex(/^\d{1,2}:\d{2}$/, 'expected HH:MM');
 
@@ -16,6 +17,24 @@ export type PeriodDefinition = z.infer<typeof PeriodSchema>;
 
 const YMD = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD');
 const DateRangeSchema = z.object({ start: YMD, end: YMD });
+
+/**
+ * One half of a term (前半 / 後半, about 8 class weeks each). Courses that meet in one half only
+ * get classes inside it. Holidays shift the boundary per weekday (the 8th Monday class may come
+ * after the 9th Thursday class), so `weekdays` gives each timetable weekday's own first and last
+ * class day of the half; days not listed fall back to `start`/`end`.
+ */
+export const TermPartDefinitionSchema = z.object({
+  half: z.enum(TERM_HALVES),
+  /** Label as the academic system writes it (e.g. 後期前半). */
+  name: z.string(),
+  /** First … last class day of this half on any weekday, inclusive. */
+  start: YMD,
+  end: YMD,
+  /** Per timetable weekday (0 = Sunday … 6 = Saturday, after 振替): its own first … last class day. */
+  weekdays: z.record(z.string().regex(/^[0-6]$/), DateRangeSchema).optional(),
+});
+export type TermPartDefinition = z.infer<typeof TermPartDefinitionSchema>;
 
 export const TermDefinitionSchema = z.object({
   id: z.string(),
@@ -31,6 +50,8 @@ export const TermDefinitionSchema = z.object({
   classes: DateRangeSchema.optional(),
   /** Exam period (定期試験 incl. 予備日), inclusive. No regular classes are generated in it. */
   exams: DateRangeSchema.optional(),
+  /** 前半 / 後半 when the university splits the term into halves. */
+  parts: z.array(TermPartDefinitionSchema).optional(),
 });
 export type TermDefinition = z.infer<typeof TermDefinitionSchema>;
 
