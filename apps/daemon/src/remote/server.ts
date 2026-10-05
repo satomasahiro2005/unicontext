@@ -387,6 +387,14 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       const info = infoOf(request);
       const check = oauth.checkAccessToken(bearerToken(request.headers.authorization));
       if (!check.ok) {
+        audit({
+          event: 'mcp_rejected',
+          method: request.method,
+          error: check.error,
+          description: check.description,
+          bearer: Boolean(request.headers.authorization),
+          ip: info.ip,
+        });
         return reply
           .code(check.error === 'insufficient_scope' ? 403 : 401)
           .header(
@@ -400,6 +408,9 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
           .send({ error: check.error, error_description: check.description });
       }
       if (!mcpLimiter.hit(check.grantId)) return tooMany(reply, mcpLimiter, check.grantId);
+      const rpc = (request.body as { method?: unknown } | undefined)?.method;
+      if (typeof rpc === 'string' && rpc !== 'tools/call')
+        audit({ event: 'mcp', method: rpc, clientId: check.clientId, scope: check.scope, ip: info.ip });
       // hijack() bypasses Fastify's header handling: copy what the hooks set onto the raw response.
       for (const [k, v] of Object.entries(reply.getHeaders()))
         if (v !== undefined) reply.raw.setHeader(k, v as string);

@@ -286,6 +286,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
       name: MCP_SERVER_NAME,
       title: 'UniContext',
       version: deps.version ?? DEFAULT_MCP_VERSION,
+      description: '大学の時間割・課題・お知らせ・講義録を出典つきでまとめて渡す / One student’s university life, with sources',
+      websiteUrl: 'https://github.com/satomasahiro2005/unicontext',
       ...(deps.icons ? { icons: deps.icons } : {}),
     },
     {
