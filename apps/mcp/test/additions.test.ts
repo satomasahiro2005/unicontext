@@ -11,6 +11,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createMcpServer,
   ProposalStore,
+  RECORDING_INSTRUCTION_EN,
+  RECORDING_INSTRUCTION_JA,
   REMOTE_SERVER_INSTRUCTIONS,
   REMOTE_WRITE_SERVER_INSTRUCTIONS,
   type McpDeps,
@@ -20,6 +22,7 @@ import {
 /* The record tools over the in-memory MCP transport, on the local and the remote surface. */
 
 const WRITE_TOOL_NAMES = [
+  'ingest_lecture',
   'record_lecture',
   'add_deadline',
   'add_note',
@@ -418,5 +421,240 @@ describe('registrations from any chat are shared with every client and session',
     const reader = await connect({ surface: 'remote', client: { id: 'ro-notes' } });
     const t = (await reader.listTools()).tools.find((x) => x.name === 'get_notes');
     expect(t?.annotations?.readOnlyHint).toBe(true);
+  });
+});
+
+describe('ingest_lecture: one call for a whole lecture recording', () => {
+  const writer = (id: string) => ({
+    surface: 'remote' as const,
+    allowWrite: true,
+    client: { id, name: 'ChatGPT' },
+  });
+  type Ingested = {
+    outcome: string;
+    ingestionId: string;
+    course: { id: string; title: string };
+    lectureDate: string;
+    period?: number;
+    counts: Record<string, number>;
+    lecture: Record<string, unknown> & { status: string; additionId?: string };
+    items: (Record<string, unknown> & {
+      type: string;
+      status: string;
+      title: string;
+      dueText?: string;
+      error?: { code: string; message: string };
+      conflicts?: unknown[];
+    })[];
+    answerHint: string;
+  };
+  const transcript = {
+    lectureDate: '2026-11-09',
+    summary: 'シーケンス図とメッセージの種類。同期と非同期の違い。',
+    keyPoints: ['シーケンス図', '同期メッセージ'],
+    segments: [{ at: '01:02:03', text: '来週の金曜までにシーケンス図を1枚出してください' }],
+    recordingRef: 'chatgpt-record:conv-ingest-1',
+    deadlines: [
+      {
+        key: 'sequence-diagram',
+        title: 'シーケンス図の提出',
+        dueAt: '来週の金曜',
+        kind: 'assignment',
+        evidence: '来週の金曜までにシーケンス図を1枚出してください',
+        recordingTimestamp: '01:02:03',
+      },
+      {
+        title: 'レポート課題2',
+        dueAt: '12月11日',
+        kind: 'report',
+        evidence: 'レポート課題2は12月11日まで延ばします',
+        recordingTimestamp: '01:05:00',
+      },
+    ],
+    tasks: [
+      {
+        title: 'astahをインストールする',
+        evidence: 'astahを入れておいてください',
+        recordingTimestamp: '01:06:00',
+      },
+    ],
+    notes: [
+      {
+        title: '出席の取り方',
+        text: '出席は授業の最後に出す小レポートで取る',
+        evidence: '出席は最後の小レポートで取ります',
+        recordingTimestamp: '00:01:30',
+      },
+    ],
+  };
+
+  it('is a write tool with honest hints, an assertive description and the documented schema', async () => {
+    const client = await connect(writer('oauth-ingest-meta'));
+    const tools = new Map((await client.listTools()).tools.map((x) => [x.name, x]));
+    const t = tools.get('ingest_lecture');
+    expect(t?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+    expect(t?.outputSchema).toBeDefined();
+    expect(t?.description).toContain(
+      '講義の録音・文字起こし（ChatGPT Record など）が入力として与えられ、科目と日付を合理的に特定できる場合は、ユーザーから保存依頼がなくても ingest_lecture を呼ぶ',
+    );
+    expect(t?.description).toMatch(/ユーザーに確かめない/);
+    expect(t?.description).toMatch(/聞き直さない/);
+    expect(t?.description).toMatch(/文字起こしをそのまま入れない/);
+    expect(t?.description).toMatch(/他の学生どうしの会話は入れない/);
+    expect(t?.description).toMatch(/次の授業があるというだけでは締切にしない/);
+    expect(t?.description).toMatch(/call ingest_lecture even if the user did not ask/);
+    expect(t?.description).not.toMatch(/\bmay\b|consider/i);
+    const props = Object.keys((t?.inputSchema as { properties: object }).properties);
+    expect(props).toEqual(
+      expect.arrayContaining([
+        'course',
+        'lectureDate',
+        'period',
+        'summary',
+        'keyPoints',
+        'segments',
+        'recordingRef',
+        'source',
+        'deadlines',
+        'tasks',
+        'notes',
+      ]),
+    );
+    expect((t?.inputSchema as { required?: string[] }).required).toEqual(['summary']);
+    // The single tools point recordings at ingest_lecture; chat registrations keep their wording.
+    for (const name of ['record_lecture', 'add_deadline', 'add_task', 'add_note'])
+      expect(tools.get(name)?.description, name).toContain('ingest_lecture');
+    expect(tools.get('add_deadline')?.description).toContain(
+      'ユーザーが頼んでいなくても、UniContextにまだない締切が話に出たら登録を提案する',
+    );
+    expect(client.getInstructions()).toContain(RECORDING_INSTRUCTION_JA);
+    expect(client.getInstructions()).toContain(RECORDING_INSTRUCTION_EN);
+    const local = await connect();
+    expect(local.getInstructions()).toContain(RECORDING_INSTRUCTION_JA);
+  });
+
+  it('rejects input outside the schema before writing anything', async () => {
+    const client = await connect(writer('oauth-ingest-schema'));
+    const tooMany = await call(client, 'ingest_lecture', {
+      ...transcript,
+      deadlines: Array.from({ length: 11 }, (_, i) => ({
+        title: `d${i}`,
+        dueAt: '次回',
+        kind: 'prep',
+        evidence: 'x',
+      })),
+    });
+    expect(tooMany.isError).toBe(true);
+    const noSummary = await call(client, 'ingest_lecture', { ...transcript, summary: '' });
+    expect(noSummary.isError).toBe(true);
+    const badKey = await call(client, 'ingest_lecture', {
+      ...transcript,
+      tasks: [{ key: 'a b', title: 'x', evidence: 'x' }],
+    });
+    expect(badKey.isError).toBe(true);
+    expect(uc.additions.listFor({ id: 'oauth-ingest-schema' })).toEqual([]);
+  });
+
+  it('stores everything, reports per part and conflicts, and other clients read it', async () => {
+    const client = await connect(writer('oauth-ingest-e2e'));
+    events.length = 0;
+    // No course: Monday 2限 on 11-16 is ソフトウェア工学.
+    const res = await call(client, 'ingest_lecture', transcript);
+    expect(res.isError, JSON.stringify(res.content)).toBeFalsy();
+    const out = res.structuredContent as unknown as Ingested;
+    expect(out).toMatchObject({
+      outcome: 'stored',
+      course: { id: MON, title: 'ソフトウェア工学' },
+      lectureDate: '2026-11-09',
+      period: 2,
+      counts: { created: 5, updated: 0, unchanged: 0, failed: 0 },
+      lecture: { type: 'lecture', status: 'created' },
+    });
+    expect(out.ingestionId).toMatch(/^ingestion:/);
+    expect(out.items.map((x) => [x.type, x.status])).toEqual([
+      ['deadline', 'created'],
+      ['deadline', 'created'],
+      ['task', 'created'],
+      ['note', 'created'],
+    ]);
+    expect(out.items[0]).toMatchObject({ key: 'sequence-diagram', dueText: '11/20 23:59' });
+    expect(out.items[1]).toMatchObject({ attachedTo: { id: LCU_REPORT } });
+    expect(out.items[1]?.conflicts).toHaveLength(1);
+    expect(out.answerHint).toContain('講義「ソフトウェア工学 11/9 2限」の記録を保存しました');
+    expect(out.answerHint).toContain('締切2件・やること1件・メモ1件');
+    expect(out.answerHint).toContain('11/20 23:59');
+    expect(out.answerHint).toContain('食い違う');
+    // Audit: one event, ids only.
+    const e = events.find((x) => x.tool === 'ingest_lecture');
+    expect(e).toMatchObject({
+      ok: true,
+      write: { status: 'stored', additionId: out.lecture.additionId },
+    });
+    expect(JSON.stringify(e)).not.toContain('シーケンス図');
+
+    // list_my_additions by ingestion.
+    const mine = await call(client, 'list_my_additions', { ingestionId: out.ingestionId });
+    const listed = (mine.structuredContent as { additions: { ingestionId: string }[] }).additions;
+    expect(listed).toHaveLength(5);
+    expect(listed.every((a) => a.ingestionId === out.ingestionId)).toBe(true);
+
+    // A read-only claude.ai session sees all of it.
+    const reader = await connect({ surface: 'remote', client: { id: 'claude-ro-ingest' } });
+    const read = async (name: string, args: Record<string, unknown> = {}): Promise<string> => {
+      const r = await call(reader, name, args);
+      expect(r.isError, `${name}: ${JSON.stringify(r.content)}`).toBeFalsy();
+      return JSON.stringify(r.structuredContent);
+    };
+    expect(await read('get_deadlines')).toContain('シーケンス図の提出');
+    expect(await read('get_tasks')).toContain('astahをインストールする');
+    expect(await read('get_notes', { course: 'ソフトウェア工学' })).toContain('出席の取り方');
+    expect(await read('get_conflicts')).toContain('レポート課題2');
+    const review = await read('review_class', { courseOfferingId: MON, date: '2026-11-09' });
+    expect(review).toContain('同期メッセージ');
+    expect(review).toContain('01:02:03');
+
+    // The same call again: nothing new.
+    const again = await call(client, 'ingest_lecture', transcript);
+    const out2 = again.structuredContent as unknown as Ingested;
+    expect(out2.outcome).toBe('unchanged');
+    expect(out2.counts).toMatchObject({ created: 0, updated: 0, unchanged: 5, failed: 0 });
+    expect(out2.answerHint).toContain('二重には登録していません');
+    expect(uc.additions.listFor({ id: 'oauth-ingest-e2e' })).toHaveLength(5);
+  });
+
+  it('a failing part is reported and the rest is stored', async () => {
+    const client = await connect(writer('oauth-ingest-partial'));
+    const res = await call(client, 'ingest_lecture', {
+      course: 'ソフトウェア工学',
+      lectureDate: '2026-11-02',
+      summary: '状態遷移図',
+      deadlines: [
+        {
+          title: '状態遷移図の課題',
+          dueAt: 'いつか',
+          kind: 'assignment',
+          evidence: 'いつか出して',
+        },
+      ],
+      tasks: [{ title: '状態遷移図を見直す', evidence: '見直しておいてください' }],
+    });
+    expect(res.isError).toBeFalsy();
+    const out = res.structuredContent as unknown as Ingested;
+    expect(out.outcome).toBe('partial');
+    expect(out.counts).toMatchObject({ created: 2, failed: 1 });
+    expect(out.items[0]).toMatchObject({ status: 'failed', error: { code: 'validation' } });
+    expect(out.items[1]).toMatchObject({ status: 'created' });
+    expect(out.answerHint).toContain('保存できなかった項目: 締切「状態遷移図の課題」');
+  });
+
+  it('is not registered without unicontext.write', async () => {
+    const client = await connect({ surface: 'remote', client: { id: 'ro-ingest' } });
+    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('ingest_lecture');
+    expect((await call(client, 'ingest_lecture', transcript)).isError).toBe(true);
   });
 });

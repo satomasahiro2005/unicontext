@@ -5,6 +5,8 @@ export {
   DEFAULT_MCP_VERSION,
   HOW_TO_CONFIRM,
   MCP_SERVER_NAME,
+  RECORDING_INSTRUCTION_EN,
+  RECORDING_INSTRUCTION_JA,
   REMOTE_SERVER_INSTRUCTIONS,
   REMOTE_WRITE_SERVER_INSTRUCTIONS,
   SERVER_INSTRUCTIONS,
@@ -44,4 +46,11 @@ export {
   SYLLABUS_CONNECTOR,
   type SyllabusToolOutput,
 } from './syllabus.js';
-export { WRITE_TOOLS, compactAddition, writeOutput } from './additions.js';
+export {
+  compactAddition,
+  INGEST_RESULT_SHAPE,
+  ingestLectureShape,
+  ingestOutput,
+  WRITE_TOOLS,
+  writeOutput,
+} from './additions.js';

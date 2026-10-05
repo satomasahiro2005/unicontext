@@ -25,7 +25,7 @@ import {
 
 export const READ_SCOPE = 'unicontext.read';
 /**
- * Adds the record tools (record_lecture, add_deadline, add_note, add_task …): writes into
+ * Adds the record tools (ingest_lecture, record_lecture, add_deadline, add_note, add_task …): writes into
  * UniContext's own database only. Granted only when the owner ticks it on the consent page.
  */
 export const WRITE_SCOPE = 'unicontext.write';

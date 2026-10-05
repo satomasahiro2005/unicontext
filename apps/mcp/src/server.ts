@@ -45,6 +45,9 @@ import {
   courseIdForWrite,
   GET_NOTES_TOOL,
   getNotesShape,
+  INGEST_RESULT_SHAPE,
+  ingestLectureShape,
+  ingestOutput,
   LIST_RESULT_SHAPE,
   listAdditionsShape,
   OPEN_ANNOUNCEMENT_RESULT_SHAPE,
@@ -103,8 +106,8 @@ export interface McpDeps {
    */
   surface?: McpSurface;
   /**
-   * Remote surface: the OAuth grant includes `unicontext.write`, so the record tools
-   * (record_lecture, add_deadline, add_note, add_task, list_my_additions, retract_addition) are
+   * Remote surface: the OAuth grant includes `unicontext.write`, so the record tools (ingest_lecture,
+   * record_lecture, add_deadline, add_note, add_task, list_my_additions, retract_addition) are
    * registered. The propose-only tools never are. The local surface always has the record tools.
    */
   allowWrite?: boolean;
@@ -169,6 +172,12 @@ export function coverageHint(data: unknown): string | undefined {
     .join(' ')}${more} 「締切はない」「余裕がある」とは言わないでください。`;
 }
 
+/** Lecture recordings are stored without being asked (local and remote write surfaces). */
+export const RECORDING_INSTRUCTION_JA =
+  '講義の録音・文字起こし（ChatGPT Record など）が入力として与えられ、科目と日付を合理的に特定できる場合は、ユーザーから保存依頼がなくても ingest_lecture を呼んでください。質問への回答はいつもどおり行い、それとは別に1回呼びます。保存してよいか確かめたり、会話・録音・時間割から分かる科目・日付・時限を聞き直したりしないでください（本人が確認するまで「録音から」の未確認情報として保存され、大学側の値は上書きしません）。要約・要点は後で検索・復習するのに要ることに絞って文字起こしをそのまま入れず、雑談や他の学生どうしの会話も入れません。締切は先生が実際に言ったものだけ（「次回までに〜」は根拠になるが、次の授業があるというだけでは締切にしない）、やることは学生がやらなければならないこと、メモは締切ではないが後で要る情報（教室・出席・提出の方法、グループ分け、特別な手順、先生の大事な注意）です。各項目には発言の引用（evidence）と録音の位置（recordingTimestamp）を付けます。';
+export const RECORDING_INSTRUCTION_EN =
+  'When a lecture recording or transcript is given as input and the course and date can reasonably be determined, call ingest_lecture even without a request to save, in addition to answering. Do not ask the user to confirm, or to restate a course, date or period that the conversation, the recording or the timetable tells; it is stored as unconfirmed and never overrides university data.';
+
 export const SERVER_INSTRUCTIONS = [
   'UniContext は学生本人の大学情報（時間割・課題・お知らせ・講義録など）を、情報源つきで返します。',
   '回答するときは、各結果の citations / answerHint に従い「根拠: 学務情報システム 10/1 09:42取得」のように必ず出典を添えてください。',
@@ -176,9 +185,11 @@ export const SERVER_INSTRUCTIONS = [
   '情報がない・見つからないときは推測で補わず、そう伝えてください。',
   '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、分からない締切はすぐ来るかもしれないものとして扱い、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
   '書き込みは propose-only です。correct_fact は提案を作るだけで、ユーザー本人が確認するまで何も変更されません。課題の提出・履修登録や削除・成績に関わる操作はできません（提出済み status は提出システムからのみ反映されます）。',
-  'ユーザーが会話の中で言った締切・試験の日程・やること・覚えておきたいこと（例「レポートの締切10/20って登録しといて」）や、ユーザーと一緒に決めた勉強のTODOは add_deadline / add_task / add_note で、講義の録音で聞いたことは record_lecture などで、UniContextに登録できます。登録した内容は他の会話・クライアントからも get_today・get_week・get_deadlines・get_tasks・get_notes で見えます（大学のシステムには送られず、「チャットで登録」「録音から」と表示され、大学側の値は上書きしません）。',
+  'ユーザーが会話の中で言った締切・試験の日程・やること・覚えておきたいこと（例「レポートの締切10/20って登録しといて」）や、ユーザーと一緒に決めた勉強のTODOは add_deadline / add_task / add_note で、UniContextに登録できます。登録した内容は他の会話・クライアントからも get_today・get_week・get_deadlines・get_tasks・get_notes で見えます（大学のシステムには送られず、「チャットで登録」「録音から」と表示され、大学側の値は上書きしません）。',
+  RECORDING_INSTRUCTION_JA,
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only. Deadlines, to-dos and notes the student mentions in any chat can be registered with add_deadline / add_task / add_note so every other session sees them; they never override a university system.',
+  RECORDING_INSTRUCTION_EN,
 ].join('\n');
 
 /** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */
@@ -202,10 +213,12 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、分からない締切はすぐ来るかもしれないものとして扱い、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
   'どの会話でも、ユーザーが締切・試験の日程（例「レポートの締切10/20って登録しといて」「来週の金曜に小テスト」）、やること、覚えておきたいことを言ったら、add_deadline・add_task・add_note で登録してください。ユーザーと一緒に立てた勉強計画のTODOも add_task で登録できます。科目に関係ないものは course を省略します。',
   '登録した内容は、ChatGPTの他の会話やClaudeなど、UniContextにつながる全てのセッションから get_today・get_week・get_deadlines・get_tasks・get_course・get_notes で見えます。登録の前に get_deadlines などで既にあるか確かめると二重登録を避けられます（同じ科目・題名・近い締切は自動で1件にまとまります）。',
-  'evidence にはユーザーの言葉をそのまま引用してください。締切は言われたままの表現（10月20日17時・来週の金曜など）でよく、解決した日時が返るのでユーザーに伝えてください。講義の録音で聞いたことは via=recording とし、recordingTimestamp に録音の位置を入れます（record_lecture は講義の要約・要点）。',
+  'evidence にはユーザーの言葉をそのまま引用してください。締切は言われたままの表現（10月20日17時・来週の金曜など）でよく、解決した日時が返るのでユーザーに伝えてください。',
+  RECORDING_INSTRUCTION_JA,
   '保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
   'Register deadlines, to-dos and notes the student mentions or plans in any chat (add_deadline / add_task / add_note) so every other session and client sees them. Writes go to UniContext only (never to a university system) and cannot change authoritative data, task status or grades.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, treat unknown deadlines as possibly imminent, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
+  RECORDING_INSTRUCTION_EN,
 ].join('\n');
 
 // ---------- shared plumbing ----------
@@ -976,6 +989,40 @@ export function createMcpServer(deps: McpDeps): McpServer {
 
   // ----- record tools: deadlines, to-dos and notes from any chat or a recording, UniContext only -----
 
+  writeTool(
+    'ingest_lecture',
+    { outputShape: INGEST_RESULT_SHAPE },
+    ingestLectureShape,
+    async (a) => {
+      const r = await uc.additions.ingestLecture(caller(), {
+        courseOfferingId: courseIdForWrite(uc, a.course),
+        lectureDate: a.lectureDate,
+        period: a.period,
+        title: a.title,
+        summary: a.summary,
+        keyPoints: a.keyPoints,
+        segments: a.segments,
+        recordingRef: a.recordingRef,
+        source: a.source,
+        deadlines: a.deadlines,
+        tasks: a.tasks,
+        notes: a.notes,
+      });
+      const ropts = redactionOptions(uc);
+      const structured = ingestOutput(r, (s) => redact(s, ropts) as string);
+      const parts = [r.lecture, ...r.items];
+      return {
+        structured,
+        write: {
+          status: String(structured.outcome),
+          additionId: r.lecture.result?.addition.id ?? '',
+          entityIds: [...new Set(parts.flatMap((x) => x.result?.audit.entityIds ?? []))],
+          factIds: [...new Set(parts.flatMap((x) => x.result?.audit.factIds ?? []))],
+        },
+      };
+    },
+  );
+
   writeTool('record_lecture', { outputShape: WRITE_RESULT_SHAPE }, recordLectureShape, async (a) =>
     written(
       await uc.additions.recordLecture(caller(), {
@@ -1055,6 +1102,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const list = uc.additions.listFor(caller(), {
         ...(statuses ? { statuses } : {}),
         ...(a.limit ? { limit: a.limit } : {}),
+        ...(a.ingestionId ? { ingestionId: a.ingestionId } : {}),
       });
       return {
         structured: {

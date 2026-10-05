@@ -18,7 +18,9 @@ import {
 import {
   addLocalDays,
   type Clock,
+  errorMessage,
   formatShortJa,
+  isUniContextError,
   NotFoundError,
   parseZonedDate,
   PolicyViolationError,
@@ -107,6 +109,22 @@ export const ADDITION_LIMITS = {
   idempotencyKey: 128,
 } as const;
 
+/**
+ * Bounds of one ingest_lecture call: one lecture plus at most `items` deadlines, to-dos and notes
+ * (each kind at most its own bound). Every stored item still counts as one write against
+ * {@link ADDITION_RATE_LIMITS} (perTenMinutes / perDay); the call itself counts once against
+ * `burstPerMinute`. A full call is 1 + 20 = 21 writes, inside the 30 per 10 minutes.
+ */
+export const INGEST_LIMITS = {
+  deadlines: 10,
+  tasks: 10,
+  notes: 10,
+  items: 20,
+  noteText: 4000,
+  recordingRef: 100,
+  itemKey: 40,
+} as const;
+
 /** Per-client write budget. */
 export const ADDITION_RATE_LIMITS = {
   /** writes (created/updated additions) per 10 minutes */
@@ -180,6 +198,90 @@ export interface AddTaskInput extends Common {
   evidence?: string | undefined;
 }
 
+/** Fields every item of an ingest_lecture call carries: it was said in the recording. */
+interface IngestItemBase {
+  /**
+   * Stable name of the item inside this recording (`report-2`, `quiz-uml`); with `recordingRef`
+   * it makes the item's idempotency key. Default: the normalized title.
+   */
+  key?: string | undefined;
+  /** Verbatim quote of what was said. */
+  evidence: string;
+  recordingTimestamp?: string | undefined;
+}
+
+export interface IngestDeadline extends IngestItemBase {
+  title: string;
+  dueAt: string;
+  kind: DeadlineKind;
+  notes?: string | undefined;
+}
+
+export interface IngestTask extends IngestItemBase {
+  title: string;
+  dueAt?: string | undefined;
+  notes?: string | undefined;
+}
+
+export interface IngestNote extends IngestItemBase {
+  title?: string | undefined;
+  text: string;
+}
+
+/**
+ * One lecture recording / transcript processed at once (ingest_lecture): the lecture itself plus
+ * the deadlines, to-dos and notes said in it. Every part is written through the same path as
+ * record_lecture / add_deadline / add_task / add_note with via=recording.
+ */
+export interface IngestLectureInput {
+  /** Omitted: the one class of the timetable on `lectureDate` (and `period`). */
+  courseOfferingId?: string | undefined;
+  /** YYYY-MM-DD; default today. Anchor of relative due dates. */
+  lectureDate?: string | undefined;
+  period?: number | undefined;
+  title?: string | undefined;
+  summary: string;
+  keyPoints?: string[] | undefined;
+  segments?: RecordLectureInput['segments'];
+  /**
+   * Client-side id of the recording / conversation (`chatgpt-record:<conversation-id>`). Item keys
+   * are derived from it (`<ref>:lecture`, `<ref>:deadline:<key>` …), so processing the same
+   * recording again updates or replays instead of adding. Without it, the content-based dedupe of
+   * the single tools applies.
+   */
+  recordingRef?: string | undefined;
+  source?: string | undefined;
+  deadlines?: IngestDeadline[] | undefined;
+  tasks?: IngestTask[] | undefined;
+  notes?: IngestNote[] | undefined;
+}
+
+export type IngestItemType = 'lecture' | 'deadline' | 'task' | 'note';
+
+export interface IngestItemResult {
+  type: IngestItemType;
+  /** Position in its input array (lecture: 0). */
+  index: number;
+  title: string;
+  /** The item's stable name (given or derived from the title). */
+  key: string | undefined;
+  /** The idempotency key used (derived from recordingRef), if any. */
+  idempotencyKey: string | undefined;
+  result?: AdditionResult;
+  error?: { code: string; message: string };
+}
+
+export interface IngestLectureResult {
+  /** Carried by every addition of this recording (per client and recording). */
+  ingestionId: string;
+  course: { id: string; title: string };
+  lectureDate: string;
+  period: number | undefined;
+  recordingRef: string | undefined;
+  lecture: IngestItemResult;
+  items: IngestItemResult[];
+}
+
 export type AdditionWriteStatus =
   'created' | 'updated' | 'duplicate' | 'replayed' | 'retracted' | 'confirmed' | 'rejected';
 
@@ -201,6 +303,8 @@ export interface AdditionView {
   dueResolution: JsonValue | undefined;
   evidence: string | undefined;
   recordingTimestamp: string | undefined;
+  /** Every addition stored by one ingest_lecture call (one recording) shares it. */
+  ingestionId: string | undefined;
   source: string;
   client: { id: string; name: string | undefined };
   /** Ids written for this addition (lecture/transcript/segments/assignment/exam/document/task). */
@@ -265,6 +369,35 @@ interface Applied {
   factIds: string[];
   stored: Record<string, JsonValue>;
   attachedTo?: string;
+}
+
+/** What one write stores (built by the record_lecture / add_* paths, shared with ingest). */
+interface WriteSpec {
+  tool: AdditionTool;
+  kind: AdditionKind;
+  input: Common;
+  via: AdditionVia;
+  course: string | undefined;
+  title: string;
+  dedupeKey: string;
+  dueAt: string | undefined;
+  data: Record<string, JsonValue>;
+  apply: (a: Addition, ref: SourceReference) => Applied;
+}
+
+interface WriteOptions {
+  /** Count this write against the per-minute call burst (default true; ingest counts once). */
+  burst?: boolean;
+  /** Run the pipeline after the write (default true; ingest runs it once at the end). */
+  pipeline?: boolean;
+  /**
+   * Ingest with a recordingRef: `key` is the derived idempotency key and `hash` the item's
+   * content. The same key with the same content is replayed; with other content it updates that
+   * same (unconfirmed, own) addition, so a re-processed recording never adds a second one.
+   */
+  keyed?: { key: string; hash: string };
+  /** Extra data kept on the addition (recordingRef). */
+  extra?: Record<string, JsonValue>;
 }
 
 function normTitle(s: string): string {
@@ -376,6 +509,226 @@ export class AdditionsService {
   // ---------- public API: AI clients ----------
 
   async recordLecture(client: AdditionClient, input: RecordLectureInput): Promise<AdditionResult> {
+    return this.write(client, this.lectureSpec(input));
+  }
+
+  async addDeadline(client: AdditionClient, input: AddDeadlineInput): Promise<AdditionResult> {
+    return this.write(client, this.deadlineSpec(input));
+  }
+
+  async addNote(client: AdditionClient, input: AddNoteInput): Promise<AdditionResult> {
+    return this.write(client, this.noteSpec(input));
+  }
+
+  async addTask(client: AdditionClient, input: AddTaskInput): Promise<AdditionResult> {
+    return this.write(client, this.taskSpec(input));
+  }
+
+  /**
+   * One lecture recording at once (ingest_lecture): the lecture, then each deadline, to-do and
+   * note, every one through the same write path as the single tools (via=recording, so the same
+   * dedupe, conflicts, relative-date resolution and rate limits). Each part succeeds or fails on
+   * its own and is reported; the pipeline runs once at the end. The call counts once against the
+   * per-minute burst, each stored part once against the write budget.
+   *
+   * Every part gets a deterministic idempotency key `<base>:lecture`, `<base>:deadline:<key>`,
+   * `<base>:task:<key>`, `<base>:note:<key>` (base = recordingRef, else a hash of course + date +
+   * period; key = the given stable name, else the normalized title, + kind for deadlines), so
+   * running the same call again — after a partial failure, or on the same recording — replays what
+   * is unchanged, updates what changed, and never adds a part twice. Every part carries the same
+   * `ingestionId` (per client and base) to find everything from one recording.
+   */
+  async ingestLecture(
+    client: AdditionClient,
+    input: IngestLectureInput,
+  ): Promise<IngestLectureResult> {
+    this.burstHit(client);
+    const deadlines = input.deadlines ?? [];
+    const tasks = input.tasks ?? [];
+    const notes = input.notes ?? [];
+    const L = INGEST_LIMITS;
+    if (deadlines.length > L.deadlines || tasks.length > L.tasks || notes.length > L.notes)
+      throw new ValidationError(
+        `at most ${L.deadlines} deadlines, ${L.tasks} tasks and ${L.notes} notes per call`,
+      );
+    if (deadlines.length + tasks.length + notes.length > L.items)
+      throw new ValidationError(
+        `at most ${L.items} deadlines, tasks and notes together per call; send the rest with another call`,
+      );
+    const ref = input.recordingRef?.trim() || undefined;
+    if (ref && ref.length > L.recordingRef)
+      throw new ValidationError(`recordingRef is longer than ${L.recordingRef} characters`);
+    const lectureDate = input.lectureDate?.trim() || this.today();
+    if (!LOCAL_DATE.test(lectureDate)) throw new ValidationError('lectureDate must be YYYY-MM-DD');
+    parseZonedDate(lectureDate, this.tz);
+    const givenCourse = input.courseOfferingId?.trim();
+    const course = givenCourse
+      ? this.requireCourse(givenCourse)
+      : this.inferCourse(lectureDate, input.period);
+    const period = input.period ?? this.lecturePeriod(course, lectureDate);
+    // Nothing left in the budget: say so once instead of failing every part.
+    this.assertBudget(client);
+
+    const base =
+      ref ?? `auto:${sha256(`${course}\u0000${lectureDate}\u0000${period ?? ''}`).slice(0, 24)}`;
+    const ingestionId = `ingestion:${sha256(`${client.id}\u0000${base}`).slice(0, 32)}`;
+    const extra: Record<string, JsonValue> = { ingestionId, ...(ref ? { recordingRef: ref } : {}) };
+    const source = input.source?.trim() || undefined;
+    const common = {
+      courseOfferingId: course,
+      via: 'recording' as const,
+      lectureDate,
+      ...(source ? { source } : {}),
+    };
+    const usedKeys = new Set<string>();
+    const run = async (
+      type: IngestItemType,
+      index: number,
+      title: string,
+      key: { given: string | undefined; derived: string },
+      spec: () => WriteSpec,
+    ): Promise<IngestItemResult> => {
+      const explicit = key.given?.trim();
+      let name = explicit || key.derived;
+      if (usedKeys.has(`${type}:${name}`)) {
+        if (explicit)
+          return {
+            type,
+            index,
+            title,
+            key: name,
+            idempotencyKey: undefined,
+            error: { code: 'validation', message: `key "${name}" is used twice in this call` },
+          };
+        let n = 2;
+        while (usedKeys.has(`${type}:${name}#${n}`)) n++;
+        name = `${name}#${n}`;
+      }
+      usedKeys.add(`${type}:${name}`);
+      const idem = this.ingestKey(base, type, name);
+      const shown = type === 'lecture' ? undefined : name;
+      try {
+        const w = spec();
+        const hash = sha256(
+          `ingest\u0000${type}\u0000${stableStringify(w.input as unknown as JsonValue)}`,
+        ).slice(0, 40);
+        const result = await this.write(client, w, {
+          burst: false,
+          pipeline: false,
+          keyed: { key: idem, hash },
+          extra,
+        });
+        return { type, index, title, key: shown, idempotencyKey: idem, result };
+      } catch (e) {
+        return {
+          type,
+          index,
+          title,
+          key: shown,
+          idempotencyKey: idem,
+          error: { code: isUniContextError(e) ? e.code : 'internal', message: errorMessage(e) },
+        };
+      }
+    };
+    const titleKey = (title: string, fallback: string): string =>
+      normTitle(title).slice(0, L.itemKey) || fallback;
+
+    let lecture: IngestItemResult | undefined;
+    const items: IngestItemResult[] = [];
+    try {
+      lecture = await run(
+        'lecture',
+        0,
+        input.title?.trim() || `${this.courseTitle(course)} ${lectureDate}`,
+        { given: undefined, derived: 'lecture' },
+        () =>
+          this.lectureSpec({
+            courseOfferingId: course,
+            date: lectureDate,
+            period,
+            title: input.title,
+            summary: input.summary,
+            keyPoints: input.keyPoints,
+            segments: input.segments,
+            via: 'recording',
+            source,
+          }),
+      );
+      for (const [i, d] of deadlines.entries())
+        items.push(
+          await run(
+            'deadline',
+            i,
+            d.title,
+            { given: d.key, derived: `${titleKey(d.title, 'deadline')}:${d.kind}` },
+            () =>
+              this.deadlineSpec({
+                ...common,
+                title: d.title,
+                dueAt: d.dueAt,
+                kind: d.kind,
+                evidence: d.evidence,
+                recordingTimestamp: d.recordingTimestamp,
+                notes: d.notes,
+              }),
+          ),
+        );
+      for (const [i, t] of tasks.entries())
+        items.push(
+          await run('task', i, t.title, { given: t.key, derived: titleKey(t.title, 'task') }, () =>
+            this.taskSpec({
+              ...common,
+              title: t.title,
+              dueAt: t.dueAt,
+              evidence: t.evidence,
+              recordingTimestamp: t.recordingTimestamp,
+              notes: t.notes,
+            }),
+          ),
+        );
+      for (const [i, n] of notes.entries()) {
+        const title = n.title?.trim() || n.text.trim().slice(0, 40);
+        items.push(
+          await run('note', i, title, { given: n.key, derived: titleKey(title, 'note') }, () => {
+            if (n.text.length > L.noteText)
+              throw new ValidationError(
+                `note text is longer than ${L.noteText} characters; keep only what is needed later`,
+              );
+            return this.noteSpec({
+              ...common,
+              title: n.title,
+              text: n.text,
+              evidence: n.evidence,
+              recordingTimestamp: n.recordingTimestamp,
+            });
+          }),
+        );
+      }
+    } finally {
+      const all = [...(lecture ? [lecture] : []), ...items];
+      if (all.some((x) => x.result?.status === 'created' || x.result?.status === 'updated')) {
+        await this.deps.runPipeline();
+        // Conflicts and tasks exist only after the pipeline: show them in the results.
+        for (const x of all) {
+          const r = x.result;
+          if (!r || (r.status !== 'created' && r.status !== 'updated')) continue;
+          const a = this.store.get(r.addition.id);
+          if (a) x.result = { ...r, addition: this.view(a), audit: this.auditOf(a) };
+        }
+      }
+    }
+    return {
+      ingestionId,
+      course: { id: course, title: this.courseTitle(course) },
+      lectureDate,
+      period,
+      recordingRef: ref,
+      lecture,
+      items,
+    };
+  }
+
+  private lectureSpec(input: RecordLectureInput): WriteSpec {
     if (!LOCAL_DATE.test(input.date)) throw new ValidationError('date must be YYYY-MM-DD');
     parseZonedDate(input.date, this.tz);
     const course = this.requireCourse(input.courseOfferingId);
@@ -383,7 +736,7 @@ export class AdditionsService {
     const period = input.period ?? session?.period;
     const title = input.title?.trim() || `${this.courseTitle(course)} ${input.date}`;
     const segments = this.segmentsOf(input);
-    return this.write(client, {
+    return {
       tool: 'record_lecture',
       kind: 'lecture',
       input,
@@ -400,16 +753,16 @@ export class AdditionsService {
         segmentCount: segments.length,
       },
       apply: (a, ref) => this.applyLecture(a, ref, input, session, period, title, segments),
-    });
+    };
   }
 
-  async addDeadline(client: AdditionClient, input: AddDeadlineInput): Promise<AdditionResult> {
+  private deadlineSpec(input: AddDeadlineInput): WriteSpec {
     const course = this.course(input.courseOfferingId);
     const title = input.title.trim();
     if (!title) throw new ValidationError('title is empty');
     const due = this.resolveDue(course, input.dueAt, input.lectureDate, input.recordingTimestamp);
     const group = deadlineGroup(input.kind);
-    return this.write(client, {
+    return {
       tool: 'add_deadline',
       kind: input.kind,
       input,
@@ -430,15 +783,15 @@ export class AdditionsService {
           : group === 'exam'
             ? this.applyExam(a, ref, course, title, input, due)
             : this.applyAssignment(a, ref, course, title, input, due),
-    });
+    };
   }
 
-  async addNote(client: AdditionClient, input: AddNoteInput): Promise<AdditionResult> {
+  private noteSpec(input: AddNoteInput): WriteSpec {
     const course = this.course(input.courseOfferingId);
     const text = input.text.trim();
     if (!text) throw new ValidationError('text is empty');
     const title = input.title?.trim() || (text.length > 40 ? `${text.slice(0, 40)}…` : text);
-    return this.write(client, {
+    return {
       tool: 'add_note',
       kind: 'note',
       input,
@@ -449,10 +802,10 @@ export class AdditionsService {
       dueAt: undefined,
       data: { text, ...(input.evidence ? { evidence: input.evidence } : {}) },
       apply: (a, ref) => this.applyNote(a, ref, course, title, text, input.lectureDate),
-    });
+    };
   }
 
-  async addTask(client: AdditionClient, input: AddTaskInput): Promise<AdditionResult> {
+  private taskSpec(input: AddTaskInput): WriteSpec {
     const course = this.course(input.courseOfferingId);
     const title = input.title.trim();
     if (!title) throw new ValidationError('title is empty');
@@ -460,7 +813,7 @@ export class AdditionsService {
       input.dueAt !== undefined && input.dueAt.trim() !== ''
         ? this.resolveDue(course, input.dueAt, input.lectureDate, input.recordingTimestamp)
         : undefined;
-    return this.write(client, {
+    return {
       tool: 'add_task',
       kind: 'task',
       input,
@@ -477,21 +830,74 @@ export class AdditionsService {
       },
       apply: (a, ref) =>
         this.applyTodo(a, ref, course, title, 'task', due?.dueAt, input.evidence, input.notes),
-    });
+    };
   }
 
-  /** The client's own additions, newest first. */
+  /**
+   * `<base>:lecture`, `<base>:deadline:<key>`, `<base>:task:<key>`, `<base>:note:<key>`; hashed
+   * when longer than the idempotency key column allows.
+   */
+  private ingestKey(base: string, type: IngestItemType, name: string): string {
+    const key = type === 'lecture' ? `${base}:lecture` : `${base}:${type}:${name}`;
+    return key.length <= ADDITION_LIMITS.idempotencyKey
+      ? key
+      : `ingest:${sha256(key).slice(0, 40)}`;
+  }
+
+  /** The one class of the timetable on that date (and period), for a lecture without a course. */
+  private inferCourse(date: string, period: number | undefined): string {
+    const sessions = this.deps.tasks.schedule
+      .sessionsBetween(date, addLocalDays(date, 1))
+      .filter((s) => s.sessionKind !== 'self_study')
+      .filter((s) => period === undefined || s.period === period);
+    const courses = [
+      ...new Set(sessions.map((s) => this.deps.identity.canonical(s.courseOfferingId))),
+    ];
+    const when = `${date}${period !== undefined ? ` ${period}限` : ''}`;
+    if (courses.length === 1 && courses[0]) return courses[0];
+    if (courses.length === 0)
+      throw new ValidationError(`no class on ${when} in the timetable: give the course`);
+    throw new ValidationError(
+      `several classes on ${when} (${courses.map((c) => this.courseTitle(c)).join(' / ')}): give the course or the period`,
+    );
+  }
+
+  /**
+   * The period of the course's class that day when none is given: its only class, or the first
+   * period of one continuous block (実験 5・6・7・8). Two separate classes of the course that day
+   * need the period, so one never overwrites the other.
+   */
+  private lecturePeriod(course: string, date: string): number | undefined {
+    const periods = [
+      ...new Set(
+        this.deps.tasks.schedule
+          .sessionsBetween(date, addLocalDays(date, 1), [course])
+          .filter((s) => s.sessionKind !== 'self_study' && s.period !== undefined)
+          .map((s) => s.period as number),
+      ),
+    ].sort((a, b) => a - b);
+    if (periods.length === 0) return undefined;
+    if (periods.every((p, i) => i === 0 || p === (periods[i - 1] as number) + 1)) return periods[0];
+    throw new ValidationError(
+      `${this.courseTitle(course)} has separate classes in periods ${periods.join(', ')} on ${date}: give the period`,
+    );
+  }
+
+  /** The client's own additions, newest first; `ingestionId`: only those of one recording. */
   listFor(
     client: AdditionClient,
-    options: { statuses?: AdditionStatus[]; limit?: number } = {},
+    options: { statuses?: AdditionStatus[]; limit?: number; ingestionId?: string } = {},
   ): AdditionView[] {
-    return this.store
-      .list({
-        clientId: client.id,
-        ...(options.statuses ? { statuses: options.statuses } : {}),
-        limit: options.limit ?? 50,
-      })
-      .map((a) => this.view(a));
+    const limit = options.limit ?? 50;
+    const ingestion = options.ingestionId?.trim();
+    const rows = this.store.list({
+      clientId: client.id,
+      ...(options.statuses ? { statuses: options.statuses } : {}),
+      ...(ingestion ? {} : { limit }),
+    });
+    return (
+      ingestion ? rows.filter((a) => a.data.ingestionId === ingestion).slice(0, limit) : rows
+    ).map((a) => this.view(a));
   }
 
   /** Withdraw one of the client's own, still unconfirmed additions. */
@@ -618,39 +1024,44 @@ export class AdditionsService {
 
   private async write(
     client: AdditionClient,
-    w: {
-      tool: AdditionTool;
-      kind: AdditionKind;
-      input: Common;
-      via: AdditionVia;
-      course: string | undefined;
-      title: string;
-      dedupeKey: string;
-      dueAt: string | undefined;
-      data: Record<string, JsonValue>;
-      apply: (a: Addition, ref: SourceReference) => Applied;
-    },
+    w: WriteSpec,
+    o: WriteOptions = {},
   ): Promise<AdditionResult> {
-    this.burstHit(client);
-    const explicit = w.input.idempotencyKey?.trim();
-    let key = explicit || this.autoKey(w.tool, w.input);
-    const replay = this.store.byIdempotencyKey(client.id, key);
-    // Without an explicit key, sending the same thing again after withdrawing it adds it again.
-    if (replay && !explicit && replay.status === 'retracted')
-      key = `${key}:${this.now().getTime()}`;
-    else if (replay)
-      return { status: 'replayed', addition: this.view(replay), audit: this.auditOf(replay) };
+    if (o.burst !== false) this.burstHit(client);
+    let key: string;
+    let same: Addition | undefined;
+    if (o.keyed) {
+      // ingest_lecture: the derived key names this part of this recording.
+      key = o.keyed.key;
+      const prior = this.store.byIdempotencyKey(client.id, key);
+      if (prior && (prior.status !== 'unconfirmed' || prior.data.ingestHash === o.keyed.hash))
+        return { status: 'replayed', addition: this.view(prior), audit: this.auditOf(prior) };
+      same = prior;
+    } else {
+      const explicit = w.input.idempotencyKey?.trim();
+      key = explicit || this.autoKey(w.tool, w.input);
+      const replay = this.store.byIdempotencyKey(client.id, key);
+      // Without an explicit key, sending the same thing again after withdrawing it adds it again.
+      if (replay && !explicit && replay.status === 'retracted')
+        key = `${key}:${this.now().getTime()}`;
+      else if (replay)
+        return { status: 'replayed', addition: this.view(replay), audit: this.auditOf(replay) };
+    }
 
-    const candidates = this.store
-      .byDedupeKey(w.dedupeKey, ['unconfirmed', 'confirmed'])
-      .filter((a) =>
-        a.dueAt === undefined || w.dueAt === undefined
-          ? a.dueAt === w.dueAt
-          : Math.abs(Date.parse(a.dueAt) - Date.parse(w.dueAt)) <= DEDUPE_TOLERANCE_MS,
-      );
-    const same = candidates[0];
-    if (same && (same.clientId !== client.id || same.status === 'confirmed'))
-      return { status: 'duplicate', addition: this.view(same), audit: this.auditOf(same) };
+    if (!same) {
+      const candidates = this.store
+        .byDedupeKey(w.dedupeKey, ['unconfirmed', 'confirmed'])
+        .filter((a) =>
+          a.dueAt === undefined || w.dueAt === undefined
+            ? a.dueAt === w.dueAt
+            : Math.abs(Date.parse(a.dueAt) - Date.parse(w.dueAt)) <= DEDUPE_TOLERANCE_MS,
+        );
+      same = candidates[0];
+      if (same && (same.clientId !== client.id || same.status === 'confirmed'))
+        return { status: 'duplicate', addition: this.view(same), audit: this.auditOf(same) };
+      if (same && o.keyed && same.data.ingestHash === o.keyed.hash)
+        return { status: 'replayed', addition: this.view(same), audit: this.auditOf(same) };
+    }
 
     this.assertBudget(client);
     const now = this.now().toISOString();
@@ -689,6 +1100,8 @@ export class AdditionsService {
         source,
         ...(w.input.lectureDate ? { lectureDate: w.input.lectureDate } : {}),
         ...(tsMs !== undefined ? { recordingTimestamp: hms(tsMs) } : {}),
+        ...(o.extra ?? {}),
+        ...(o.keyed ? { ingestHash: o.keyed.hash } : {}),
       },
       updatedAt: now,
     };
@@ -721,7 +1134,7 @@ export class AdditionsService {
       });
       return saved;
     });
-    await this.deps.runPipeline();
+    if (o.pipeline !== false) await this.deps.runPipeline();
     const stored = this.store.get(applied.id) ?? applied;
     return {
       status: same ? 'updated' : 'created',
@@ -1372,6 +1785,7 @@ export class AdditionsService {
       dueResolution: data.dueResolution,
       evidence: str(data.evidence),
       recordingTimestamp: str(data.recordingTimestamp),
+      ingestionId: str(data.ingestionId),
       source: str(data.source) ?? a.clientName ?? a.clientId,
       client: { id: a.clientId, name: a.clientName },
       stored: (data.stored && typeof data.stored === 'object' && !Array.isArray(data.stored)
