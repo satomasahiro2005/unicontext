@@ -95,6 +95,7 @@ import {
   runStudentState,
   STUDENT_STATE_TOOL,
 } from './next-action.js';
+import { registerPlaceTools } from './places.js';
 import { trimCourseForAi } from './trim.js';
 import {
   buildEnvelope,
@@ -589,6 +590,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {},
     () => view('week'),
   );
+
+  registerPlaceTools({ uc, caller, writeTool });
 
   // ----- what to do now / decision material for scheduled tasks -----
 

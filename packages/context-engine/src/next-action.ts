@@ -11,6 +11,7 @@ import { formatShortJa, redact, zonedParts } from '@unicontext/core';
 import { uniqueCitations } from '@unicontext/provenance';
 import type { CoverageGap, DeadlineCoverage } from './coverage.js';
 import type { EstimatedDue } from './estimate.js';
+import { nextActionBusy } from './schedule-events.js';
 import type {
   Citation,
   ClassItem,
@@ -478,10 +479,13 @@ export function computeNextActions(
   const nowMs = now.getTime();
   const today = localDate(now, tz);
   const classes = host.classes(today, localDate(new Date(nowMs + HORIZON_DAYS * DAY), tz));
-  const busy: Busy[] = classes
-    .filter((c) => !c.cancelled && c.sessionKind === 'class' && c.startsAt && c.endsAt)
-    .map((c) => ({ start: Date.parse(c.startsAt ?? ''), end: Date.parse(c.endsAt ?? '') }))
-    .filter((b) => Number.isFinite(b.start) && Number.isFinite(b.end));
+  // Classes, plus calendar events and the trips before meetings when the host knows them.
+  const busy: Busy[] = nextActionBusy(
+    host,
+    classes,
+    today,
+    localDate(new Date(nowMs + HORIZON_DAYS * DAY), tz),
+  );
   const effortOverride = options.effortMinutes ?? {};
   const wanted = options.courseOfferingId
     ? new Set(host.courseRef(options.courseOfferingId)?.linkedIds ?? [options.courseOfferingId])

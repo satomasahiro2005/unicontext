@@ -7,6 +7,7 @@ import {
   type Normalizer,
   type RawItemView,
 } from '@unicontext/connector-sdk';
+import { findDatePhrase, resolveRoomChangeScope } from '@unicontext/core';
 import {
   bodyToText,
   drivePath,
@@ -218,6 +219,15 @@ function normalizeChannelMessage(
 
   if (isTopLevel && author && !isSelf) {
     const title = p.subject?.trim() || firstLine(text) || '(無題の投稿)';
+    const hint = extractRoomChange(text);
+    // Which day the room is for: the post's own (本日), a named one, or the course from now on.
+    const scope = hint
+      ? resolveRoomChangeScope(
+          { ...hint, datePhrase: hint.datePhrase ?? findDatePhrase(p.subject ?? '') },
+          sentAt,
+          ctx.timezone,
+        )
+      : undefined;
     const announcement: NormalizedEntity = {
       entity: {
         id: ctx.id('announcement', item.externalId),
@@ -230,20 +240,24 @@ function normalizeChannelMessage(
         importance: IMPORTANCE[p.importance ?? ''] ?? 'normal',
         scope: 'course',
         ...opt('url', p.webUrl),
-        extra: { teamId, channelId },
+        extra:
+          hint && scope?.kind === 'unresolved'
+            ? { teamId, channelId, roomHint: { room: hint.room, unresolved: true } }
+            : { teamId, channelId },
       },
       ref: { ...ref, authority: ANNOUNCEMENT_AUTHORITY },
     };
     const facts: FactInput[] = [];
-    const room = extractRoomChange(text);
-    if (room) {
+    if (hint && scope && scope.kind !== 'unresolved') {
       facts.push({
         subject: courseOfferingId,
         predicate: 'room',
-        value: room.room,
+        value: hint.room,
         origin: 'extracted',
         confidence: ROOM_HINT_CONFIDENCE,
-        evidence: room.sentence,
+        evidence: hint.sentence,
+        ...(scope.validFrom ? { validFrom: scope.validFrom } : {}),
+        ...(scope.kind === 'dated' ? { validUntil: scope.validUntil } : {}),
         ref: { ...ref, authority: ANNOUNCEMENT_AUTHORITY },
       });
     }
@@ -273,7 +287,12 @@ function normalizeChannelMessage(
 
 // ---------------------------------------------------------------------------------------------
 
-export const NORMALIZER_VERSION = '1';
+/**
+ * 2: a room-change post is scoped to the day it names (本日 = the post's day). One that names no day
+ * and is not permanent (以降/今後) gives no course-wide room fact any more, only news. Bumping
+ * re-derives the stored posts, so the old course-wide hint facts disappear.
+ */
+export const NORMALIZER_VERSION = '2';
 
 /** Graph raw items → canonical entities (+ the room-change hint fact). Pure and deterministic. */
 export function createMicrosoft365Normalizer(): Normalizer {

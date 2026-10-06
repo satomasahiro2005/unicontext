@@ -1,4 +1,4 @@
-import { toZonedIso, zonedTime } from '@unicontext/core';
+import { findDatePhrase, isPermanentChange, toZonedIso, zonedTime } from '@unicontext/core';
 
 /* Pure helpers used by the normalizer (and exported for tests / other connectors). */
 
@@ -229,6 +229,10 @@ export interface RoomChangeHint {
   room: string;
   /** The sentence the room was read from. */
   sentence: string;
+  /** The words that name the day (「本日」「10/6(月)」「次回」), from this sentence or the one before. */
+  datePhrase?: string;
+  /** 以降 / 今後 / これから: the change is for the course from now on, not for one day. */
+  permanent: boolean;
 }
 
 export function extractRoomChange(text: string): RoomChangeHint | undefined {
@@ -236,12 +240,20 @@ export function extractRoomChange(text: string): RoomChangeHint | undefined {
     const m = re.exec(text);
     if (!m?.[1]) continue;
     const room = m[1].normalize('NFKC').replace(/\s+/g, '');
-    const sentence =
-      text
-        .split(/(?<=[。！？!?\n])/)
-        .map((s) => s.trim())
-        .find((s) => s.includes(m[0])) ?? m[0];
-    return { room, sentence: sentence.slice(0, 200) };
+    const sentences = text
+      .split(/(?<=[。！？!?\n])/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const at = sentences.findIndex((s) => s.includes(m[0]));
+    const sentence = sentences[at] ?? m[0];
+    const near = [sentence, sentences[at - 1]].filter((s): s is string => Boolean(s));
+    const datePhrase = near.map((s) => findDatePhrase(s)).find(Boolean);
+    return {
+      room,
+      sentence: sentence.slice(0, 200),
+      ...(datePhrase ? { datePhrase } : {}),
+      permanent: near.some((s) => isPermanentChange(s)),
+    };
   }
   return undefined;
 }

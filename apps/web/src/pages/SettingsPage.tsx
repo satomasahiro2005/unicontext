@@ -150,6 +150,7 @@ const ADDITION_KIND: Record<AdditionView['kind'], string> = {
   task: 'やること',
   condition: '本人の条件（グループ・履修）',
   session_rule: 'グループ別の日程',
+  place: '場所・移動時間',
 };
 
 /** What AI clients added from lecture recordings, waiting for the user to confirm or reject. */

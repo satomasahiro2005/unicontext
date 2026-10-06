@@ -35,6 +35,7 @@ import {
   WORK_KIND_LABELS,
 } from './next-action.js';
 import type { UniContext } from './runtime.js';
+import { type ScheduleDayFields, scheduleAlerts, scheduleFieldsOf } from './schedule-events.js';
 import type {
   AttendanceStatus,
   Citation,
@@ -213,7 +214,7 @@ export interface StudentStateContext {
     classes: BriefClass[];
     noClassesReason?: string | undefined;
     notAttending?: BriefNotAttending[] | undefined;
-  };
+  } & ScheduleDayFields;
   tomorrow: {
     date: string;
     classes: BriefClass[];
@@ -523,6 +524,7 @@ export function studentState(uc: UniContext): StudentStateContext {
       ...(today.notAttending?.length
         ? { notAttending: today.notAttending.map(notAttendingOf) }
         : {}),
+      ...scheduleFieldsOf(today),
     },
     tomorrow: {
       date: tomorrow.date,
@@ -792,6 +794,9 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
           : `${g.label}の同期を確かめる（締切が取れていない可能性）`,
     });
   }
+
+  // Calendar events: overlaps with a class, changed locations (schedule-events.ts).
+  out.push(...scheduleAlerts(uc, since));
 
   // One alert per key (a cancellation can come from the timetable and from the change log).
   const byKey = new Map<string, Draft>();

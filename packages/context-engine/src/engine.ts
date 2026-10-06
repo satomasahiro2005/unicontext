@@ -76,6 +76,13 @@ import {
   weekStartOfDue,
 } from '@unicontext/task-engine';
 import { additionViaOfAuthority } from './additions.js';
+import { placeOf, TRAVEL_PREDICATE, travelSubject } from './places.js';
+import {
+  type ScheduleBusyHost,
+  type ScheduleSource,
+  scheduleViewFields,
+  scheduleWindow,
+} from './schedule-events.js';
 import { readAnnouncementExtra } from './announcements.js';
 import { candidateDue, type EstimatedDue, estimateDue, type EstimateHost } from './estimate.js';
 import {
@@ -107,6 +114,7 @@ import type {
   AdminContext,
   AnnouncementDetail,
   AnnouncementItem,
+  CalendarEventItem,
   ChangeItem,
   ChangesContext,
   Citation,
@@ -128,6 +136,8 @@ import type {
   EstimatedDeadlineItem,
   DiscussionItem,
   RecordedMarker,
+  PlaceInfo,
+  ScheduleOverlap,
   ExamPreparationContext,
   FactItem,
   LectureBundle,
@@ -635,6 +645,7 @@ export class ContextEngine {
       summary: `${summary}${attendanceNote}`,
       ...(raw ? { rawSchedule: raw } : {}),
       effectiveSchedule,
+      ...this.classPlaceFields(typeof room.value === 'string' ? room.value : undefined),
       citations: uniqueCitations([
         ...this.citationsFor([session.id]),
         ...room.candidates.flatMap((c) => (c.citation ? [c.citation] : [])),
@@ -1561,6 +1572,7 @@ export class ContextEngine {
       preparation,
       conflicts: this.currentConflicts(),
       ...this.enrollmentNotesField(),
+      ...this.scheduleDayFields(date, classes),
     };
   }
 
@@ -1749,6 +1761,7 @@ export class ContextEngine {
         }
       },
       sourceLabelOf: (entityId) => this.citationsFor([entityId])[0]?.sourceLabel,
+      ...this.scheduleHostExtras(),
     };
   }
 
@@ -1909,6 +1922,7 @@ export class ContextEngine {
       conflicts: this.currentConflicts(),
       ...this.enrollmentNotesField(),
       next: summarizeNextActions(this.nextActions()),
+      ...this.scheduleWeekFields(days, from, to),
     };
   }
 
@@ -1971,7 +1985,11 @@ export class ContextEngine {
       enrollment: this.enrollmentView(c.id),
       retake: offerings.some((o) => (o.extra as { retake?: unknown } | undefined)?.retake === true),
       paceSlots: schedule.paceSlots(ids).map((x) => this.paceSlotView(x)),
-      room: this.resolvedValue<string>(this.resolver.resolve(ids, 'room'), c.offering.room),
+      // The course's own room: a change dated to one session (validUntil) is that session's, not the course's.
+      room: this.resolvedValue<string>(
+        this.resolver.resolve(ids, 'room', { at: UNDATED_ROOM_AT }),
+        c.offering.room,
+      ),
       sources: ids.map((id) => ({
         id,
         sourceId: this.entities.meta(id)?.sourceId,
@@ -2623,7 +2641,86 @@ export class ContextEngine {
   weekdayOf(date: string): number {
     return zonedParts(parseZonedDate(date, this.timezone), this.timezone).weekday;
   }
+
+  // --- schedule-events (stream D) ---
+
+  private scheduleSource(): ScheduleSource {
+    return {
+      timezone: this.timezone,
+      now: () => this.now(),
+      classes: (fromDate, toDate) => {
+        const personal = this.personalSchedule();
+        const out: ClassItem[] = [];
+        for (let d = fromDate; d <= toDate; d = addLocalDays(d, 1))
+          out.push(
+            ...this.classesOn(d, personal).filter(
+              (c) => c.effectiveSchedule.status !== 'not_attending',
+            ),
+          );
+        return out;
+      },
+      calendarEvents: () => this.entities.list('calendarEvent'),
+      citationsFor: (ids) => this.citationsFor(ids),
+      travelFacts: (keys) =>
+        this.resolver.facts.active({
+          subjects: keys.map(travelSubject),
+          predicate: TRAVEL_PREDICATE,
+        }),
+    };
+  }
+
+  /** The room as a place with its derived Location id (view layer only; no connector writes it). */
+  private classPlaceFields(room: string | undefined): { place?: PlaceInfo; locationId?: string } {
+    const place = placeOf(room);
+    return place ? { place, locationId: place.locationId } : {};
+  }
+
+  /** Calendar events and overlaps of a day; the day's classes get the trip before them. */
+  private scheduleDayFields(
+    date: string,
+    classes: ClassItem[],
+  ): { events?: CalendarEventItem[]; overlaps?: ScheduleOverlap[] } {
+    const from = parseZonedDate(date, this.timezone);
+    return scheduleViewFields(
+      scheduleWindow(this.scheduleSource(), from, addZonedDays(from, 1, this.timezone), classes),
+    );
+  }
+
+  private scheduleWeekFields(
+    days: { classes: ClassItem[] }[],
+    from: Date,
+    to: Date,
+  ): { events?: CalendarEventItem[]; overlaps?: ScheduleOverlap[] } {
+    return scheduleViewFields(
+      scheduleWindow(
+        this.scheduleSource(),
+        from,
+        to,
+        days.flatMap((d) => d.classes),
+      ),
+    );
+  }
+
+  /** Events and trips as busy time for the next-action engine (read through `nextActionBusy`). */
+  private scheduleHostExtras(): Required<ScheduleBusyHost> {
+    const source = this.scheduleSource();
+    return {
+      scheduleBusy: (classes, fromDate, toDate) =>
+        scheduleWindow(
+          source,
+          parseZonedDate(fromDate, this.timezone),
+          addZonedDays(parseZonedDate(toDate, this.timezone), 1, this.timezone),
+          classes,
+        ).busy,
+    };
+  }
 }
+
+/**
+ * Facts valid at this far-future instant are the ones without an end: a course-level room ignores
+ * the changes that name one session (validUntil).
+ */
+const UNDATED_ROOM_AT = new Date('9999-01-01T00:00:00Z');
 
 /** A conflict candidate's value in one line: a deadline value by its phrase, else as JSON text. */
 function conflictValueText(v: JsonValue): string {

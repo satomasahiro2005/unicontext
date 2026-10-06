@@ -9,7 +9,7 @@ import {
   type Normalizer,
   type RawItemView,
 } from '@unicontext/connector-sdk';
-import { classifyNoticeImportance } from '@unicontext/core';
+import { classifyNoticeImportance, findDatePhrase, resolveRoomChangeScope } from '@unicontext/core';
 import { chunkText } from '@unicontext/local-files';
 import {
   academicYearOf,
@@ -52,7 +52,12 @@ import {
   type TeamsMessage,
 } from './schemas.js';
 
-export const NORMALIZER_VERSION = '2';
+/**
+ * 3: a room-change post is scoped to the day it names (本日 = the post's day). One that names no day
+ * and is not permanent (以降/今後) gives no course-wide room fact any more, only news. Bumping
+ * re-derives the stored posts, so the old course-wide hint facts disappear.
+ */
+export const NORMALIZER_VERSION = '3';
 export const INSTRUCTOR_AUTHORITY = 'instructor-announcement';
 export const SUBMISSION_AUTHORITY = 'submission-system';
 const ROOM_HINT_CONFIDENCE = 0.6;
@@ -229,6 +234,15 @@ function normalizeReplyChain(p: ReplyChainPayload, ctx: NormalizeContext): Norma
               courseLinked: true,
               flaggedImportant: importance === 'high',
             }).importance;
+      const hint = courseOfferingId ? extractRoomChange(text) : undefined;
+      // Which day the room is for: the post's own (本日), a named one, or the course from now on.
+      const scope = hint
+        ? resolveRoomChangeScope(
+            { ...hint, datePhrase: hint.datePhrase ?? findDatePhrase(subject ?? '') },
+            sentAt,
+            ctx.timezone,
+          )
+        : undefined;
       entities.push({
         entity: {
           id: ctx.id('announcement', p.channelId, m.id),
@@ -242,19 +256,23 @@ function normalizeReplyChain(p: ReplyChainPayload, ctx: NormalizeContext): Norma
           scope: 'course',
           category: 'Teams',
           url,
-          extra,
+          extra:
+            hint && scope?.kind === 'unresolved'
+              ? { ...extra, roomHint: { room: hint.room, unresolved: true } }
+              : extra,
         },
         ref: { ...ref, authority: INSTRUCTOR_AUTHORITY },
       });
-      const room = courseOfferingId ? extractRoomChange(text) : undefined;
-      if (room && courseOfferingId)
+      if (hint && courseOfferingId && scope && scope.kind !== 'unresolved')
         facts.push({
           subject: courseOfferingId,
           predicate: 'room',
-          value: room.room,
+          value: hint.room,
           origin: 'extracted',
           confidence: ROOM_HINT_CONFIDENCE,
-          evidence: room.sentence,
+          evidence: hint.sentence,
+          ...(scope.validFrom ? { validFrom: scope.validFrom } : {}),
+          ...(scope.kind === 'dated' ? { validUntil: scope.validUntil } : {}),
           ref: { ...ref, authority: INSTRUCTOR_AUTHORITY },
         });
       continue;

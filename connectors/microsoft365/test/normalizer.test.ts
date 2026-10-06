@@ -221,16 +221,105 @@ describe('graph.channelMessage', () => {
       authority: 'instructor-announcement',
       location: { messageId: '1759300000001' },
     });
+    // 「来週」 names no day we can tell without the course's sessions: news, not a room fact.
+    expect(out.facts ?? []).toEqual([]);
+    expect(entity(out)).toMatchObject({
+      extra: { roomHint: { room: '11教室', unresolved: true } },
+    });
+  });
+
+  it('a room change for 本日 is valid on the day of the post only', async () => {
+    const urgent = {
+      ...find('channel-messages-incremental.json', '1759300000006'),
+      _context: { teamId: TEAM_DB, channelId: CH_DB_GENERAL, selfUserId: SELF_ID },
+    };
+    const out = await run('graph.channelMessage', ext('1759300000006'), urgent);
     expect(out.facts).toHaveLength(1);
     expect(out.facts?.[0]).toMatchObject({
       subject: ctx.id('courseOffering', TEAM_DB),
       predicate: 'room',
-      value: '11教室',
+      value: '21教室',
       origin: 'extracted',
       confidence: 0.6,
-      evidence: '教室を11教室に変更します。',
+      evidence: '本日の授業は21教室で行います。',
+      // posted 2026-10-01 09:30 JST: the 1st, local midnight to local midnight
+      validFrom: '2026-09-30T15:00:00.000Z',
+      validUntil: '2026-10-01T15:00:00.000Z',
       ref: { authority: 'instructor-announcement' },
     });
+    expect((entity(out) as { extra?: Record<string, unknown> }).extra).not.toHaveProperty(
+      'roomHint',
+    );
+  });
+
+  const postWith = (content: string, subject: string | null = null) => ({
+    ...find('channel-messages-incremental.json', '1759300000006'),
+    subject,
+    body: { contentType: 'text', content },
+    _context: { teamId: TEAM_DB, channelId: CH_DB_GENERAL, selfUserId: SELF_ID },
+  });
+
+  it('a named date scopes the fact to that day, even when it is not the day of the post', async () => {
+    const out = await run(
+      'graph.channelMessage',
+      ext('1759300000006'),
+      postWith('10月6日(火)の授業は21教室で行います。'),
+    );
+    expect(out.facts?.[0]).toMatchObject({
+      value: '21教室',
+      validFrom: '2026-10-05T15:00:00.000Z',
+      validUntil: '2026-10-06T15:00:00.000Z',
+    });
+  });
+
+  it('a date in the subject counts', async () => {
+    const out = await run(
+      'graph.channelMessage',
+      ext('1759300000006'),
+      postWith('21教室に変更します。', '10/6 教室変更'),
+    );
+    expect(out.facts?.[0]).toMatchObject({
+      value: '21教室',
+      validUntil: '2026-10-06T15:00:00.000Z',
+    });
+  });
+
+  it('no date and not permanent: no room fact, the change is news (roomHint.unresolved)', async () => {
+    const out = await run(
+      'graph.channelMessage',
+      ext('1759300000006'),
+      postWith('教室を21教室に変更します。'),
+    );
+    expect(out.facts ?? []).toEqual([]);
+    expect(entity(out)).toMatchObject({
+      kind: 'announcement',
+      extra: { roomHint: { room: '21教室', unresolved: true } },
+    });
+  });
+
+  it('今後 stays course-wide: no validity window', async () => {
+    const out = await run(
+      'graph.channelMessage',
+      ext('1759300000006'),
+      postWith('今後は21教室で行います。'),
+    );
+    expect(out.facts).toHaveLength(1);
+    expect(out.facts?.[0]).toMatchObject({ value: '21教室' });
+    expect(out.facts?.[0]).not.toHaveProperty('validFrom');
+    expect(out.facts?.[0]).not.toHaveProperty('validUntil');
+    expect((entity(out) as { extra?: Record<string, unknown> }).extra).not.toHaveProperty(
+      'roomHint',
+    );
+  });
+
+  it('10/13以降 is course-wide from that day', async () => {
+    const out = await run(
+      'graph.channelMessage',
+      ext('1759300000006'),
+      postWith('10/13以降は21教室で行います。'),
+    );
+    expect(out.facts?.[0]).toMatchObject({ validFrom: '2026-10-12T15:00:00.000Z' });
+    expect(out.facts?.[0]).not.toHaveProperty('validUntil');
   });
 
   it('urgent importance maps to critical; the title falls back to the first line', async () => {
@@ -244,7 +333,6 @@ describe('graph.channelMessage', () => {
       importance: 'critical',
       title: '本日の授業は21教室で行います。',
     });
-    expect(out.facts?.[0]).toMatchObject({ predicate: 'room', value: '21教室' });
   });
 
   it('replies become messages in the channel thread; questions are flagged', async () => {

@@ -101,11 +101,12 @@ describe('courses / assignments / deadlines', () => {
     const db = body.courses.find((c) => c.title === 'データベースシステム論');
     expect(db?.courseCode).toBe('J2401');
     expect(db?.openConflicts).toBe(1);
-    expect(db?.room.status).toBe('conflict');
+    // The Teams post moved only 10/1's class (a dated room fact): the course's room stays.
+    expect(db?.room).toMatchObject({ status: 'resolved', value: '情報学部2号館21教室' });
     expect(db?.linkedIds.length).toBeGreaterThan(1);
     const human = await dev('courses');
     expect(human.stdout).toContain('線形代数学II');
-    expect(human.stdout).toContain('競合: 情報学部2号館21教室 / 情報学部2号館11教室');
+    expect(human.stdout).not.toContain('競合: 情報学部2号館21教室 / 情報学部2号館11教室');
     expect(human.stdout).toContain('courseOffering:');
   });
 
