@@ -36,6 +36,17 @@ export interface StoredBrowserSession {
   cookies: BrowserCookie[];
 }
 
+/**
+ * What a connector can say about the page an interactive login is waiting on. Both parts are
+ * optional and only ever reach the person at the keyboard through `notify`.
+ */
+export interface LoginProgress {
+  /** Appended to the periodic "still waiting" line, e.g. what the last session check answered. */
+  detail?: string;
+  /** Something the person has to do in the window, said as soon as it is seen (once per text). */
+  notice?: string;
+}
+
 export interface BrowserSessionOptions {
   sourceId: string;
   /** Persistent browser profile directory (one per source). See defaultProfileDir(). */
@@ -50,6 +61,13 @@ export interface BrowserSessionOptions {
   begin?: (page: PageLike) => Promise<void>;
   /** True when the page shows the logged-in state. */
   isAuthenticated: (page: PageLike) => Promise<boolean> | boolean;
+  /**
+   * Interactive login only: describe the page being waited on, so a stuck post-sign-in step is
+   * visible. Never fill or click anything here. Errors are ignored.
+   */
+  describe?: (page: PageLike) => Promise<LoginProgress | undefined> | LoginProgress | undefined;
+  /** How often an interactive login says what it is waiting on (default 15 s). */
+  describeIntervalMs?: number;
   /** Interstitial handlers run on every poll (never on credential/MFA pages). */
   handlers?: InterstitialHandler[];
   /**
@@ -63,7 +81,7 @@ export interface BrowserSessionOptions {
    * Runs on every newly launched context before the first navigation (e.g. to install request
    * routes that keep the session read-only).
    */
-  prepareContext?: (context: BrowserContextLike) => Promise<void>;
+  prepareContext?: (context: BrowserContextLike, info?: { headless: boolean }) => Promise<void>;
   channel?: string;
   executablePath?: string;
   /** Max wait for the human in login() (default 10 min). */
@@ -246,7 +264,8 @@ export class BrowserSession {
       ...(this.options.keepSessionCookies ? { args: ['--restore-last-session'] } : {}),
     });
     this.contextHeadless = headless;
-    if (this.options.prepareContext) await this.options.prepareContext(this.context);
+    if (this.options.prepareContext)
+      await this.options.prepareContext(this.context, { headless });
     return this.context;
   }
 
@@ -294,6 +313,9 @@ export class BrowserSession {
         ...(opts.signal ? { signal: opts.signal } : {}),
         ...(opts.notify ? { notify: opts.notify } : {}),
       });
+      // "Continue where you left off" brings back every tab of the last window; an interactive login
+      // keeps exactly one so the person is not left among stale sign-in pages.
+      if (!opts.headless) await this.closeRestoredTabs(context);
       const page = context.pages()[0] ?? (await context.newPage());
       await page.goto(this.options.startUrl, { waitUntil: 'load' });
       if (this.options.begin && !(await this.safeIsAuthenticated(page))) {
@@ -317,6 +339,18 @@ export class BrowserSession {
     return result;
   }
 
+  /** Close every open tab but the first (a restored session's leftovers). */
+  private async closeRestoredTabs(context: BrowserContextLike): Promise<void> {
+    const pages = context.pages().filter((p) => !p.isClosed());
+    for (const extra of pages.slice(1)) {
+      try {
+        await extra.close?.();
+      } catch (e) {
+        this.logger.debug('closing a restored tab failed', { error: String(e) });
+      }
+    }
+  }
+
   private async safeIsAuthenticated(page: PageLike): Promise<boolean> {
     if (page.isClosed()) return false;
     try {
@@ -328,10 +362,16 @@ export class BrowserSession {
 
   private async waitForLogin(
     context: BrowserContextLike,
-    opts: { headless: boolean; timeoutMs: number; signal?: AbortSignal },
+    opts: {
+      headless: boolean;
+      timeoutMs: number;
+      signal?: AbortSignal;
+      notify?: (message: string) => void;
+    },
   ): Promise<AuthResult> {
     const deadline = this.clock.now().getTime() + opts.timeoutMs;
     const poll = this.options.pollIntervalMs ?? 1000;
+    const progress = !opts.headless && opts.notify ? this.progressReporter(opts.notify) : undefined;
     for (;;) {
       if (opts.signal?.aborted) return { status: 'failed', message: 'Login aborted' };
       const pages = context.pages().filter((p) => !p.isClosed());
@@ -360,12 +400,59 @@ export class BrowserSession {
             };
         }
       }
+      if (progress) await progress(pages);
       if (this.clock.now().getTime() >= deadline)
         return opts.headless
           ? { status: 'auth_required', message: this.loginRequiredMessage('refresh timed out') }
           : { status: 'failed', message: 'Timed out waiting for the login to finish' };
       await this.clock.sleep(poll, opts.signal);
     }
+  }
+
+  /**
+   * Interactive login: tell the person what the window is stuck on. A notice from `describe`
+   * (something to press) is said once as soon as it appears; otherwise, every `describeIntervalMs`
+   * the tab paths (never queries) and the connector's detail. Quiet on a page that asks for
+   * credentials: the person is typing there.
+   */
+  private progressReporter(
+    notify: (message: string) => void,
+  ): (pages: PageLike[]) => Promise<void> {
+    const describe = this.options.describe;
+    const every = this.options.describeIntervalMs ?? 15_000;
+    let nextAt = this.clock.now().getTime() + every;
+    const said = new Set<string>();
+    return async (pages) => {
+      const details: string[] = [];
+      const notices: string[] = [];
+      const paths: string[] = [];
+      for (const page of pages) {
+        paths.push(pathOnly(page.url()));
+        if (!describe) continue;
+        try {
+          const p = await describe(page);
+          if (p?.detail) details.push(p.detail);
+          if (p?.notice) notices.push(p.notice);
+        } catch (e) {
+          this.logger.debug('describing the login page failed', { error: String(e) });
+        }
+      }
+      const current = new Set(notices);
+      for (const n of notices)
+        if (!said.has(n)) {
+          said.add(n);
+          notify(n);
+        }
+      for (const n of [...said]) if (!current.has(n)) said.delete(n);
+      if (this.clock.now().getTime() < nextAt) return;
+      nextAt = this.clock.now().getTime() + every;
+      if (notices.length > 0) return; // the notice is the message
+      for (const page of pages) if (await hasVisibleCredentialField(page)) return;
+      const detail = [...new Set(details)].join('、');
+      notify(
+        `サインイン後の確認待ち: ${[...new Set(paths)].join(', ')}${detail ? `（${detail}）` : ''}`,
+      );
+    };
   }
 
   private loginRequiredMessage(reason: string): string {
@@ -497,6 +584,15 @@ export class BrowserSession {
     await this.closeContext();
   }
   // close() deliberately bypasses the queue: dispose must be able to end a stuck login.
+}
+
+/** The path of a URL, without query or fragment ('' when it is not a URL). */
+function pathOnly(url: string): string {
+  try {
+    return new URL(url).pathname || '/';
+  } catch {
+    return url === 'about:blank' ? url : '';
+  }
 }
 
 function stripQuery(url: string): string {

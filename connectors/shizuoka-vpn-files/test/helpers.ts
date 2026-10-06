@@ -57,6 +57,8 @@ type Scripted = Record<string, ListResult[]>;
 /** Scripted portal client: listings from a fixture, plus per-dir status overrides for flaky tests. */
 export class FakeVpnClient implements VpnPortalClient {
   listCalls: string[] = [];
+  /** Set to give the client a session probe (the adapter asks it when a run made no request). */
+  probeSession?: () => Promise<boolean>;
   downloadCalls: string[] = [];
   /** Bytes served for a file by its dir+name key "dir\u0000name". */
   files: Record<string, Uint8Array> = {};

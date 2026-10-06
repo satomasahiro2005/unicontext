@@ -89,7 +89,17 @@ describe('with a real daemon (dev seed, 127.0.0.1, ephemeral port)', () => {
 
   it('login of a dev source triggers a sync on the running daemon', async () => {
     const client = new DaemonClient({ baseUrl: daemon.url, token: daemon.token });
-    const r = await exec(['--dev', '--json', 'login', 'lcu'], { daemonClient: async () => client });
+    const started = await exec(['--dev', '--json', 'login', 'lcu'], {
+      daemonClient: async () => client,
+    });
+    expect(started.code, started.stderr).toBe(0);
+    const job = json<{ auth: { status: string }; syncJob: { id: string; sourceId: string } }>(started);
+    expect(job.auth.status).toBe('authenticated');
+    expect(job.syncJob).toMatchObject({ sourceId: 'lcu' });
+    const r = await exec(['--dev', '--json', 'login', 'lcu', '--wait-sync'], {
+      daemonClient: async () => client,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 20))),
+    });
     expect(r.code, r.stderr).toBe(0);
     const body = json<{ auth: { status: string }; sync: { ok: boolean }[] }>(r);
     expect(body.auth.status).toBe('authenticated');

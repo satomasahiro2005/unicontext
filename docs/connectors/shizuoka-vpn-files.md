@@ -53,7 +53,8 @@ Unmapped folders stay fully visible.
   `auth_required` and makes no changes at all.
 - **Polite & incremental.** One request at a time with a pause (≈3 s + jitter) and exponential
   backoff; `maxFoldersPerRun` (default 60) per run; the walk resumes from where it stopped via the
-  cursor, re-lists stale folders, and re-seeds the whole tree every `rewalkAfterHours` (72 h).
+  cursor, re-lists stale folders, and re-seeds the whole tree every `rewalkAfterHours` (72 h). A root that
+  has never been listed OK is retried as soon as its backoff allows (capped at 30 min), not after 72 h.
   Schedule is daily; keep it off known maintenance windows.
 - **Own browser profile.** Not shared with LiveCampusU/Teams (different host and session system).
 
@@ -73,10 +74,48 @@ Unmapped folders stay fully visible.
    ```
 
    A browser window opens on the realm's sign-in form (`/dana-na/auth/url_3/welcome.cgi`) and stays
-   open until the portal itself confirms the session (a same-origin GET of
-   `/api/v1/enduser/landing-page` answers JSON), or until the login timeout (10 min). The URL alone
-   is never taken as proof: signed out, `/dana/home/index.cgi` redirects via
-   `/dana-na/auth/welcome.cgi` to `/`, a 404 page on the portal host (observed 2026-10-06).
+   open until the portal itself confirms the session, or until the login timeout (10 min). The
+   confirmation is asked on **any page of the portal host**, including a tab that stays on
+   `/dana-na/auth/url_3/login.cgi` after sign-in (observed 2026-10-06): a same-origin GET of
+   `/api/v1/enduser/landing-page` that answers 200 JSON (JSON content type, or a body that parses),
+   not redirected to the sign-in area; when that answered 200 without a redirect but not with JSON,
+   a second probe (`list-shares`, then the fb list of the first root) that answers JSON
+   `files`/`shares`. A landing-page that bounced to `/dana-na/auth/welcome.cgi` (signed out) is one
+   request and nothing more. The URL alone is never proof: signed out, `/dana/home/index.cgi`
+   redirects via `/dana-na/auth/welcome.cgi` to `/`, a 404 page on the portal host.
+
+   Polite while you type: no probe is sent from a page that shows a visible password or MFA field
+   (the session cannot be live there, and a probe would follow the sign-in redirect in the middle of
+   the flow), and a page is probed at most once every 5 s.
+
+   While it waits, the terminal says what it is stuck on (every 15 s, tab paths without queries):
+
+   ```
+   サインイン後の確認待ち: /dana-na/auth/url_3/login.cgi（確認: landing-page 200→/dana-na/auth/welcome.cgi text/html · list-shares 404、ブロックした通信 1件）
+   ```
+
+   and, if the portal shows its "other user sessions in progress" notice (found by the field names
+   `btnContinue` / `FormDataStr`; UniContext never presses it), `画面の「続行」を押してください`.
+   Non-read requests the read-only route blocked are counted in that line. Everything the sign-in
+   window went through is also written, without secrets, to `login-trace.jsonl` in the source's
+   cache directory (rewritten per interactive sign-in, capped at 64 KB): one line per tab-path
+   change (path without query, whether a password/MFA field or `btnContinue`/`FormDataStr` was on
+   screen), per probe result (the same summary as above), and per blocked non-read request (method
+   and path). That file is what UniContext reads next; the only thing you do is sign in once. Tabs
+   restored from the last session are closed (one is kept) before the sign-in page opens.
+
+   When it succeeds, the result is printed **before** the daemon is contacted, and the daemon's
+   sync is started without waiting for it:
+
+   ```
+   shizuoka-vpn-files: 認証できました
+     デーモンで同期を開始しました（ジョブ shizuoka-vpn-files-…）
+   ```
+
+   (`--json`: `{ sourceId, auth, syncJob }`.) The daemon is looked up for at most 10 s; if it is alive
+   but does not answer, the login still exits 0 and says so. `--wait-sync` keeps the old behaviour:
+   it waits for the sync (a progress line every 10 s, at most 10 min) and prints its result
+   (`--json`: `sync` holds the report).
 
    After sign-in, background syncs reuse that session headlessly. `DSID` has no expiry, so Chrome
    would drop it when the window closes; the profile is launched with `--restore-last-session`,
@@ -87,7 +126,9 @@ Unmapped folders stay fully visible.
 
 How "signed in" is decided (`authenticate()`, never prompts): a browser profile on disk proves
 nothing. UniContext records when a live portal session was last verified (`portal-session.json` in
-the source's cache directory; a timestamp only) by a sign-in, a sync or a download. Never verified,
+the source's cache directory; a timestamp only) by a sign-in, or by a sync or download that got an answer
+only a live session gives (a list that was OK, empty or forbidden, or bytes). A run that makes no request
+leaves it alone; with a stale marker it asks the portal once. Never verified,
 or longer ago than `browser.sessionMaxMinutes` (60) → `auth_required` without opening a browser;
 verified in the last 2 minutes → signed in; otherwise a headless check against the portal decides.
 

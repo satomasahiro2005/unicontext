@@ -20,19 +20,36 @@ const SIGNED_OUT_REDIRECT = `(r) => {
 }`;
 
 /**
- * Is the portal session live? GETs the portal's own landing-page JSON (what the signed-in SPA
- * loads first). Signed out, the endpoint redirects to the sign-in area instead of answering JSON.
+ * Is the portal session live? One same-origin GET of a JSON endpoint (the landing-page JSON the
+ * signed-in SPA loads first, or the share list). Signed out, the endpoint redirects to the sign-in
+ * area instead of answering JSON.
+ *
+ * Returns what was seen as well as the verdict, so a session that never confirms can be explained:
+ * `{live, status, ctype, redirected, finalPath}` (the final path only, never a query).
+ * `live` is: 200, not redirected to the sign-in area / portal root, and a JSON content type or a
+ * body that parses as a JSON object (the portal sometimes labels JSON as text/html). With
+ * `anyKey`, the object must also carry one of those keys as an array (the share / file lists).
  */
 export const SESSION_CHECK = `async (arg) => {
-  const { url } = arg;
+  const { url, anyKey } = arg;
   if (new URL(url, location.href).origin !== location.origin) return { live: false, error: 'cross-origin' };
   let r;
   try { r = await fetch(url, { method: 'GET', credentials: 'same-origin', headers: { accept: 'application/json' } }); }
   catch (e) { return { live: false, error: 'network' }; }
   const signedOut = (${SIGNED_OUT_REDIRECT})(r);
   const ctype = r.headers.get('content-type') || '';
-  try { await r.body?.cancel(); } catch (e) { /* ignore */ }
-  return { live: r.ok && !signedOut && /json/i.test(ctype), status: r.status };
+  let finalPath = '';
+  try { finalPath = new URL(r.url).pathname; } catch (e) { /* ignore */ }
+  let body;
+  if (r.status === 200 && !signedOut) {
+    try { body = JSON.parse((await r.text()).slice(0, 2000000)); } catch (e) { body = undefined; }
+  } else {
+    try { await r.body?.cancel(); } catch (e) { /* ignore */ }
+  }
+  const isObject = body !== undefined && body !== null && typeof body === 'object';
+  let live = r.status === 200 && !signedOut && (/json/i.test(ctype) || isObject);
+  if (live && Array.isArray(anyKey)) live = isObject && anyKey.some((k) => Array.isArray(body[k]));
+  return { live, status: r.status, ctype, redirected: r.redirected, finalPath };
 }`;
 
 /**

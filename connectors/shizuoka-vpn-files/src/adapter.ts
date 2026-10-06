@@ -61,15 +61,53 @@ interface RootState {
 export interface WalkState {
   version: 1;
   roots: Record<string, RootState>;
+  /** One-time state migrations already applied (see {@link migrateState}). */
+  migrated?: number;
 }
 
+/** Latest one-time migration (1: clear the backoff a never-listed root got from a dead session). */
+const STATE_MIGRATION = 1;
+
+/** A root that was never listed OK keeps a short backoff, so it is retried soon (30 min). */
+const NEVER_LISTED_BACKOFF_CAP_MS = 30 * 60_000;
+
 export function emptyState(): WalkState {
-  return { version: 1, roots: {} };
+  return { version: 1, roots: {}, migrated: STATE_MIGRATION };
+}
+
+const hasOkFolder = (rs: RootState): boolean =>
+  Object.values(rs.folders ?? {}).some((f) => f.status === 'ok');
+
+/**
+ * One-time repairs of a persisted walk state. 1: a sync that ran while the portal session was gone
+ * (a 404 root page, a login redirect) recorded a backoff for the root folder and left an empty
+ * frontier, so a root that was never listed stayed unlisted for hours after the student signed in
+ * again. Such a root (no OK listing) gets its root backoff cleared; a root the portal answered with
+ * a real 403 (the forbidden placeholder) keeps it.
+ */
+function migrateState(state: WalkState): void {
+  if ((state.migrated ?? 0) >= 1) return;
+  for (const [key, rs] of Object.entries(state.roots)) {
+    if (!rs || hasOkFolder(rs)) continue;
+    const backoff: RootState['backoff'] = {};
+    for (const [path, b] of Object.entries(rs.backoff ?? {}))
+      if (rs.folders?.[path]?.status === 'forbidden') backoff[path] = b;
+    state.roots[key] = { ...rs, backoff };
+  }
+  state.migrated = STATE_MIGRATION;
 }
 
 export function loadState(extra: unknown): WalkState {
-  if (extra && typeof extra === 'object' && (extra as WalkState).version === 1)
-    return { version: 1, roots: { ...(extra as WalkState).roots } };
+  if (extra && typeof extra === 'object' && (extra as WalkState).version === 1) {
+    const e = extra as WalkState;
+    const state: WalkState = {
+      version: 1,
+      roots: { ...e.roots },
+      ...(e.migrated !== undefined ? { migrated: e.migrated } : {}),
+    };
+    migrateState(state);
+    return state;
+  }
   return emptyState();
 }
 
@@ -135,6 +173,11 @@ interface RunOutput {
   deletions: RawDeletion[];
   warnings: string[];
   counts: Counts;
+  /**
+   * The portal answered at least one request in a way only a live session gives (a list that was
+   * OK, empty or forbidden — not a login redirect, not a transport error).
+   */
+  proved: boolean;
 }
 
 /** External id of a file / folder raw item. */
@@ -186,6 +229,12 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     const at = this.marker.read();
     const t = at ? Date.parse(at) : NaN;
     return Number.isNaN(t) ? undefined : this.now().getTime() - t;
+  }
+
+  /** No verification on record, or one older than {@link RECHECK_AFTER_MS}. */
+  private verificationStale(): boolean {
+    const ago = this.verifiedAgoMs();
+    return ago === undefined || ago < 0 || ago > RECHECK_AFTER_MS;
   }
 
   private markVerified(): void {
@@ -274,7 +323,13 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     const state = loadState(input.cursor?.extra);
     let out: { result: RunOutput } | { auth: AuthResult };
     try {
-      out = await this.options.withClient((client) => this.run(client, state, input));
+      out = await this.options.withClient(async (client) => {
+        const r = await this.run(client, state, input);
+        // A run that asked the portal nothing proves nothing: when the last verification is
+        // stale, ask once (one same-origin GET) instead of refreshing the marker blindly.
+        if (!r.proved && this.verificationStale()) r.proved = (await client.probeSession?.()) === true;
+        return r;
+      });
     } catch (e) {
       if (e instanceof AuthRequiredError) {
         this.marker.write(undefined);
@@ -297,7 +352,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
       throw new AuthRequiredError(out.auth.message ?? 'SSL-VPN portal sign-in required');
     }
     const r = out.result;
-    this.markVerified();
+    if (r.proved) this.markVerified();
     this.lastRunCounts = r.counts;
     const degraded = (r.counts.listErrors ?? 0) > 0 && (r.counts.foldersListed ?? 0) === 0;
     this.healthState = degraded
@@ -324,6 +379,16 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     if (mode === 'full' || mode === 'initial') {
       rs.frontier = [root.startDir];
       rs.seededAt = now.toISOString();
+      return rs;
+    }
+    if (rs.frontier.length === 0 && !hasOkFolder(rs)) {
+      // Never listed OK (a dead session, a 404 root page, a flaky 403): do not wait for the
+      // re-walk interval, try the root again as soon as its backoff allows (the walk loop skips it
+      // until then). The backoff of a never-listed root is capped at 30 minutes.
+      const cap = now.getTime() + NEVER_LISTED_BACKOFF_CAP_MS;
+      for (const b of Object.values(rs.backoff))
+        if (new Date(b.nextAttemptAt).getTime() > cap) b.nextAttemptAt = new Date(cap).toISOString();
+      rs.frontier = [root.startDir];
       return rs;
     }
     if (rs.frontier.length === 0) {
@@ -371,6 +436,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     };
     const roots = this.enabledRoots();
     counts.roots = roots.length;
+    let proved = false;
     let filesTotal = 0;
     for (const rs of Object.values(state.roots))
       for (const f of Object.values(rs.folders)) filesTotal += f.childFileCount;
@@ -401,6 +467,8 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
           throw new AuthRequiredError(
             `SSL-VPN ポータルのセッションが切れました。「unicontext login ${this.options.sourceId}」で再度サインインしてください。 / SSL-VPN portal session expired; run \`unicontext login ${this.options.sourceId}\`.`,
           );
+        if (result.status === 'ok' || result.status === 'empty' || result.status === 'forbidden')
+          proved = true;
         this.applyListing(
           root,
           path,
@@ -414,7 +482,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
         await this.pause(cfg.walk.requestDelayMs);
       }
     }
-    return { items, deletions, warnings, counts };
+    return { items, deletions, warnings, counts, proved };
   }
 
   /** List one folder, retrying transient failures (flaky 403 / empty 200) within the run. */
@@ -441,7 +509,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     depth: number,
     result: ListResult,
     rs: RootState,
-    acc: RunOutput,
+    acc: Omit<RunOutput, 'proved'>,
     nowIso: string,
   ): void {
     if (result.status !== 'ok') {
@@ -452,7 +520,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
       const prev = rs.backoff[path]?.failures ?? 0;
       const backoffMs = Math.min(
         this.options.config.walk.retryBaseMs * 2 ** prev,
-        6 * 3_600_000,
+        hasOkFolder(rs) ? 6 * 3_600_000 : NEVER_LISTED_BACKOFF_CAP_MS,
       );
       rs.backoff[path] = {
         failures: prev + 1,
@@ -699,7 +767,8 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
         this.marker.write(undefined);
         throw new AuthRequiredError(out.auth.message ?? 'SSL-VPN portal sign-in required');
       }
-      this.markVerified();
+      // Only bytes that arrived prove the session (a 404 or a size refusal may be any page).
+      if ([...results.values()].some((o) => o.status === 'downloaded')) this.markVerified();
     }
 
     const extract = this.options.extract ?? defaultExtract;
