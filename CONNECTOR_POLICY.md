@@ -36,9 +36,12 @@ third-party ones.
      disabled form, no replayed tokens); one-time codes, MFA, secondary passwords and CAPTCHAs are
      never filled or bypassed, and a "continue / other sessions" button is never pressed: they stop
      the attempt with `auth_required` and say what was seen;
-   - rate-limited (one attempt per interval) and stopped for good on a wrong password, a lock-out or
-     MFA until the student saves the credentials again or signs in by hand, so retries can never
-     lock the account;
+   - rate-limited (one attempt per interval); once the form has been submitted, anything but a
+     confirmed sign-in (a wrong password, a lock-out, MFA, an answer the connector does not
+     recognise) stops it for good, and a stop the saved password may explain is lifted only by
+     saving the credentials again (not by a manual sign-in), so a password that stopped working
+     is submitted at most once; only failures before anything was submitted are retried;
+   - fail closed: when the attempt history cannot be read or recorded, no attempt is made;
    - the values never leave the keychain and the form fields: not in config, the database, logs,
      traces, state files or error messages.
 

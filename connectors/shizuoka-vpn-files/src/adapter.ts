@@ -19,7 +19,7 @@ import type {
   SyncResult,
 } from '@unicontext/connector-sdk';
 import { AuthRequiredError, type Clock, errorMessage, type Logger } from '@unicontext/core';
-import { CREDENTIAL_SECRETS } from './auto-login.js';
+import { type AutoSignInResult, CREDENTIAL_SECRETS } from './auto-login.js';
 import type { ShizuokaVpnFilesConfig } from './config.js';
 import { academicYear, courseHintForPath, isPrefetchPath } from './courses.js';
 import type { VpnDeployment, VpnRoot } from './deployment.js';
@@ -172,9 +172,14 @@ export interface ShizuokaVpnFilesAdapterOptions {
    * One rate-limited automatic sign-in with the credentials the student saved in the OS keychain
    * (see auto-login.ts). `undefined` when there are none (or it is turned off). Never prompts.
    */
-  autoSignIn?: () => Promise<AuthResult | undefined>;
-  /** Forget the automatic sign-in history (credentials saved again, or a manual sign-in worked). */
+  autoSignIn?: () => Promise<AutoSignInResult | undefined>;
+  /** The credentials were saved again (or deleted): forget the whole automatic sign-in history. */
   resetAutoSignIn?: () => void;
+  /**
+   * The student signed in by hand: lift the stops a working account explains, but NOT one whose
+   * cause may be the saved password (wrong password, lock-out, an unrecognised answer).
+   */
+  manualSignInSucceeded?: () => void;
   login?: (options?: InteractiveLoginOptions) => Promise<AuthResult>;
   logout?: () => Promise<void>;
   close?: () => Promise<void>;
@@ -298,8 +303,11 @@ export class ShizuokaVpnFilesAdapter
   private async signInAgain(detail?: string): Promise<AuthResult> {
     const auto = await this.options.autoSignIn?.();
     if (auto?.status === 'authenticated') {
-      this.markSignedIn();
-      return auto;
+      // Only a form actually submitted and confirmed starts a new session window. A session that
+      // was already live has an unknown start (the portal may end it any minute): verified only.
+      if (auto.fresh === true) this.markSignedIn();
+      else this.markVerified();
+      return { status: 'authenticated', ...(auto.message ? { message: auto.message } : {}) };
     }
     return this.signInRequired(auto?.message ?? detail);
   }
@@ -377,8 +385,9 @@ export class ShizuokaVpnFilesAdapter
     const r = await this.options.login(options);
     if (r.status === 'authenticated') {
       this.markSignedIn();
-      // The student signed in by hand: a stopped automatic sign-in may try again.
-      this.options.resetAutoSignIn?.();
+      // The student signed in by hand: a stopped automatic sign-in may try again, unless the
+      // saved password itself may be wrong (only saving it again lifts that).
+      this.options.manualSignInSucceeded?.();
     }
     return r;
   }
@@ -488,30 +497,67 @@ export class ShizuokaVpnFilesAdapter
         productVersion: { product: PRODUCT, version: this.options.deployment.id },
       };
 
-    let out = await this.runPage(state, pageInput);
-    const lost = (o: typeof out): boolean => 'auth' in o || o.result.sessionLost;
+    // A page that throws (another process holds the browser profile, the browser crashed) puts
+    // the walk state back as it was before that page, so a saved cursor never claims a folder
+    // whose items were not returned.
+    const page = async (
+      inp: SyncInput,
+    ): Promise<{ result: RunOutput } | { auth: AuthResult } | { thrown: unknown }> => {
+      const before = structuredClone(state);
+      try {
+        return await this.runPage(state, inp);
+      } catch (e) {
+        state.roots = before.roots;
+        if (before.migrated !== undefined) state.migrated = before.migrated;
+        return { thrown: e };
+      }
+    };
+    let out = await page(pageInput);
+    const lost = (o: typeof out): boolean => 'auth' in o || ('result' in o && o.result.sessionLost);
     const progressed = (o: typeof out): boolean =>
       'result' in o && (o.result.items.length > 0 || o.result.deletions.length > 0);
     let partial: RunOutput | undefined;
     let autoMessage: string | undefined;
     if (lost(out) && !autoTried && this.options.autoSignIn) {
       autoTried = true;
-      if (progressed(out)) partial = (out as { result: RunOutput }).result;
       const again = await this.signInAgain();
-      if (again.status === 'authenticated')
-        out = await this.runPage(state, { ...pageInput, mode: 'incremental' });
-      else autoMessage = again.message;
+      if (again.status === 'authenticated') {
+        // What this page listed before the drop is merged with the rest of the page.
+        if (progressed(out)) partial = (out as { result: RunOutput }).result;
+        out = await page({ ...pageInput, mode: 'incremental' });
+      } else autoMessage = again.message;
     }
-    if (partial && 'result' in out) out = { result: mergeRuns(partial, out.result) };
-    else if (partial && 'auth' in out) out = { result: { ...partial, sessionLost: true } };
+
+    // What this sync already listed (earlier pages, or this page before the session dropped) is
+    // kept: once a page has been returned or this one progressed, nothing here throws (the
+    // engine saves the cursor only after the last page; a throw would discard the earlier ones).
+    const keepGoing = cont !== undefined || partial !== undefined;
+    if ('thrown' in out) {
+      if (!keepGoing) throw out.thrown;
+      const why = errorMessage(out.thrown);
+      this.healthState = {
+        state: 'degraded',
+        checkedAt: this.now().toISOString(),
+        message: `walk stopped: ${why}`,
+      };
+      return this.stoppedPage(state, partial, [
+        `SSL-VPN: the walk stopped (${why}); the folders listed so far are kept and the next sync continues from there.`,
+      ]);
+    }
+    if ('auth' in out) {
+      const message =
+        autoMessage ?? out.auth.message ?? sessionExpiredMessage(this.options.sourceId);
+      this.sessionGone(message);
+      if (!keepGoing) throw new AuthRequiredError(message);
+      return this.stoppedPage(state, partial, [
+        `SSL-VPN portal session ended during the walk; the folders listed so far are kept. Sign in again to continue. (${message})`,
+      ]);
+    }
+    if (partial) out = { result: mergeRuns(partial, out.result) };
 
     const now = this.now().toISOString();
-    if ('auth' in out || (out.result.sessionLost && !progressed(out) && !cont)) {
-      const message =
-        autoMessage ??
-        ('auth' in out
-          ? (out.auth.message ?? 'SSL-VPN portal sign-in required')
-          : sessionExpiredMessage(this.options.sourceId));
+    if (out.result.sessionLost && !progressed(out) && !cont) {
+      const message = autoMessage ?? sessionExpiredMessage(this.options.sourceId);
       this.sessionGone(message);
       throw new AuthRequiredError(message);
     }
@@ -559,6 +605,25 @@ export class ShizuokaVpnFilesAdapter
       ...(nextPageToken ? { hasMore: true, nextPageToken } : {}),
       // NEVER declare `complete`: the listing is flaky, so unseen items must not be deleted.
       ...(warnings.length ? { warnings } : {}),
+    };
+  }
+
+  /**
+   * The last page of a sync whose walk could not go on (the session ended, the browser failed)
+   * after something was already listed: the progress is saved (cursor), nothing more this sync.
+   */
+  private stoppedPage(
+    state: WalkState,
+    partial: RunOutput | undefined,
+    warnings: string[],
+  ): SyncResult {
+    if (partial) this.lastRunCounts = partial.counts;
+    return {
+      items: partial?.items ?? [],
+      ...(partial?.deletions.length ? { deletions: partial.deletions } : {}),
+      cursor: { extra: state as unknown as Record<string, unknown> },
+      productVersion: { product: PRODUCT, version: this.options.deployment.id },
+      warnings: [...(partial?.warnings ?? []), ...warnings],
     };
   }
 

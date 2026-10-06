@@ -149,7 +149,7 @@ describe('walking the whole tree inside a fresh sign-in window', () => {
       sessionMarker: m,
       autoSignIn: () => {
         autos++;
-        return Promise.resolve({ status: 'authenticated', message: 'auto' });
+        return Promise.resolve({ status: 'authenticated', message: 'auto', fresh: true });
       },
     });
     let n = 0;
@@ -175,25 +175,82 @@ describe('walking the whole tree inside a fresh sign-in window', () => {
     const m = marker(minutesAgo(90));
     const h = harness({
       sessionMarker: m,
-      autoSignIn: () => Promise.resolve({ status: 'authenticated', message: 'auto' }),
+      autoSignIn: () => Promise.resolve({ status: 'authenticated', message: 'auto', fresh: true }),
     });
-    expect((await h.adapter.authenticate()).status).toBe('authenticated');
+    const r = await h.adapter.authenticate();
+    expect(r.status).toBe('authenticated');
+    expect(r).not.toHaveProperty('fresh');
     expect(m.signedIn).toBe(NOW.toISOString());
   });
 
-  it('a manual sign-in records the sign-in time and resets a stopped automatic sign-in', async () => {
+  it('a session the automatic sign-in found already live is verified, but opens no new walk window', async () => {
+    const m = marker(minutesAgo(90));
+    m.signedIn = minutesAgo(58); // its real start: the portal ends it in 2 minutes
+    const h = harness({
+      config: { walk: { maxFoldersPerRun: 3, maxRetries: 0 } },
+      sessionMarker: m,
+      autoSignIn: () => Promise.resolve({ status: 'authenticated', message: 'still live' }),
+    });
+    expect((await h.adapter.authenticate()).status).toBe('authenticated');
+    expect(m.verified).toBe(NOW.toISOString());
+    expect(m.signedIn).toBe(minutesAgo(58)); // not moved to now
+    // So the sync lists one page only, not a 55-minute sweep.
+    const run = await engineRun(h.adapter, { mode: 'initial' });
+    expect(run.pages).toHaveLength(1);
+    expect(h.client.listCalls).toHaveLength(3);
+  });
+
+  it('a manual sign-in records the sign-in time and tells the automatic sign-in (not a full reset)', async () => {
     const m = marker();
     let resets = 0;
+    let manual = 0;
     const h = harness({
       sessionMarker: m,
       login: () => Promise.resolve({ status: 'authenticated', message: 'ok' }),
       resetAutoSignIn: () => void resets++,
+      manualSignInSucceeded: () => void manual++,
     });
     expect((await h.adapter.login()).status).toBe('authenticated');
     expect(m.signedIn).toBe(NOW.toISOString());
-    expect(resets).toBe(1);
+    expect([manual, resets]).toEqual([1, 0]);
     h.adapter.credentialsChanged();
-    expect(resets).toBe(2);
+    expect([manual, resets]).toEqual([1, 1]);
+  });
+
+  it('a later page that finds the session gone (no saved password) keeps the earlier pages: no throw, cursor returned', async () => {
+    const m = marker(minutesAgo(1));
+    const h = harness({ config: { walk: { maxFoldersPerRun: 3, maxRetries: 0 } }, sessionMarker: m });
+    const first = await h.adapter.sync({ mode: 'initial' });
+    expect(first.hasMore).toBe(true);
+    // The portal ends the session between two pages: withClient's sign-in check says auth.
+    const opts = (h.adapter as unknown as { options: { withClient: unknown } }).options;
+    opts.withClient = () => Promise.resolve({ auth: { status: 'auth_required', message: 'sign in' } });
+    const second = await h.adapter.sync({ mode: 'initial', pageToken: first.nextPageToken!, ...(first.cursor ? { cursor: first.cursor } : {}) });
+    expect(second.hasMore).toBeUndefined();
+    expect(second.items).toEqual([]);
+    expect(second.warnings?.join(' ')).toMatch(/session ended during the walk/);
+    const extra = second.cursor?.extra as { roots: Record<string, { folders: Record<string, unknown>; frontier: string[] }> };
+    expect(Object.keys(extra.roots['fs-share']!.folders)).toHaveLength(3);
+    expect((await h.adapter.health()).state).toBe('auth_required');
+  });
+
+  it('a later page that throws (profile held by another process) keeps the earlier pages and rolls back its own', async () => {
+    const m = marker(minutesAgo(1));
+    const h = harness({ config: { walk: { maxFoldersPerRun: 3, maxRetries: 0 } }, sessionMarker: m });
+    const first = await h.adapter.sync({ mode: 'initial' });
+    const before = JSON.stringify(first.cursor?.extra);
+    // The browser fails in the middle of page 2, after one folder was listed.
+    let n = 0;
+    const listDir = h.client.listDir.bind(h.client);
+    h.client.listDir = (req) => {
+      if (++n === 2) throw new Error('BrowserProfileInUseError: the browser profile is in use');
+      return listDir(req);
+    };
+    const second = await h.adapter.sync({ mode: 'initial', pageToken: first.nextPageToken! });
+    expect(second.hasMore).toBeUndefined();
+    expect(second.warnings?.join(' ')).toMatch(/walk stopped/);
+    // Exactly the state after page 1: the folder page 2 listed but never returned is not claimed.
+    expect(JSON.stringify(second.cursor?.extra)).toBe(before);
   });
 });
 

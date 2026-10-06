@@ -123,8 +123,9 @@ export function harness(
     verifySession?: () => Promise<AuthResult>;
     profileInUse?: () => boolean;
     login?: () => Promise<AuthResult>;
-    autoSignIn?: () => Promise<AuthResult | undefined>;
+    autoSignIn?: () => Promise<(AuthResult & { fresh?: boolean }) | undefined>;
     resetAutoSignIn?: () => void;
+    manualSignInSucceeded?: () => void;
     extract?: (data: Uint8Array, ext: string) => Promise<{ text: string; pages?: { page: number; text: string }[] }>;
   } = {},
 ): Harness {
@@ -151,6 +152,7 @@ export function harness(
     ...(overrides.login ? { login: overrides.login } : {}),
     ...(overrides.autoSignIn ? { autoSignIn: overrides.autoSignIn } : {}),
     ...(overrides.resetAutoSignIn ? { resetAutoSignIn: overrides.resetAutoSignIn } : {}),
+    ...(overrides.manualSignInSucceeded ? { manualSignInSucceeded: overrides.manualSignInSucceeded } : {}),
     withClient: async (fn) => {
       if (overrides.authFail)
         return { auth: { status: 'auth_required', message: 'login' } as AuthResult };

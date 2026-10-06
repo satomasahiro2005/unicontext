@@ -52,7 +52,10 @@ Unmapped folders stay fully visible.
   sync engine can never delete unseen items either. A session lost before anything was listed
   fails the run with `auth_required` and changes nothing; one lost in the middle of a long walk
   keeps the pages already listed (and the cursor), deletes nothing, and the next run asks for a
-  sign-in (or signs in again with the saved password, below).
+  sign-in (or signs in again with the saved password, below). The sync engine saves the cursor only
+  after the last page, so a later page never fails the sync: the session found gone between two
+  pages, or a browser profile held by another UniContext process, ends the sync with the progress
+  so far (a page that broke off in the middle is rolled back to where it started).
 - **Polite & incremental.** One request at a time with a pause (≈3 s + jitter) and exponential
   backoff; `maxFoldersPerRun` (default 60) per page; the walk resumes from where it stopped via the
   cursor, re-lists stale folders, and re-seeds the whole tree every `rewalkAfterHours` (72 h). A root that
@@ -61,8 +64,9 @@ Unmapped folders stay fully visible.
   waiting a day for its parent to be listed again; a forbidden placeholder does not.
   Schedule is daily; keep it off known maintenance windows.
 - **The whole tree inside one sign-in.** When UniContext knows when the current session was signed
-  in (`signedInAt` in `portal-session.json`, written by `login` and by the automatic sign-in), one
-  sync keeps going page after page (each page is stored as it arrives) until the tree is indexed,
+  in (`signedInAt` in `portal-session.json`, written by `login` and by an automatic sign-in that
+  actually submitted the form — not when it only found a session still live), one sync keeps going
+  page after page until the tree is indexed,
   `walk.maxFoldersPerSession` (2000) folders, or `signedInAt + browser.sessionMaxMinutes −
   walk.sessionMarginMinutes` (60 − 5 = 55 min). At ≈3.75 s per folder that is ≈800 folders per
   sign-in. Without a known sign-in time it is one page per sync, as before.
@@ -194,31 +198,48 @@ Manager, `SecretStore`) and sign in again by itself when the session is gone.
   visibly, the password without echo. Or `unicontext secrets set shizuoka-vpn-files username` /
   `… password`. `unicontext secrets list shizuoka-vpn-files` shows whether they are stored (never
   the values); `unicontext secrets delete shizuoka-vpn-files password` turns it off, as does
-  `autoLogin.enabled: false`. Saving them again (or a successful manual sign-in) clears any stop
-  below.
+  `autoLogin.enabled: false`. Saving them again (`secrets set`, or deleting and re-entering them)
+  clears any stop below. A successful manual sign-in clears only the stops a working account
+  explains (an MFA page, the Continue page, an unknown form, failures before anything was sent),
+  never one whose cause may be the saved password itself: a manual sign-in proves the account
+  works, not that the saved password does.
 - **Where it types**: only into `form[name="frmLogin"]`'s `username` and `password` fields on
   `https://<portal host>/dana-na/auth/url_3/welcome.cgi` (the realm's form, checked before typing),
   then presses that form's own submit button. The read-only route still blocks every non-GET
   except the sign-in POSTs under `/dana-na/auth/`. The session is then confirmed by the same
   portal check as a manual sign-in (`landing-page` JSON). A page that is not that form gets nothing
-  typed (`form_not_found`).
+  typed (`form_not_found`). A session that is still live at the sign-in URL is confirmed without
+  typing anything (`already_signed_in`); its real start is unknown, so it opens no new 55-minute
+  walk window (one page per sync, as for any session UniContext did not sign in).
 - **When it stops** (and reports `auth_required` with what it saw, e.g. `自動サインインできませんでした:
   二段階認証（ワンタイムコードなど）を求められました / … mfa @ /dana-na/auth/url_3/…`):
-  - wrong user name or password (`p=failed`, or the form again after submit), a lock-out (`p=…lock…`),
-    an MFA / one-time-code / secondary-password page, a CAPTCHA, or an unrecognised form: **stops
-    for good** until the credentials are saved again or the student signs in by hand, so a changed
-    password can never lock the account through retries;
-  - Ivanti's "other user sessions in progress" page (`btnContinue` / `FormDataStr`): **never
+  - once the form has been submitted, **anything but a confirmed sign-in stops for good**: a wrong
+    user name or password (`p=failed`, or the form again after submit), a lock-out (`p=…lock…`), an
+    MFA / one-time-code / secondary-password page, a CAPTCHA, Ivanti's "other user sessions in
+    progress" page, no recognisable answer within `submitTimeoutMs` (`timeout`: it may be a
+    refusal page the connector does not know), or a browser error after the submit button was
+    pressed (`submit_error`);
+  - wrong password, lock-out, CAPTCHA, `timeout` and `submit_error` are lifted **only** by saving
+    the credentials again (`unicontext secrets set shizuoka-vpn-files password`); the others also
+    by a manual sign-in. So a saved password that stopped working is submitted at most once;
+  - the "other user sessions in progress" page (`btnContinue` / `FormDataStr`) is **never
     pressed** — Continue can end another session, which may be the student's own browser session,
-    and UniContext cannot tell whose it is. Counted as a soft failure;
-  - no recognisable answer within `submitTimeoutMs`: soft failure.
-  Soft failures are retried at most once per `minIntervalMinutes` (10) and stop after
+    and UniContext cannot tell whose it is;
+  - a page that is not the realm's form: nothing typed, stops (`form_not_found`).
+  Only failures before anything was submitted (the page did not load, the browser failed while
+  filling) are soft: retried at most once per `minIntervalMinutes` (10), stopping after
   `maxConsecutiveFailures` (3) in a row. A browser profile held by another UniContext process does
   not count as an attempt (nothing was typed).
+- **Fail closed**: the attempt history is `auto-login.json`, written atomically (temp file +
+  rename). When it cannot be read (anything but "no file yet": a lock from a scanner or sync
+  client, a half-written or corrupt file) or the attempt cannot be recorded before the browser
+  opens, no attempt is made (`auth_required`, saying so). A stop that could not be saved after the
+  attempt still holds in that process.
 - **Never written anywhere else**: not config, the database, raw payloads, logs, `login-trace.jsonl`,
   `portal-session.json` or `auto-login.json` (that file holds timestamps, the last outcome name and
-  a path without query only), and not in error messages (any browser error text is scrubbed of
-  both values). Tested with the fake portal (`test/auto-login.test.ts`).
+  a path without query only), and not in error messages (of a browser error only the first line
+  is kept — Playwright's call log repeats `fill("<value>")` — and it is scrubbed of both values,
+  the longest first, so a password that contains the user name is not half-replaced). Tested with the fake portal (`test/auto-login.test.ts`).
 - **Risks the student accepted**: the password sits in Windows Credential Manager, readable by any
   program running as the same Windows user; automated sign-in to the portal is not something the
   university documents as allowed (the connector stays read-only); a portal change (MFA added, a
@@ -229,11 +250,13 @@ Manager, `SecretStore`) and sign in again by itself when the session is gone.
 MCP tools (local and the remote read-only surface):
 
 - `browse_vpn_files { root?, path?, limit?, offset? }` — a folder's subfolders (each with its last
-  successful listing time and status) and files. No `root` → the share roots. While nothing has
-  been indexed yet, the answer carries `index: { empty: true, sources: [{ source, health, … }],
-  note }` so an empty list is never read as "the share is empty".
+  successful listing time and status) and files. No `root` → the share roots.
 - `search_vpn_files { query, year?, course?, root? }` — name/path substring across the whole index.
 - `list_recent_vpn_files { since?, root? }` — recently added/updated files, newest first.
+
+While nothing has been indexed yet, every one of the three (browse with or without `root`, search,
+recent) carries `index: { empty: true, sources: [{ source, health, … }], note }`, so an empty list
+is never read as "the file does not exist" or "the share is empty".
 - `download_course_file { file }` — download one file's bytes/text on request (pass a `document:…`
   id from the tools above). Downloaded files are cached locally, so later reads never touch the
   portal; retries use backoff.

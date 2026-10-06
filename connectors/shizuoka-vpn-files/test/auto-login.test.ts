@@ -1,17 +1,23 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import * as fs from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { FakeBrowserDriver, type FakePage, type FakeScreen } from '@unicontext/adapter-browser';
 import { instantiateConnector, supportsSavedCredentials } from '@unicontext/connector-sdk';
 import type { Clock, Logger, SecretStore, UniversityProfile } from '@unicontext/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  afterManualSignIn,
+  type AutoLoginFs,
+  type AutoLoginOutcome,
   autoLoginGate,
+  createAutoLogin,
   createShizuokaVpnFilesConnector,
   emptyAutoLoginState,
   isRealmSignInPage,
   recordAutoLoginOutcome,
   redact,
+  scrubBrowserError,
   type SessionCheck,
   ShizuokaVpnFilesAdapter,
   ShizuokaVpnFilesConfigSchema,
@@ -93,7 +99,16 @@ function captureLogger(lines: string[]): Logger {
   return l;
 }
 
-type Behaviour = 'ok' | 'wrong' | 'mfa' | 'continue' | 'captcha' | 'stuck';
+type Behaviour = 'ok' | 'wrong' | 'mfa' | 'continue' | 'captcha' | 'stuck' | 'same-form' | 'click-error';
+
+/** What Playwright 1.63 puts in a locator.fill timeout: the call log repeats the raw value. */
+const fillTimeout = (value: string): Error => {
+  const e = new Error(
+    `locator.fill: Timeout 10000ms exceeded.\nCall log:\n  - waiting for locator('form[name="frmLogin"] input[name="password"]:visible')\n  - fill("${value}")\n`,
+  );
+  e.name = 'TimeoutError';
+  return e;
+};
 
 describe('automatic sign-in with saved credentials (fake portal)', () => {
   const dirs: string[] = [];
@@ -101,15 +116,29 @@ describe('automatic sign-in with saved credentials (fake portal)', () => {
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   });
 
-  function setup(opts: { behaviour?: Behaviour; saved?: boolean; config?: Record<string, unknown>; first?: FakeScreen } = {}) {
+  function setup(
+    opts: {
+      behaviour?: Behaviour;
+      saved?: boolean;
+      config?: Record<string, unknown>;
+      first?: FakeScreen;
+      creds?: { user: string; pass: string };
+    } = {},
+  ) {
     const cacheDir = mkdtempSync(join(tmpdir(), 'uc-vpn-auto-'));
     dirs.push(cacheDir);
     const keychain = new MemoryKeychain();
+    const creds = opts.creds ?? { user: USER, pass: PASS };
     if (opts.saved !== false) {
-      keychain.map.set('shizuoka-vpn-files/username', USER);
-      keychain.map.set('shizuoka-vpn-files/password', PASS);
+      keychain.map.set('shizuoka-vpn-files/username', creds.user);
+      keychain.map.set('shizuoka-vpn-files/password', creds.pass);
     }
-    const state = { signedIn: false, submits: 0, behaviour: opts.behaviour ?? 'ok' };
+    const state: {
+      signedIn: boolean;
+      submits: number;
+      behaviour: Behaviour;
+      failFill?: (selector: string, value: string) => Error | undefined;
+    } = { signedIn: false, submits: 0, behaviour: opts.behaviour ?? 'ok' };
     const driver = new FakeBrowserDriver({
       screens: {
         [`${O}/`]: { title: 'Ivanti Connect Secure', html: '<h1>404</h1>' },
@@ -141,13 +170,14 @@ describe('automatic sign-in with saved credentials (fake portal)', () => {
         if (url === LANDING) return state.signedIn ? JSON_OK : BOUNCED;
         return { live: false, status: 404 };
       },
+      onFill: (_page, selector, value) => state.failFill?.(selector, value),
       onClick: (_page, selector) => {
         if (selector !== SUBMIT) return undefined;
         state.submits++;
         const typed = driver.filled.find((f) => f.selector.includes('password'))?.value;
         switch (state.behaviour) {
           case 'ok':
-            if (typed !== PASS) return `${WELCOME}?p=failed`;
+            if (typed !== creds.pass) return `${WELCOME}?p=failed`;
             state.signedIn = true;
             return LOGIN_CGI;
           case 'wrong':
@@ -160,6 +190,11 @@ describe('automatic sign-in with saved credentials (fake portal)', () => {
             return `${O}/dana-na/auth/url_3/captcha.cgi`;
           case 'stuck':
             return `${O}/dana-na/auth/url_3/wait.cgi`;
+          case 'same-form':
+            // A refusal the connector does not recognise: the form again, same URL, no p=.
+            return WELCOME;
+          case 'click-error':
+            throw new Error(`locator.click: Target closed\nCall log:\n  - fill("${creds.pass}")`);
         }
       },
     });
@@ -196,9 +231,19 @@ describe('automatic sign-in with saved credentials (fake portal)', () => {
     return out.join('\n');
   }
 
-  function expectNoSecrets(text: string): void {
-    expect(text).not.toContain(PASS);
-    expect(text).not.toContain(USER);
+  function expectNoSecrets(text: string, values: string[] = [USER, PASS]): void {
+    for (const v of values) expect(text).not.toContain(v);
+  }
+
+  /** The student signs in in the window (the portal already answers signed in). */
+  async function manualLogin(adapter: ShizuokaVpnFilesAdapter, clock: Clock) {
+    // The connector re-probes a page at most every 5 s of wall time: follow the fake clock.
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => clock.now().getTime());
+    try {
+      return await adapter.login();
+    } finally {
+      spy.mockRestore();
+    }
   }
 
   it('declares the credentials it can store (opt-in) for the CLI', () => {
@@ -286,33 +331,124 @@ describe('automatic sign-in with saved credentials (fake portal)', () => {
     expect(state.submits).toBe(0);
   });
 
-  it('the "other sessions in progress" page is never pressed: soft failure, retried after the interval', async () => {
+  it('the "other sessions in progress" page is never pressed and stops for good (the form was submitted)', async () => {
     const { adapter, driver, state, clock } = setup({ behaviour: 'continue' });
     const r = await adapter.authenticate();
     expect(r.status).toBe('auth_required');
     expect(r.message).toMatch(/続行」は押していません|session_in_progress/);
     expect(driver.clicked.filter((c) => /btnContinue/.test(c))).toHaveLength(0);
+    clock.set(new Date(clock.now().getTime() + 3 * 3_600_000));
+    expect((await adapter.authenticate()).message).toMatch(/止めています|stopped/);
+    expect(state.submits).toBe(1);
+  });
+
+  it('no recognisable answer after submit (an unknown refusal page) stops for good: the password is not sent again', async () => {
+    for (const behaviour of ['stuck', 'same-form'] as const) {
+      const { adapter, state, clock } = setup({ behaviour, config: { autoLogin: { submitTimeoutMs: 3_000 } } });
+      const first = await adapter.authenticate();
+      expect(first.message, behaviour).toMatch(/timeout/);
+      clock.set(new Date(clock.now().getTime() + 24 * 3_600_000));
+      const later = await adapter.authenticate();
+      expect(later.message, behaviour).toMatch(/止めています|stopped/);
+      expect(later.message, behaviour).toMatch(/secrets set shizuoka-vpn-files password/);
+      expect(state.submits, behaviour).toBe(1);
+    }
+  });
+
+  it('a browser error after the submit button was pressed stops for good, scrubbed', async () => {
+    const { adapter, state, clock, lines, cacheDir } = setup({ behaviour: 'click-error' });
+    const r = await adapter.authenticate();
+    expect(r.message).toMatch(/submit_error/);
+    clock.set(new Date(clock.now().getTime() + 24 * 3_600_000));
+    expect((await adapter.authenticate()).message).toMatch(/止めています|stopped/);
+    expect(state.submits).toBe(1);
+    expectNoSecrets(lines.join('\n') + writtenFiles(cacheDir) + JSON.stringify(r));
+  });
+
+  it('only failures before anything was submitted are retried, and they stop after maxConsecutiveFailures', async () => {
+    const { adapter, driver, state, clock } = setup({ config: { autoLogin: { maxConsecutiveFailures: 2 } } });
+    state.failFill = () => new Error('locator.fill: Target page, context or browser has been closed');
+    const first = await adapter.authenticate();
+    expect(first.message).toMatch(/何も送信していません/);
     // Rate limit: not again within 10 minutes.
     clock.set(new Date(clock.now().getTime() + 5 * 60_000));
-    const soon = await adapter.authenticate();
-    expect(soon.message).toMatch(/10分に1回/);
-    expect(state.submits).toBe(1);
-    // After the interval: one more try.
+    expect((await adapter.authenticate()).message).toMatch(/10分に1回/);
     clock.set(new Date(clock.now().getTime() + 6 * 60_000));
     await adapter.authenticate();
+    clock.set(new Date(clock.now().getTime() + 60 * 60_000));
+    expect((await adapter.authenticate()).message).toMatch(/止めています|stopped/);
+    expect(state.submits).toBe(0);
+    expect(driver.launches).toHaveLength(2);
+  });
+
+  it('a password that contains the user name never leaks from a Playwright fill error (call log)', async () => {
+    const creds = { user: 's1234567', pass: 's1234567Pw!' };
+    const { adapter, state, lines, cacheDir, driver } = setup({ creds });
+    state.failFill = (selector, value) => (selector.includes('password') ? fillTimeout(value) : undefined);
+    const r = await adapter.authenticate();
+    expect(r.status).toBe('auth_required');
+    expect(state.submits).toBe(0);
+    expect(driver.filled.map((f) => f.selector)).toEqual(['form[name="frmLogin"] input[name="username"]:visible']);
+    const logged = lines.join('\n');
+    expect(logged).toMatch(/TimeoutError: locator\.fill: Timeout 10000ms exceeded\./);
+    expect(logged).not.toMatch(/Call log/);
+    for (const text of [logged, writtenFiles(cacheDir), JSON.stringify(r)]) {
+      expectNoSecrets(text, [creds.user, creds.pass]);
+      expect(text).not.toContain('Pw!');
+    }
+  });
+
+  it('a wrong password is not sent again after a manual sign-in (only saving the credentials again lifts it)', async () => {
+    const { adapter, state, clock } = setup({ behaviour: 'wrong' });
+    expect((await adapter.authenticate()).message).toMatch(/wrong_credentials/);
+    expect(state.submits).toBe(1);
+    // The student signs in by hand (their new password, typed in the window).
+    state.signedIn = true;
+    const manual = await manualLogin(adapter, clock);
+    expect(manual.status, manual.message).toBe('authenticated');
+    // The portal ends that session an hour later: the saved (old) password is not tried.
+    state.signedIn = false;
+    clock.set(new Date(clock.now().getTime() + 2 * 3_600_000));
+    const after = await adapter.authenticate();
+    expect(after.status).toBe('auth_required');
+    expect(after.message).toMatch(/止めています|stopped/);
+    expect(state.submits).toBe(1);
+    // Saving the credentials again lifts it.
+    adapter.credentialsChanged();
+    state.behaviour = 'ok';
+    expect((await adapter.authenticate()).status).toBe('authenticated');
     expect(state.submits).toBe(2);
   });
 
-  it('stops after maxConsecutiveFailures soft failures in a row', async () => {
-    const { adapter, state, clock } = setup({ behaviour: 'stuck', config: { autoLogin: { maxConsecutiveFailures: 2, submitTimeoutMs: 3_000 } } });
-    await adapter.authenticate();
-    clock.set(new Date(clock.now().getTime() + 11 * 60_000));
-    const second = await adapter.authenticate();
-    expect(second.message).toMatch(/timeout/);
-    clock.set(new Date(clock.now().getTime() + 60 * 60_000));
-    const third = await adapter.authenticate();
-    expect(third.message).toMatch(/止めています|stopped/);
+  it('a manual sign-in lifts a stop the account explains (an MFA page), so automatic sign-in resumes', async () => {
+    const { adapter, state, clock } = setup({ behaviour: 'mfa' });
+    expect((await adapter.authenticate()).message).toMatch(/mfa/);
+    state.signedIn = true;
+    const manual = await manualLogin(adapter, clock);
+    expect(manual.status, manual.message).toBe('authenticated');
+    state.signedIn = false;
+    state.behaviour = 'ok';
+    clock.set(new Date(clock.now().getTime() + 2 * 3_600_000));
+    expect((await adapter.authenticate()).status).toBe('authenticated');
     expect(state.submits).toBe(2);
+  });
+
+  it('a session already live at the sign-in URL is confirmed without typing and opens no new session window', async () => {
+    const { adapter, driver, state, cacheDir } = setup();
+    state.signedIn = true;
+    driver.redirects[WELCOME] = `${O}/dana/home/starter.cgi`;
+    driver.screens[`${O}/dana/home/starter.cgi`] = { title: 'Home', html: '<p>home</p>' };
+    const r = await adapter.authenticate();
+    expect(r.status).toBe('authenticated');
+    expect(driver.filled).toHaveLength(0);
+    expect(state.submits).toBe(0);
+    const marker = JSON.parse(readFileSync(join(cacheDir, 'portal-session.json'), 'utf8')) as Record<string, string>;
+    expect(marker.verifiedAt).toBeDefined();
+    // Its real sign-in time is unknown: no 55-minute walk window is granted.
+    expect(marker.signedInAt).toBeUndefined();
+    // Nothing was typed, so it does not count as an attempt either.
+    const st = JSON.parse(readFileSync(join(cacheDir, 'auto-login.json'), 'utf8')) as Record<string, unknown>;
+    expect(st.lastAttemptAt).toBeUndefined();
   });
 
   it('a CAPTCHA stops for good', async () => {
@@ -339,20 +475,40 @@ describe('automatic sign-in policy (pure)', () => {
   const at = (min: number): Date => new Date(t0.getTime() + min * 60_000);
 
   it('one attempt per minIntervalMinutes', () => {
-    const s = recordAutoLoginOutcome(emptyAutoLoginState(), { status: 'timeout', path: '/x' }, t0, cfg);
+    const s = recordAutoLoginOutcome(emptyAutoLoginState(), { status: 'error', message: 'x' }, t0, cfg);
     expect(autoLoginGate(s, at(9), cfg).ok).toBe(false);
     expect(autoLoginGate(s, at(10), cfg).ok).toBe(true);
   });
 
-  it('hard stops: wrong password, lock-out, MFA, CAPTCHA, unknown form', () => {
-    for (const status of ['wrong_credentials', 'locked', 'mfa', 'captcha', 'form_not_found'] as const) {
+  it('hard stops: everything after a submit that is not a sign-in, and an unknown form', () => {
+    const outcomes: AutoLoginOutcome[] = [
+      ...(['wrong_credentials', 'locked', 'mfa', 'captcha', 'form_not_found', 'session_in_progress', 'timeout'] as const).map(
+        (status) => ({ status, path: '/x' }),
+      ),
+      { status: 'submit_error', message: 'x', path: '/x' },
+    ];
+    for (const o of outcomes) {
+      const s = recordAutoLoginOutcome(emptyAutoLoginState(), o, t0, cfg);
+      expect(autoLoginGate(s, at(24 * 60), cfg).ok, o.status).toBe(false);
+    }
+    // Only a failure before anything was submitted is retried.
+    const soft = recordAutoLoginOutcome(emptyAutoLoginState(), { status: 'error', message: 'x' }, t0, cfg);
+    expect(autoLoginGate(soft, at(10), cfg).ok).toBe(true);
+  });
+
+  it('a manual sign-in keeps the stops the saved password may explain', () => {
+    for (const status of ['wrong_credentials', 'locked', 'captcha', 'timeout'] as const) {
       const s = recordAutoLoginOutcome(emptyAutoLoginState(), { status, path: '/x' }, t0, cfg);
-      expect(autoLoginGate(s, at(24 * 60), cfg).ok, status).toBe(false);
+      expect(afterManualSignIn(s).stoppedAt, status).toBeDefined();
+    }
+    for (const status of ['mfa', 'session_in_progress', 'form_not_found'] as const) {
+      const s = recordAutoLoginOutcome(emptyAutoLoginState(), { status, path: '/x' }, t0, cfg);
+      expect(afterManualSignIn(s), status).toEqual(emptyAutoLoginState());
     }
   });
 
   it('success clears the failure count', () => {
-    let s = recordAutoLoginOutcome(emptyAutoLoginState(), { status: 'timeout', path: '/x' }, t0, cfg);
+    let s = recordAutoLoginOutcome(emptyAutoLoginState(), { status: 'error', message: 'x' }, t0, cfg);
     s = recordAutoLoginOutcome(s, { status: 'signed_in' }, at(20), cfg);
     expect(s.consecutiveFailures).toBe(0);
     expect(s.stoppedAt).toBeUndefined();
@@ -368,5 +524,128 @@ describe('automatic sign-in policy (pure)', () => {
 
   it('redact removes every occurrence of the values', () => {
     expect(redact(`fill("${PASS}") for ${USER}`, [USER, PASS])).toBe('fill("***") for ***');
+  });
+
+  it('redact replaces the longest value first (a password that contains the user name)', () => {
+    expect(redact('fill("s1234567Pw!") for s1234567', ['s1234567', 's1234567Pw!'])).toBe('fill("***") for ***');
+    // As a string literal would print it.
+    expect(redact('fill("a\\"b")', ['u', 'a"b'])).toBe('fill("***")');
+  });
+
+  it('a browser error keeps only its first line (no Playwright call log)', () => {
+    const e = new Error('locator.fill: Timeout 10000ms exceeded.\nCall log:\n  - fill("zzz-secret")');
+    expect(scrubBrowserError(e, ['zzz-user', 'zzz-secret'])).toBe('Error: locator.fill: Timeout 10000ms exceeded.');
+    // Even when a value is on the first line.
+    expect(scrubBrowserError(new Error('bad zzz-secret'), ['zzz-user', 'zzz-secret'])).toBe('Error: bad ***');
+  });
+});
+
+describe('automatic sign-in state file (fail closed)', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  function make(opts: { fs?: Partial<AutoLoginFs>; outcome?: AutoLoginOutcome } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'uc-vpn-state-'));
+    dirs.push(dir);
+    const stateFile = join(dir, 'auto-login.json');
+    const keychain = new MemoryKeychain();
+    keychain.map.set('shizuoka-vpn-files/username', USER);
+    keychain.map.set('shizuoka-vpn-files/password', PASS);
+    const clock = advancingClock();
+    const runs: { n: number; outcome: AutoLoginOutcome } = {
+      n: 0,
+      outcome: opts.outcome ?? { status: 'wrong_credentials', path: '/w' },
+    };
+    const lines: string[] = [];
+    const auto = createAutoLogin({
+      sourceId: 'shizuoka-vpn-files',
+      secrets: keychain,
+      config: ShizuokaVpnFilesConfigSchema.parse({}).autoLogin,
+      deployment: DEPLOYMENT,
+      clock,
+      logger: captureLogger(lines),
+      stateFile,
+      run: () => {
+        runs.n++;
+        return Promise.resolve(runs.outcome);
+      },
+      fs: { ...fs, ...(opts.fs ?? {}) } as AutoLoginFs,
+    });
+    return { auto, stateFile, dir, clock, runs, lines };
+  }
+
+  it('a corrupt (half-written) state file: no attempt, auth_required', async () => {
+    const { auto, stateFile, runs } = make();
+    writeFileSync(stateFile, '{"consecutiveFailures":1,"stoppedAt":"2026-');
+    const r = await auto.attempt();
+    expect(r?.status).toBe('auth_required');
+    expect(r?.message).toMatch(/auto-login\.json/);
+    expect(runs.n).toBe(0);
+    expect(auto.readState()).toBeUndefined();
+  });
+
+  it('a state file that cannot be read (EBUSY from a scanner or sync client): no attempt', async () => {
+    const busy = Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    const { auto, runs } = make({
+      fs: {
+        readFileSync: (() => {
+          throw busy;
+        }) as unknown as AutoLoginFs['readFileSync'],
+      },
+    });
+    expect((await auto.attempt())?.status).toBe('auth_required');
+    expect(runs.n).toBe(0);
+  });
+
+  it('a state file that cannot be written before the attempt: the browser is never opened', async () => {
+    const { auto, runs, stateFile } = make({
+      fs: {
+        renameSync: () => {
+          throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        },
+      },
+    });
+    const r = await auto.attempt();
+    expect(r?.status).toBe('auth_required');
+    expect(r?.message).toMatch(/書けない|cannot be written/);
+    expect(runs.n).toBe(0);
+    // No temp file left behind.
+    expect(readdirSync(dirname(stateFile))).toEqual([]);
+  });
+
+  it('a stop that could not be saved still holds in this process', async () => {
+    let writes = 0;
+    const { auto, runs, clock } = make({
+      fs: {
+        renameSync: ((from: string, to: string) => {
+          // The first write (marking the attempt) works, every later one fails.
+          if (++writes > 1) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+          fs.renameSync(from, to);
+        }) as AutoLoginFs['renameSync'],
+      },
+    });
+    expect((await auto.attempt())?.message).toMatch(/wrong_credentials/);
+    clock.set(new Date(clock.now().getTime() + 3 * 3_600_000));
+    const again = await auto.attempt();
+    expect(again?.status).toBe('auth_required');
+    expect(again?.message).toMatch(/止めています|stopped/);
+    expect(runs.n).toBe(1);
+  });
+
+  it('writes the state atomically (no temp file left, always whole JSON)', async () => {
+    const { auto, stateFile } = make();
+    await auto.attempt();
+    expect(readdirSync(dirname(stateFile))).toEqual(['auto-login.json']);
+    expect(auto.readState()?.lastOutcome).toBe('wrong_credentials');
+    expect(auto.readState()?.stoppedAt).toBeDefined();
+  });
+
+  it('a missing state file is an empty history (the first attempt goes ahead)', async () => {
+    const { auto, runs, dir } = make();
+    mkdirSync(dir, { recursive: true });
+    await auto.attempt();
+    expect(runs.n).toBe(1);
   });
 });

@@ -77,6 +77,8 @@ export class FakePage implements PageLike {
         const s = this.screen();
         if (!s.selectors?.some((x) => x === selector || x === `${selector}:visible`))
           return Promise.reject(new Error(`nothing to fill: ${selector}`));
+        const failure = this.driver.onFill?.(this, selector, value);
+        if (failure) return Promise.reject(failure);
         this.driver.filled.push({ selector, value });
         return Promise.resolve();
       },
@@ -166,10 +168,15 @@ export class FakeBrowserDriver implements BrowserDriver {
   onClick?: (page: FakePage, selector: string) => string | undefined;
   /** Answers `page.evaluate(expression)` (e.g. an in-page fetch) for the current page. */
   evaluate?: (page: FakePage, expression: string) => unknown;
+  /** Return an error to make `locator(sel).fill(value)` reject with it (nothing is filled). */
+  onFill?: (page: FakePage, selector: string, value: string) => Error | undefined;
 
   constructor(
     init: Partial<
-      Pick<FakeBrowserDriver, 'screens' | 'redirects' | 'cookies' | 'evaluate' | 'onClick'>
+      Pick<
+        FakeBrowserDriver,
+        'screens' | 'redirects' | 'cookies' | 'evaluate' | 'onClick' | 'onFill'
+      >
     > = {},
   ) {
     Object.assign(this, init);

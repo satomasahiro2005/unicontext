@@ -86,7 +86,10 @@ export const ShizuokaVpnFilesConfigSchema = z.looseObject({
         .positive()
         .max(24 * 60)
         .default(10),
-      /** Stop after this many failed attempts in a row (a wrong password stops at once). */
+      /**
+       * Stop after this many failed attempts in a row. Only failures before the form was submitted
+       * count here: anything after a submit that is not a confirmed sign-in stops at once.
+       */
       maxConsecutiveFailures: z.number().int().positive().max(10).default(3),
       /** How long to wait for the portal after submitting the form. */
       submitTimeoutMs: z.number().int().positive().max(120_000).default(30_000),

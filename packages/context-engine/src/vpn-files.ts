@@ -131,6 +131,18 @@ function emptyIndexStatus(uc: UniContext, source?: string): VpnIndexStatus {
   };
 }
 
+/**
+ * `{ index }` when no folder of the VPN sources has been listed yet (else `{}`): attached to every
+ * answer that could otherwise read as "nothing there" (browse, search, recent).
+ */
+function emptyIndexField(
+  uc: UniContext,
+  source: string | undefined,
+  index: Map<string, FolderEntry> = folderIndex(uc, source),
+): { index?: VpnIndexStatus } {
+  return index.size === 0 ? { index: emptyIndexStatus(uc, source) } : {};
+}
+
 const norm = (s: string): string => s.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
 
 function parseFolder(rec: RawItemRecord): FolderPayload | undefined {
@@ -265,7 +277,7 @@ export function browseVpnFiles(
         folderRef(e, e.source, e.payload.root, e.payload.path, e.payload.name || e.payload.label),
       ),
       files: [],
-      ...(index.size === 0 ? { index: emptyIndexStatus(uc, options.source) } : {}),
+      ...emptyIndexField(uc, options.source, index),
     };
   }
 
@@ -290,6 +302,7 @@ export function browseVpnFiles(
       status: 'unlisted',
       folders: [],
       files: [],
+      ...emptyIndexField(uc, options.source, index),
     };
 
   const p = entry.payload;
@@ -322,6 +335,8 @@ export interface VpnSearchResult {
   files: VpnFileRef[];
   folders: VpnFolderRef[];
   truncated: boolean;
+  /** Only when nothing has been indexed yet (see {@link VpnBrowse.index}). */
+  index?: VpnIndexStatus;
 }
 
 /** Substring search over the indexed tree (file/folder name and path), optional year/course filters. */
@@ -338,7 +353,8 @@ export function searchVpnFiles(
 ): VpnSearchResult {
   const q = norm(options.query);
   const limit = Math.max(1, Math.min(options.limit ?? 30, 200));
-  if (!q) return { files: [], folders: [], truncated: false };
+  if (!q)
+    return { files: [], folders: [], truncated: false, ...emptyIndexField(uc, options.source) };
 
   // Course filter → the set of linked offering ids.
   let courseIds: Set<string> | undefined;
@@ -383,20 +399,21 @@ export function searchVpnFiles(
   }
 
   const folders: VpnFolderRef[] = [];
-  for (const e of folderIndex(uc, options.source).values()) {
+  const index = folderIndex(uc, options.source);
+  for (const e of index.values()) {
     if (options.root && e.payload.root !== options.root) continue;
     if (!norm(e.payload.name).includes(q) && !norm(e.payload.path).includes(q)) continue;
     if (folders.length >= limit) break;
     folders.push(folderRef(e, e.source, e.payload.root, e.payload.path, e.payload.name));
   }
-  return { files, folders, truncated: fileTrunc };
+  return { files, folders, truncated: fileTrunc, ...emptyIndexField(uc, options.source, index) };
 }
 
 /** Recently added or updated files across the indexed tree, newest first. */
 export function recentVpnFiles(
   uc: UniContext,
   options: { source?: string; root?: string; since?: string; limit?: number } = {},
-): { files: VpnFileRef[] } {
+): { files: VpnFileRef[]; index?: VpnIndexStatus } {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 200));
   const docs = uc.sync.stores.entities.list('document') as Document[];
   const rows: { d: Document; at: string; source: string; root: string; path: string }[] = [];
@@ -413,6 +430,8 @@ export function recentVpnFiles(
   }
   rows.sort((a, b) => (b.at || '').localeCompare(a.at || ''));
   return {
+    // Files exist only from folder listings: check the (larger) folder index only when none did.
+    ...(rows.length === 0 ? emptyIndexField(uc, options.source) : {}),
     files: rows.slice(0, limit).map(({ d, source, root, path }) => ({
       id: d.id,
       source,

@@ -262,6 +262,7 @@ export function createShizuokaVpnFilesConnector(
         withClient,
         autoSignIn: () => autoLogin.attempt(),
         resetAutoSignIn: () => autoLogin.reset(),
+        manualSignInSucceeded: () => autoLogin.resetAfterManualSignIn(),
         login: (o) => session.login(o),
         logout: () => session.close(),
         close: () => session.close(),
