@@ -3,8 +3,12 @@ import { ConfigError } from '@unicontext/core';
 import { cancellationsConnector } from './cancellations/connector.js';
 import { syllabusConnector } from './connector.js';
 
-export { SyllabusAdapter } from './adapter.js';
-export type { SyllabusAdapterOptions, SyllabusTargetProvider } from './adapter.js';
+export { MAX_DETAIL_FETCH_PER_CALL, priorityMatches, SyllabusAdapter } from './adapter.js';
+export type {
+  SyllabusAdapterOptions,
+  SyllabusPriorityProvider,
+  SyllabusTargetProvider,
+} from './adapter.js';
 export { createSyllabusNormalizer, syllabusSections } from './normalizer.js';
 export { createSyllabusConnector, metadata, syllabusConnector } from './connector.js';
 export { HttpSession, SessionExpiredError } from './session.js';
@@ -12,13 +16,14 @@ export type { SessionPacing, SessionRequest, SessionResponse } from './session.j
 export {
   currentTerm,
   DETAIL_CACHE_FILE,
+  DETAIL_RANK,
   DetailCache,
   nextTerm,
-  pickDetailsToOpen,
+  orderDetailCandidates,
   resolveCatalogTerms,
   SEMESTER_LABEL,
 } from './catalog.js';
-export type { AcademicTerm, CachedDetail } from './catalog.js';
+export type { AcademicTerm, CachedDetail, DetailCandidate, DetailRankName } from './catalog.js';
 export { createStrategy, registerSyllabusStrategy, SYLLABUS_PRODUCT } from './strategies.js';
 export type { StrategyFactory } from './strategies.js';
 export type { SyllabusDetailResult, SyllabusStrategy } from './strategy.js';

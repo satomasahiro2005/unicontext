@@ -132,13 +132,14 @@ sources:
   therefore budgeted. Parsed details are cached as JSON in the source's cache directory
   (`<cache>/<sourceId>/syllabus-details.json`, written atomically; in memory only when the host gives
   no `cacheDir`) keyed by the row key `{detail, url, titleCode, fetchedAt}`. For each row: a cached
-  detail younger than `detailMaxAgeDays` is emitted without any request; otherwise the detail is
-  opened while the run's budget (`detailsPerRun`, **shared by all catalog searches**, the remainder
-  split evenly over the searches still to come) lasts - rows never fetched first, then the stalest;
-  otherwise the entry is emitted **row-only**: empty `detail` and `detailFetched: false`. A stale
-  cached detail is still emitted when its refresh does not fit the budget. Unchanged payloads are
-  dropped by the raw store's content hash, so re-emitting cached details is free. Cache entries of
-  rows the source no longer lists are dropped after a full pass.
+  detail younger than `detailMaxAgeDays` is emitted right away without any request; the other rows
+  are held back until every listing of the run is known, and a last `details` unit opens them while
+  the run's budget (`detailsPerRun`, **shared by all catalog searches**) lasts, in
+  [priority order](#detail-priority-priorityprovider); a row the budget does not reach is emitted
+  **row-only**: empty `detail` and `detailFetched: false`. A stale cached detail is still emitted
+  when its refresh does not fit the budget. Unchanged payloads are dropped by the raw store's
+  content hash, so re-emitting cached details is free. Cache entries of rows the source no longer
+  lists are dropped after a full pass.
 - **Row-only entries** normalize to the course, the course offering (name, teacher, 開講学期, 曜日・時限
   slots, `extra.grade` from 学年) and a document built from the row;
   `courseOffering.extra.detailFetched` is `false`. `extra.requirement` and `credits` (offering
@@ -151,6 +152,54 @@ sources:
   failures in a row no more details are opened in that run). Because `complete` retires every
   entry that is not in the run, entries of terms that left the catalog window (and are not covered
   by `targets`) are retired on the next complete run.
+
+### Detail priority (`priorityProvider`)
+
+The budget goes to the rows that matter to the student first. Each held-back row gets a rank
+(`DETAIL_RANK`, smallest first):
+
+| Rank | Rows                                                                                       |
+| ---- | ------------------------------------------------------------------------------------------ |
+| 0    | `requested`: asked for on demand but not readable then (see below)                         |
+| 1    | `enrolled`: the student's registrations (their class when the syllabus lists it)           |
+| 2    | `needed`: not passed yet and required for graduation (必修 / 選択必修 of an unfilled 要件) |
+| 3    | `department`: 選択 of an unfilled 要件; the 選択 / 選択必修 categories of the department   |
+| 4    | the campus 全学教育 listing (`generalEducation` of the configured faculties)               |
+| 5    | everything else                                                                            |
+
+Within a rank, rows never fetched come before stale ones (stalest first), and the listings take
+turns (one row of each in a round), so a large faculty cannot starve the others.
+
+Ranks 1-3 come from the host: `SyllabusAdapter.priorityProvider` (like `targetProvider`) returns
+rules `{priority: enrolled|needed|department, subjectCode?, title?, category?, year?, semester?,
+className?}`; a row matches when every given field matches (`title` = 講義名 and `category`
+substring, both NFKC- and whitespace-insensitive; `category` rules apply to the faculty listings
+only). The daemon wires it to `syllabusDetailPriorities` (context-engine), which derives:
+
+- **enrolled** from the active enrollments and graded attempts (subject code, year, semester, and
+  the class when the syllabus lists the student's class - 「再履修（情）１」 is not a syllabus class,
+  so then every class of that term),
+- **needed / department** from the 単位修得情報 (`credit_requirements` fact): every course not passed
+  and not being taken now, in a requirement row whose credits are not all there (`required >
+expected` of the row or its nearest parent that says); 必 / 選必 courses are `needed`, the others
+  `department`. Without that data: courses whose grades show a failed / re-exam attempt and that are
+  not being taken again (必 / 選必 `needed`, else `department`),
+- **department categories**: the syllabus groups whose `（必修）` category lists one of the student's
+  必 courses (情報科学科-情報科学科（必修） -> `情報科学科-情報科学科（選択）` and `（選択必修）`).
+
+### On-demand detail (`fetchDetails`)
+
+`SyllabusAdapter.fetchDetails(requests)` (connector-sdk `DetailFetchAdapter`) reads the detail of
+rows the user asks for right now: a narrow target search (year x title code, subject code, class)
+and the detail, about **six requests per course**, through the same session, `minRequestIntervalMs`
+and rate limiter as the sync (so it interleaves with a running sync, one request at a time). At
+most `MAX_DETAIL_FETCH_PER_CALL` (5) rows per call. A fresh cached detail is returned without a
+request. A row that cannot be read now (error, rate limit, a failure less than a minute ago, over
+the per-call cap) is **queued** (`requested` in the cache file) and the next run opens it before
+every other row. MCP `get_syllabus` calls it for a list-only offering through
+`fetchDetailsOnRequest` (context-engine; REST `POST /api/v1/details/fetch`, which `unicontext mcp`
+uses when the daemon runs) and waits up to 45 s; otherwise it answers from the list row and says
+the detail is being read or queued.
 
 ### Request budget
 

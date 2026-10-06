@@ -1,6 +1,8 @@
 import {
+  type DetailFetchReport,
   downloadCourseFiles,
   type DownloadFilesReport,
+  fetchDetailsOnRequest,
   openAnnouncements,
   type OpenAnnouncementsReport,
 } from '@unicontext/context-engine';
@@ -36,6 +38,17 @@ export function registerMcp(program: Command, h: Harness): void {
                     { timeoutMs: 15 * 60_000 },
                   )
                 : openAnnouncements(rt.uc, ids);
+            },
+            // The daemon's syllabus connector paces on-demand detail reads with its sync.
+            fetchDetails: async (ids) => {
+              const daemon = await ctx.daemon();
+              return daemon
+                ? daemon.post<DetailFetchReport>(
+                    '/api/v1/details/fetch',
+                    { ids },
+                    { timeoutMs: 5 * 60_000 },
+                  )
+                : fetchDetailsOnRequest(rt.uc, ids);
             },
             // The daemon holds the browser profile and serializes downloads with its sync.
             filesDir: rt.filesDir,

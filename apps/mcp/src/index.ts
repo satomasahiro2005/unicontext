@@ -46,8 +46,11 @@ export { COURSE_LIMITS_FOR_AI, trimCourseForAi } from './trim.js';
 export {
   getCreditSummary,
   getSyllabus,
+  getSyllabusFetching,
   searchSyllabus,
   SYLLABUS_CONNECTOR,
+  SYLLABUS_FETCH_WAIT_MS,
+  type SyllabusDetailFetcher,
   type SyllabusToolOutput,
 } from './syllabus.js';
 export {

@@ -12,7 +12,9 @@ import {
   type AdditionResult,
   CONTEXT_VIEWS,
   downloadCourseFiles,
+  type DetailFetchReport,
   type DownloadFilesReport,
+  fetchDetailsOnRequest,
   fileTextExcerpt,
   openAnnouncements as openAnnouncementsInProcess,
   type OpenAnnouncementsReport,
@@ -104,7 +106,7 @@ import {
   GET_SYLLABUS_DESCRIPTION,
   GET_SYLLABUS_TITLE,
   getCreditSummary,
-  getSyllabus,
+  getSyllabusFetching,
   getSyllabusShape,
   SEARCH_SYLLABUS_DESCRIPTION,
   SEARCH_SYLLABUS_TITLE,
@@ -140,6 +142,12 @@ export interface McpDeps {
    * LiveCampusU session); `unicontext mcp` routes it to the running daemon. Default: in-process.
    */
   openAnnouncements?: (ids: string[]) => Promise<OpenAnnouncementsReport>;
+  /**
+   * Read details a sync stored only partially (get_syllabus on a syllabus offering listed from the
+   * catalog row alone). The daemon runs it in-process (the syllabus connector paces it with its
+   * sync); `unicontext mcp` routes it to the running daemon. Default: in-process.
+   */
+  fetchDetails?: (ids: string[]) => Promise<DetailFetchReport>;
   /** `<data dir>/files` (download_course_file in-process). */
   filesDir?: string;
   /**
@@ -854,7 +862,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
     'get_syllabus',
     { title: GET_SYLLABUS_TITLE, description: GET_SYLLABUS_DESCRIPTION },
     getSyllabusShape,
-    (a) => getSyllabus(uc, a),
+    (a) =>
+      getSyllabusFetching(uc, a, {
+        fetch: deps.fetchDetails ?? ((ids) => fetchDetailsOnRequest(uc, ids)),
+      }),
   );
 
   tool(

@@ -1,5 +1,5 @@
 import { isWatchable, supportsFileDownloads, type WatchHandle } from '@unicontext/connector-sdk';
-import { mirrorFiles, type UniContext } from '@unicontext/context-engine';
+import { mirrorFiles, syllabusDetailPriorities, type UniContext } from '@unicontext/context-engine';
 import { errorMessage, type Logger, zonedParts } from '@unicontext/core';
 
 /** Product name of the LiveCampusU connector (its metadata.product). */
@@ -51,6 +51,7 @@ interface CourseFed {
   courseProvider?: unknown;
 }
 interface TargetFed {
+  priorityProvider?: unknown;
   targetProvider?: unknown;
 }
 
@@ -85,6 +86,10 @@ export function wireCourseProviders(uc: UniContext): string[] {
         }
         return targets;
       };
+      // The catalog opens the details of the student's own / still needed courses first.
+      if ('priorityProvider' in adapter)
+        adapter.priorityProvider = () =>
+          syllabusDetailPriorities(uc, { syllabusSourceIds: [source.sourceId] });
       wired.push(source.sourceId);
     }
   }

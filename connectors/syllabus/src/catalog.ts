@@ -94,6 +94,8 @@ const CachedDetailSchema = z.object({
 const CacheFileSchema = z.object({
   version: z.literal(1),
   entries: z.record(z.string(), z.unknown()),
+  /** Row keys a user asked for that could not be read on the spot: opened first by the next run. */
+  requested: z.record(z.string(), z.string()).optional(),
 });
 
 /**
@@ -103,6 +105,8 @@ const CacheFileSchema = z.object({
  */
 export class DetailCache {
   private entries = new Map<string, CachedDetail>();
+  /** Row key -> ISO time it was queued (on-demand fetch that could not run). */
+  private requested = new Map<string, string>();
   private loaded = false;
   private dirty = false;
 
@@ -141,6 +145,8 @@ export class DetailCache {
         else dropped++;
       }
       if (dropped) warnings.push(`syllabus detail cache: ${dropped} invalid entries dropped`);
+      for (const [key, at] of Object.entries(file.data.requested ?? {}))
+        if (!Number.isNaN(Date.parse(at))) this.requested.set(key, at);
     } catch (e) {
       warnings.push(`syllabus detail cache is not valid JSON (${errorMessage(e)}); starting empty`);
     }
@@ -157,7 +163,23 @@ export class DetailCache {
 
   set(key: string, entry: CachedDetail): void {
     this.entries.set(key, entry);
+    this.requested.delete(key);
     this.dirty = true;
+  }
+
+  /** Queue a row the user asked for (it is opened before every other row by the next run). */
+  request(key: string, at: string): void {
+    if (this.requested.has(key)) return;
+    this.requested.set(key, at);
+    this.dirty = true;
+  }
+
+  isRequested(key: string): boolean {
+    return this.requested.has(key);
+  }
+
+  get requestedKeys(): string[] {
+    return [...this.requested.keys()];
   }
 
   /** Forget every entry whose key is not in `keep` (rows the source no longer lists). */
@@ -166,6 +188,11 @@ export class DetailCache {
     for (const key of [...this.entries.keys()])
       if (!keep.has(key)) {
         this.entries.delete(key);
+        removed++;
+      }
+    for (const key of [...this.requested.keys()])
+      if (!keep.has(key)) {
+        this.requested.delete(key);
         removed++;
       }
     if (removed) this.dirty = true;
@@ -180,7 +207,11 @@ export class DetailCache {
       await mkdir(path.dirname(this.file), { recursive: true });
       await writeFile(
         tmp,
-        JSON.stringify({ version: 1, entries: Object.fromEntries(this.entries) }),
+        JSON.stringify({
+          version: 1,
+          entries: Object.fromEntries(this.entries),
+          ...(this.requested.size ? { requested: Object.fromEntries(this.requested) } : {}),
+        }),
         'utf8',
       );
       await rename(tmp, this.file);
@@ -197,29 +228,56 @@ export class DetailCache {
 export const DETAIL_CACHE_FILE = 'syllabus-details.json';
 
 /**
- * Which stale-or-missing rows to open: rows never fetched first (in listing order), then the
- * stalest cached ones; at most `limit`.
+ * Detail priority of a catalog row, smallest first: rows a user asked for on the spot, then the
+ * student's own courses, courses they still need for graduation, their department's electives,
+ * the campus 全学教育 listing, and everything else.
  */
-export function pickDetailsToOpen<R extends { key: string }>(
-  rows: readonly R[],
-  cache: Pick<DetailCache, 'get'>,
-  nowMs: number,
-  maxAgeMs: number,
-  limit: number,
-): Set<string> {
-  if (limit <= 0) return new Set();
-  const never: R[] = [];
-  const stale: { row: R; at: number }[] = [];
-  for (const row of rows) {
-    const cached = cache.get(row.key);
-    if (!cached) never.push(row);
-    else {
-      const at = Date.parse(cached.fetchedAt);
-      if (nowMs - at >= maxAgeMs) stale.push({ row, at });
-    }
+export const DETAIL_RANK = {
+  requested: 0,
+  enrolled: 1,
+  needed: 2,
+  department: 3,
+  generalEducation: 4,
+  other: 5,
+} as const;
+export type DetailRankName = keyof typeof DETAIL_RANK;
+
+/** A row whose detail is missing or stale, waiting for the run's detail budget. */
+export interface DetailCandidate {
+  key: string;
+  rank: number;
+  /** Index of the catalog listing the row came from (round-robin between listings). */
+  unit: number;
+  /** ISO time of the cached (stale) detail; undefined = never fetched. */
+  fetchedAt?: string | undefined;
+}
+
+/**
+ * The order in which candidates get the run's budget: by rank; within a rank never-fetched rows
+ * before stale ones (stalest first); and the listings take turns, so one big faculty cannot starve
+ * the others. Listing order is kept within a listing.
+ */
+export function orderDetailCandidates<C extends DetailCandidate>(candidates: readonly C[]): C[] {
+  const groups = new Map<string, C[]>();
+  for (const c of candidates) {
+    const g = `${c.rank}|${c.fetchedAt === undefined ? 0 : 1}|${c.unit}`;
+    groups.set(g, [...(groups.get(g) ?? []), c]);
   }
-  stale.sort((a, b) => a.at - b.at);
-  return new Set([...never, ...stale.map((s) => s.row)].slice(0, limit).map((r) => r.key));
+  const turn = new Map<C, number>();
+  for (const list of groups.values()) {
+    const sorted =
+      list[0]?.fetchedAt === undefined
+        ? list
+        : [...list].sort((a, b) => Date.parse(a.fetchedAt ?? '') - Date.parse(b.fetchedAt ?? ''));
+    sorted.forEach((c, i) => turn.set(c, i));
+  }
+  return [...candidates].sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      (a.fetchedAt === undefined ? 0 : 1) - (b.fetchedAt === undefined ? 0 : 1) ||
+      (turn.get(a) ?? 0) - (turn.get(b) ?? 0) ||
+      a.unit - b.unit,
+  );
 }
 
 /** True when a cached detail is younger than `maxAgeMs`. */

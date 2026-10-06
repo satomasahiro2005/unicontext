@@ -583,6 +583,21 @@ describe('write endpoints', () => {
     ).toBe(404);
   });
 
+  it('details/fetch: write-protected, bounded, and reports entities it cannot fetch', async () => {
+    const id = json<{ announcements: { id: string }[] }>(await get('/api/v1/announcements'))
+      .announcements[0]?.id;
+    expect((await post('/api/v1/details/fetch', { ids: [id] })).statusCode).toBe(401);
+    expect((await post('/api/v1/details/fetch', { ids: [] }, bearer)).statusCode).toBe(400);
+    const six = ['a', 'b', 'c', 'd', 'e', 'f'].map((x) => `courseOffering:${x}`);
+    expect((await post('/api/v1/details/fetch', { ids: six }, bearer)).statusCode).toBe(400);
+    const res = await post('/api/v1/details/fetch', { ids: [id, 'courseOffering:nope'] }, bearer);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(json<{ results: { status: string }[] }>(res).results.map((r) => r.status)).toEqual([
+      'unsupported',
+      'notFound',
+    ]);
+  });
+
   it('rejects oversized bodies', async () => {
     const res = await post(
       '/api/v1/facts/x/correct',

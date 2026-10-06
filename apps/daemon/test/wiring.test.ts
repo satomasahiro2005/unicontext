@@ -119,6 +119,12 @@ describe('createRuntime with the Shizuoka profile', () => {
     );
     expect(products['lcu-public-cancellations']).toBe('lcu-public-cancellations');
     expect(products.syllabus).toBe('syllabus');
+    // The catalog opens the details of the student's own / still needed courses first.
+    const syllabus = runtime.uc.sync.getSource('syllabus').adapter as {
+      priorityProvider?: () => unknown;
+    };
+    expect(typeof syllabus.priorityProvider).toBe('function');
+    expect(syllabus.priorityProvider?.()).toEqual([]);
   }, 60_000);
 
   it("feeds LiveCampusU's enrolled courses into the 休講 module so own cancellations reach Today", async () => {

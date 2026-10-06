@@ -10,6 +10,7 @@ import type {
   AdditionView,
   AdminContext,
   AnnouncementAttachment,
+  DetailFetchReport,
   AnnouncementDetail,
   AnnouncementItem,
   ChangesContext,
@@ -69,6 +70,7 @@ import type { SyncRunReport } from '@unicontext/sync-engine';
 export type {
   AdminContext,
   AnnouncementAttachment,
+  DetailFetchReport,
   AnnouncementDetail,
   AnnouncementItem,
   ChangesContext,
@@ -220,6 +222,16 @@ export interface DownloadFilesBody {
   extract?: boolean;
 }
 export type DownloadFilesResponse = DownloadFilesReport;
+/**
+ * POST /api/v1/details/fetch `{ids}` (at most 5): read the details of entities a sync stored only
+ * partially (syllabus course offerings listed from the catalog row alone) on the user's request.
+ * Read-only at the source; what cannot be read now is queued for the connector's next sync.
+ */
+export interface DetailFetchBody {
+  ids: string[];
+}
+export type { DetailFetchItemResult } from '@unicontext/context-engine';
+export type DetailFetchResponse = DetailFetchReport;
 export type MirrorResponse = MirrorReport;
 export interface MirrorStatusResponse {
   sources: MirrorStatusItem[];

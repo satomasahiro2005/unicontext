@@ -12,8 +12,10 @@ import {
 import {
   buildGradeReport,
   downloadCourseFiles,
+  fetchDetailsOnRequest,
   getView,
   localFile,
+  MAX_DETAIL_FETCH_PER_REQUEST,
   MAX_DOWNLOADS_PER_REQUEST,
   MAX_OPEN_PER_REQUEST,
   mirrorFiles,
@@ -52,6 +54,7 @@ import type {
   ConflictsResponse,
   CoursesResponse,
   CourseFilesResponse,
+  DetailFetchResponse,
   DownloadFilesResponse,
   MirrorResponse,
   MirrorStatusResponse,
@@ -767,6 +770,22 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
     async (request): Promise<AdditionResponse> => ({
       addition: await uc.additions.reject(request.params.id),
     }),
+  );
+
+  // Details a sync stored only partially (syllabus list rows), read on the user's request.
+  // Read-only at the source; the connector paces it with its sync and queues what it cannot read.
+  app.post<{ Body: unknown }>(
+    '/api/v1/details/fetch',
+    write,
+    async (request): Promise<DetailFetchResponse> => {
+      const body = parse(
+        z.object({
+          ids: z.array(z.string().min(1).max(200)).min(1).max(MAX_DETAIL_FETCH_PER_REQUEST),
+        }),
+        request.body,
+      );
+      return fetchDetailsOnRequest(uc, body.ids);
+    },
   );
 
   // ---- class files (Teams/SharePoint): on-demand download, local copy, mirror -------------

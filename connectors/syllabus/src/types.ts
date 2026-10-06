@@ -15,6 +15,39 @@ export const SyllabusTargetSchema = z.object({
 });
 export type SyllabusTarget = z.infer<typeof SyllabusTargetSchema>;
 
+/**
+ * Why a catalog row's detail should be opened before the general backlog (host-injected through
+ * `priorityProvider`, derived from the student's enrollments, grades and graduation requirements).
+ * Order: enrolled (is/was taking it) < needed (not passed yet and counts toward graduation) <
+ * department (選択 / 選択必修 of the student's department).
+ */
+export const SYLLABUS_PRIORITY_KINDS = ['enrolled', 'needed', 'department'] as const;
+export type SyllabusPriorityKind = (typeof SYLLABUS_PRIORITY_KINDS)[number];
+
+/**
+ * One priority rule. A row matches when every given field matches (at least one of subjectCode,
+ * title, category must be given): `title` is the 講義名 compared NFKC- and whitespace-insensitive;
+ * `category` is a substring of one of the row's categories and applies to the faculty listings
+ * only (the campus 全学教育 listing has its own rank).
+ */
+export const SyllabusDetailPrioritySchema = z
+  .object({
+    priority: z.enum(SYLLABUS_PRIORITY_KINDS),
+    subjectCode: z.string().min(1).optional(),
+    title: z.string().min(1).optional(),
+    category: z.string().min(1).optional(),
+    year: z.number().int().optional(),
+    /** '1' = 前期, '2' = 後期. */
+    semester: z.enum(['1', '2']).optional(),
+    className: z.string().min(1).optional(),
+    /** Why (for logs and tests). */
+    reason: z.string().optional(),
+  })
+  .refine((p) => p.subjectCode || p.title || p.category, {
+    message: 'a priority needs subjectCode, title or category',
+  });
+export type SyllabusDetailPriority = z.infer<typeof SyllabusDetailPrioritySchema>;
+
 /** A free search (bounded by `maxRows`): every found row is fetched in detail. */
 export const SyllabusSearchSchema = z.object({
   year: z.number().int().optional(),
@@ -110,6 +143,8 @@ export interface SyllabusCatalogUnit {
   faculty?: string;
   titleCode: string;
   maxRows: number;
+  /** The listing is a campus 全学教育 catalog (its rows rank before the rest of the backlog). */
+  generalEducation?: boolean;
 }
 
 export type SyllabusUnit =

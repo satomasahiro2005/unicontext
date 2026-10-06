@@ -283,12 +283,12 @@ describe('syllabus catalog sync', () => {
     expect(warningsOf(pages)).toEqual([]);
   });
 
-  it('opens at most detailsPerRun details, splitting the budget over the catalog searches', async () => {
+  it('opens at most detailsPerRun details, the catalog searches taking turns', async () => {
     const { srv, adapter } = setup({ catalog: { detailsPerRun: 3 } });
     const { items, pages } = await runAll(adapter);
     expect(items).toHaveLength(6);
-    // IN-B (4 rows): ceil(3/2) = 2 details, LA-S (2 rows) gets the remaining 1.
-    expect(srv.state.openedCodes).toEqual(['77200001', '77200002', '11200001']);
+    // IN-B (4 rows) and LA-S (2 rows) take turns: IN-B, LA-S, IN-B.
+    expect(srv.state.openedCodes).toEqual(['77200001', '11200001', '77200002']);
     const byCode = new Map(payloads(items).map((p) => [p.subjectCode, p]));
     for (const c of ['77200001', '77200002', '11200001']) {
       expect(byCode.get(c)?.detailFetched).toBeUndefined();
@@ -306,11 +306,11 @@ describe('syllabus catalog sync', () => {
       catalog: { faculties: ['LA-S', 'IN-B'], detailsPerRun: 5 },
     });
     await runAll(adapter);
-    // LA-S: ceil(5/2) = 3 allowed but only 2 rows -> IN-B may use the remaining 3.
+    // LA-S has only 2 rows, so IN-B gets the remaining 3.
     expect(srv.state.openedCodes).toEqual([
       '11200001',
-      '11200002',
       '77200001',
+      '11200002',
       '77200002',
       '77200003',
     ]);
@@ -319,11 +319,13 @@ describe('syllabus catalog sync', () => {
   it('is the same over several pages (unitsPerPage 1)', async () => {
     const { srv, adapter } = setup({ catalog: { detailsPerRun: 3 }, config: { unitsPerPage: 1 } });
     const { items, pages } = await runAll(adapter);
-    expect(pages).toHaveLength(2);
+    // Two listings, then the budgeted details.
+    expect(pages).toHaveLength(3);
     expect(pages[0]?.complete).toBeUndefined();
-    expect(pages[1]?.complete).toEqual({ sourceTypes: ['syllabus.entry'] });
+    expect(pages[1]?.complete).toBeUndefined();
+    expect(pages[2]?.complete).toEqual({ sourceTypes: ['syllabus.entry'] });
     expect(items).toHaveLength(6);
-    expect(srv.state.openedCodes).toEqual(['77200001', '77200002', '11200001']);
+    expect(srv.state.openedCodes).toEqual(['77200001', '11200001', '77200002']);
   });
 
   it('reuses cached details: the next run opens only the rows still missing, then none', async () => {

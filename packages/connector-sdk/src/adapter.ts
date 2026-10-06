@@ -185,6 +185,39 @@ export function supportsOpenAnnouncements(
 }
 
 /**
+ * Optional extension: fetch, on the user's request, the full version of items a sync stored only
+ * partially (e.g. a syllabus list row whose detail page the budgeted sync has not opened yet).
+ * Read-only at the source; the adapter paces it with its sync through the same HTTP session and
+ * rate limiter. The caller ingests the returned items with SyncEngine.ingest.
+ */
+export interface DetailFetchAdapter extends SourceAdapter {
+  fetchDetails(
+    requests: readonly { externalId: string; previousPayload?: unknown }[],
+    options?: { signal?: AbortSignal },
+  ): Promise<DetailFetchResult>;
+}
+
+export interface DetailFetchResult {
+  /** Raw items with their details (ingest them with SyncEngine.ingest). */
+  items: RawItem[];
+  results: {
+    externalId: string;
+    /**
+     * fetched = read now; alreadyFetched = a fresh copy was already there (returned as an item);
+     * queued = could not be read now, the next sync reads it first; notFound = the source no
+     * longer lists it; failed = could not be read and was not queued.
+     */
+    status: 'fetched' | 'alreadyFetched' | 'queued' | 'notFound' | 'failed';
+    error?: string;
+  }[];
+  warnings: string[];
+}
+
+export function supportsDetailFetch(adapter: SourceAdapter): adapter is DetailFetchAdapter {
+  return typeof (adapter as Partial<DetailFetchAdapter>).fetchDetails === 'function';
+}
+
+/**
  * A file a source can download on request (a document in a class team's library). Described by
  * the adapter from its raw item, so the caller can name, place and version it without knowing the
  * source's payload shapes.

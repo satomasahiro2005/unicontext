@@ -7,6 +7,7 @@ import {
 } from '@unicontext/canonical-model';
 import {
   buildGradeReport,
+  type DetailFetchReport,
   type GradeAttempt,
   type GradePeriodTotals,
   type UniContext,
@@ -62,7 +63,7 @@ export const SEARCH_SYLLABUS_DESCRIPTION =
   '今学期・来学期に開講される科目をシラバスの一覧から検索する（履修中の科目に限らない）。キーワード（科目名・科目コード・教員名・シラバス本文）、曜日・時限、学年、必修/選択、単位数、学期、学期の前半・後半（termPart）、年度、学部で絞り込める。各結果の termPart は授業のある期間（後期前半・後期後半は約8週だけの科目、後期（前半・後半）は学期を通しての科目）。fitsMyTimetable で登録済みの時間割と重ならない科目だけにできる。「木曜3限の選択科目は？」「1年生向けの2単位の科目」「後期後半の空いているコマで取れる科目は？」に使う。結果は短い一覧で、授業の内容は get_syllabus で読む。 / Search the course catalog (syllabus list) of the current and upcoming terms, not only the courses the student is taking. Filter by keyword, day and period, grade year, required/elective, credits, term, half of the term (termPart: each 前期/後期 is split into 前半 and 後半 of about 8 weeks; some courses meet in one half only), year and faculty; fitsMyTimetable keeps only courses that fit the free slots of the registered timetable. Use get_syllabus for the full syllabus of one course.';
 
 export const GET_SYLLABUS_DESCRIPTION =
-  '1科目のシラバス（担当・曜日時限・単位・授業の目標・学修内容・授業計画・成績評価・テキストなど）を返す。course には search_syllabus の id、科目コード、科目名（一部可）を使える。同じ名前の科目が複数あるときは候補の一覧を返す。 / The syllabus of one course (instructors, schedule, credits, goals, content, weekly plan, grading, textbook). `course` accepts an id from search_syllabus, a course code or a (partial) title; several matches return a candidate list.';
+  '1科目のシラバス（担当・曜日時限・単位・授業の目標・学修内容・授業計画・成績評価・テキストなど）を返す。course には search_syllabus の id、科目コード、科目名（一部可）を使える。同じ名前の科目が複数あるときは候補の一覧を返す。シラバス詳細がまだ取り込まれていない科目は、その場で大学の公開シラバスから取得して返す（すぐ取得できないときは次の同期で最優先に取得し、notes でそう伝える）。 / The syllabus of one course (instructors, schedule, credits, goals, content, weekly plan, grading, textbook). `course` accepts an id from search_syllabus, a course code or a (partial) title; several matches return a candidate list. A course whose syllabus detail has not been stored yet is read from the public syllabus on the spot (when that is not possible right now it is queued first for the next sync, and notes say so).';
 
 export const CREDIT_SUMMARY_DESCRIPTION =
   '過去の全年度・全学期の成績（科目ごとの全受験。不合格・再試・再履修も含む）、学期別・年度別・通算の修得単位、卒業要件の充足状況（学務情報システムの単位修得情報がある場合）、今学期の登録単位と上限の目安、今学期の時間割（科目ごとの前半・後半）と前半・後半それぞれの空きコマ（timetableThisTerm）を返す。各成績は大学の表示どおりの評価（秀・不可・合・否・再試など）をevaluationに、集計用の区分をoutcome（passed/failed/in_progress/not_graded/withdrawn/transferred/unknown）に持つ。修得単位はpassedとtransferredだけを数え、unknownは合否どちらにも数えない。「ここまでに何単位とった？」「落とした科目は？」「卒業要件で足りない区分は？」「今学期あと何単位とれる？」「後期後半に空いているコマは？」に使う。 / Full grade history of every year and term (every attempt per course, failed ones and re-exams included), earned credits per term, per year and in total, graduation requirement status when the academic system provides it, and the current term registration with its cap, plus the timetable of this term with the half of each course (前半/後半, about 8 weeks each) and the free slots of each half. Each grade keeps the verbatim evaluation label and a normalized outcome; only passed and transferred count as earned, unknown is never counted.';
@@ -378,30 +379,61 @@ function numberingOf(e: SyllabusEntry): string | undefined {
   return str(e.extra['numbering']) ?? str(e.course?.extra?.['numbering']);
 }
 
-/** Offerings of the self person's active enrollments, as `code|year|term` keys and linked ids. */
-function enrolledMarkers(uc: UniContext): { ids: Set<string>; keys: Set<string> } {
-  const ids = new Set<string>();
-  const keys = new Set<string>();
-  const entities = uc.sync.stores.entities;
-  for (const enr of selfEnrollments(uc)) {
-    for (const id of uc.identity.expand(enr.courseOfferingId)) {
-      ids.add(id);
-      const o = entities.getOfKind('courseOffering', id);
-      if (o?.courseCode && o.academicYear !== undefined)
-        keys.add(`${o.courseCode}|${o.academicYear}|${o.term ? termKey(o.term) : ''}`);
-    }
-  }
-  return { ids, keys };
+/** Class name compared loosely ("1クラス" = "1", NFKC, no spaces). */
+function classKey(text: string): string {
+  return norm(text).replace(/クラス$/, '');
 }
 
-function isEnrolled(e: SyllabusEntry, marks: { ids: Set<string>; keys: Set<string> }): boolean {
-  if (marks.ids.has(e.offering.id)) return true;
-  const o = e.offering;
-  if (!o.courseCode || o.academicYear === undefined) return false;
-  return (
-    marks.keys.has(`${o.courseCode}|${o.academicYear}|${o.term ? termKey(o.term) : ''}`) ||
-    marks.keys.has(`${o.courseCode}|${o.academicYear}|`)
-  );
+/**
+ * The catalog offerings the student takes: for each active enrollment, the syllabus offerings of
+ * the same course code, year and term (or identity-linked to it). When the student's own offering
+ * names its class (LiveCampusU クラス) and the syllabus lists that class, only that class counts:
+ * the same 全学教育 code is offered on both campuses (生命科学 16111007: 静岡 学部共通２ and 浜松
+ * 情工１), and the identity resolver may have linked both to the student's course.
+ */
+function enrolledOfferingIds(uc: UniContext, catalog: readonly SyllabusEntry[]): Set<string> {
+  const entities = uc.sync.stores.entities;
+  const inCatalog = new Map<string, SyllabusEntry>(catalog.map((e) => [e.offering.id, e]));
+  const out = new Set<string>();
+  for (const enr of selfEnrollments(uc)) {
+    const expanded = uc.identity.expand(enr.courseOfferingId);
+    const own = expanded
+      .filter((id) => !inCatalog.has(id) && isIdOf('courseOffering', id))
+      .map((id) =>
+        isIdOf('courseOffering', id) ? entities.getOfKind('courseOffering', id) : undefined,
+      )
+      .filter((o): o is CourseOffering => o !== undefined);
+    const candidates = new Set<SyllabusEntry>();
+    for (const id of expanded) {
+      const linked = inCatalog.get(id);
+      if (linked) candidates.add(linked);
+    }
+    for (const o of own) {
+      if (!o.courseCode || o.academicYear === undefined) continue;
+      for (const e of catalog)
+        if (
+          e.offering.courseCode === o.courseCode &&
+          e.offering.academicYear === o.academicYear &&
+          (!o.term || !e.offering.term || termKey(e.offering.term) === termKey(o.term))
+        )
+          candidates.add(e);
+    }
+    const classes = new Set(
+      own
+        .map((o) => str(o.extra?.['className']))
+        .filter((c): c is string => !!c)
+        .map(classKey),
+    );
+    let picked = [...candidates];
+    if (classes.size) {
+      const sameClass = picked.filter((e) =>
+        classes.has(classKey(str(e.extra['className']) ?? '')),
+      );
+      if (sameClass.length) picked = sameClass;
+    }
+    for (const e of picked) out.add(e.offering.id);
+  }
+  return out;
 }
 
 function compareEntries(a: SyllabusEntry, b: SyllabusEntry): number {
@@ -732,7 +764,13 @@ export function searchSyllabus(uc: UniContext, args: SearchSyllabusArgs): Syllab
 
   const hitSets = f.terms.map((t) => documentHits(uc, t));
   const scored: { e: SyllabusEntry; score: number }[] = [];
-  const marks = enrolledMarkers(uc);
+  const enrolled = enrolledOfferingIds(uc, catalog);
+  // A course the student already takes is no free-slot candidate in another class either.
+  const courseTermKey = (o: CourseOffering): string =>
+    `${o.courseCode ?? norm(o.title)}|${o.academicYear ?? ''}|${o.term ? termKey(o.term) : ''}`;
+  const takenCourses = new Set(
+    catalog.filter((e) => enrolled.has(e.offering.id)).map((e) => courseTermKey(e.offering)),
+  );
   const timetables = new Map<string, MyTimetable>();
   const timetableOf = (year: number, term: string): MyTimetable => {
     const key = `${year}|${termKey(term)}`;
@@ -744,7 +782,7 @@ export function searchSyllabus(uc: UniContext, args: SearchSyllabusArgs): Syllab
     if (!matchesStructured(e, f)) continue;
     if (f.fitsMyTimetable) {
       const o = e.offering;
-      if (isEnrolled(e, marks) || o.academicYear === undefined || !o.term) continue;
+      if (takenCourses.has(courseTermKey(o)) || o.academicYear === undefined || !o.term) continue;
       if (!fitsTimetable(o, timetableOf(o.academicYear, o.term))) continue;
     }
     let score = 0;
@@ -787,7 +825,7 @@ export function searchSyllabus(uc: UniContext, args: SearchSyllabusArgs): Syllab
     data: {
       total: scored.length,
       returned: shown.length,
-      items: shown.map((e) => itemOf(e, uc, isEnrolled(e, marks))),
+      items: shown.map((e) => itemOf(e, uc, enrolled.has(e.offering.id))),
       coverage: coverageOf(catalog),
       ...(notes.length ? { notes } : {}),
     },
@@ -818,42 +856,61 @@ function courseKey(e: SyllabusEntry): string {
   return e.offering.courseCode ?? norm(e.offering.title);
 }
 
-/** Syllabus offerings for an input: exact id, linked LCU id, exact code, then title. */
-function findOfferings(uc: UniContext, catalog: SyllabusEntry[], input: string): SyllabusEntry[] {
+/**
+ * Syllabus offerings for an input: exact id, linked LCU id, exact code, then title. `preferred`
+ * are the offerings of the class the student's own offering names (when the input is one).
+ */
+function findOfferings(
+  uc: UniContext,
+  catalog: SyllabusEntry[],
+  input: string,
+): { matches: SyllabusEntry[]; preferred?: Set<string> } {
   const text = input.trim();
   if (isIdOf('courseOffering', text)) {
     const direct = catalog.find((e) => e.offering.id === text);
-    if (direct) return [direct];
+    if (direct) return { matches: [direct] };
+    const other = uc.sync.stores.entities.getOfKind('courseOffering', text);
+    const ownClass = str(other?.extra?.['className']);
+    const withClass = (
+      matches: SyllabusEntry[],
+    ): { matches: SyllabusEntry[]; preferred?: Set<string> } => {
+      if (!ownClass) return { matches };
+      const same = matches.filter(
+        (e) => classKey(str(e.extra['className']) ?? '') === classKey(ownClass),
+      );
+      return same.length
+        ? { matches, preferred: new Set(same.map((e) => e.offering.id)) }
+        : { matches };
+    };
     const linked = new Set(uc.identity.expand(text));
     const viaLink = catalog.filter((e) => linked.has(e.offering.id));
-    if (viaLink.length) return viaLink;
+    if (viaLink.length) return withClass(viaLink);
     // An id of another source (the student's own timetable): same code, preferably same year.
-    const other = uc.sync.stores.entities.getOfKind('courseOffering', text);
     if (!other) throw new NotFoundError(`course offering ${text}`);
     const sameCode = catalog.filter(
       (e) => other.courseCode !== undefined && e.offering.courseCode === other.courseCode,
     );
     const sameYear = sameCode.filter((e) => e.offering.academicYear === other.academicYear);
-    return sameYear.length ? sameYear : sameCode;
+    return withClass(sameYear.length ? sameYear : sameCode);
   }
   const code = norm(text);
   const byCode = catalog.filter(
     (e) => e.offering.courseCode && norm(e.offering.courseCode) === code,
   );
-  if (byCode.length) return byCode;
+  if (byCode.length) return { matches: byCode };
   const byNumbering = catalog.filter((e) => {
     const n = numberingOf(e);
     return n !== undefined && norm(n) === code;
   });
-  if (byNumbering.length) return byNumbering;
+  if (byNumbering.length) return { matches: byNumbering };
 
   const scored = catalog
     .map((e) => ({ e, score: matchScore(text, e.offering) }))
     .filter((s) => s.score > 0);
   const best = Math.max(0, ...scored.map((s) => s.score));
-  if (best === 0) return [];
+  if (best === 0) return { matches: [] };
   const floor = best >= 1 ? 1 : best >= 0.8 ? 0.8 : best - 0.05;
-  return scored.filter((s) => s.score >= floor).map((s) => s.e);
+  return { matches: scored.filter((s) => s.score >= floor).map((s) => s.e) };
 }
 
 function sectionsOf(
@@ -887,20 +944,33 @@ function sectionsOf(
   return out;
 }
 
-export function getSyllabus(uc: UniContext, args: GetSyllabusArgs): SyllabusToolOutput {
+type Resolved =
+  | { kind: 'ambiguous'; output: SyllabusToolOutput }
+  | { kind: 'one'; picked: SyllabusEntry; others: SyllabusEntry[] };
+
+/** The one course `args` names (its offering to show and the others), or the candidates. */
+function resolveSyllabus(uc: UniContext, args: GetSyllabusArgs, preferId?: string): Resolved {
   const catalog = loadCatalog(uc);
   if (catalog.length === 0)
     throw new NotFoundError('syllabus (no syllabus data has been synced yet)');
   const year = args.year ?? undefined;
-  let matches = findOfferings(uc, catalog, args.course);
+  const found = findOfferings(uc, catalog, args.course);
+  let matches = found.matches;
   if (year !== undefined) matches = matches.filter((e) => e.offering.academicYear === year);
   if (matches.length === 0)
     throw new NotFoundError(
       `syllabus for "${args.course}"${year !== undefined ? ` (${year}年度)` : ''} (no syllabus matches that id, code or title; try search_syllabus)`,
     );
 
-  // Newest academic year first (the one a student can still take), then the latest term.
-  matches.sort(compareEntries);
+  // Newest academic year first (the one a student can still take), then the latest term; the
+  // class of the student's own offering (or the one just fetched) before the other classes.
+  const preferred = (e: SyllabusEntry): number =>
+    e.offering.id === preferId ? 0 : found.preferred?.has(e.offering.id) ? 1 : 2;
+  matches.sort((a, b) => {
+    const ya = a.offering.academicYear ?? 0;
+    const yb = b.offering.academicYear ?? 0;
+    return yb - ya || preferred(a) - preferred(b) || compareEntries(a, b);
+  });
   const newestYear = matches[0]?.offering.academicYear;
   const ofYear =
     year === undefined ? matches.filter((e) => e.offering.academicYear === newestYear) : matches;
@@ -908,10 +978,13 @@ export function getSyllabus(uc: UniContext, args: GetSyllabusArgs): SyllabusTool
   for (const e of ofYear) if (!courses.has(courseKey(e))) courses.set(courseKey(e), e);
   if (courses.size > 1) {
     return {
-      data: {
-        ambiguous: true,
-        message: `「${args.course}」に当てはまる科目が複数あります。id か科目コードで指定し直してください。`,
-        candidates: [...courses.values()].slice(0, 10).map(candidateOf),
+      kind: 'ambiguous',
+      output: {
+        data: {
+          ambiguous: true,
+          message: `「${args.course}」に当てはまる科目が複数あります。id か科目コードで指定し直してください。`,
+          candidates: [...courses.values()].slice(0, 10).map(candidateOf),
+        },
       },
     };
   }
@@ -920,16 +993,24 @@ export function getSyllabus(uc: UniContext, args: GetSyllabusArgs): SyllabusTool
   const picked = ofYear[0];
   if (!picked) throw new NotFoundError(`syllabus for "${args.course}"`);
   const same = matches.filter((e) => courseKey(e) === courseKey(picked));
-  const others = same.filter((e) => e.offering.id !== picked.offering.id);
+  return { kind: 'one', picked, others: same.filter((e) => e.offering.id !== picked.offering.id) };
+}
+
+const NOT_FETCHED_NOTE =
+  'この科目のシラバス詳細はまだ取得していません（一覧の情報のみ）。授業の目標・計画などは大学のシラバス検索で確認してください。';
+
+function renderSyllabus(
+  uc: UniContext,
+  picked: SyllabusEntry,
+  others: SyllabusEntry[],
+  detailNote: string | undefined,
+): SyllabusToolOutput {
   const sections = sectionsOf(uc, picked);
   const o = picked.offering;
   const req = requirementOf(picked);
   const fetched = detailFetched(picked);
   const notes: string[] = [];
-  if (!fetched)
-    notes.push(
-      'この科目のシラバス詳細はまだ取得していません（一覧の情報のみ）。授業の目標・計画などは大学のシラバス検索で確認してください。',
-    );
+  if (detailNote) notes.push(detailNote);
   if (others.length)
     notes.push(
       'ほかに同じ科目の開講（クラス・学期・年度違い）があります。otherOfferings の id で指定できます。',
@@ -973,6 +1054,100 @@ export function getSyllabus(uc: UniContext, args: GetSyllabusArgs): SyllabusTool
       citations: conciseCitations(uc.context.citationsFor([o.id, ...docIds])),
     },
   };
+}
+
+/** get_syllabus from the stored data only (no request to the university). */
+export function getSyllabus(uc: UniContext, args: GetSyllabusArgs): SyllabusToolOutput {
+  const r = resolveSyllabus(uc, args);
+  if (r.kind === 'ambiguous') return r.output;
+  return renderSyllabus(
+    uc,
+    r.picked,
+    r.others,
+    detailFetched(r.picked) ? undefined : NOT_FETCHED_NOTE,
+  );
+}
+
+/** How get_syllabus reads a detail the daily sync has not opened yet. */
+export interface SyllabusDetailFetcher {
+  /** Fetch these entities' details (in the daemon, or in-process) and ingest them. */
+  fetch: (ids: string[]) => Promise<DetailFetchReport>;
+  /** How long the answer waits for the fetch (default SYLLABUS_FETCH_WAIT_MS). */
+  waitMs?: number;
+}
+
+/** About six paced requests take well under this; longer means a sync holds the source. */
+export const SYLLABUS_FETCH_WAIT_MS = 45_000;
+
+const TIMED_OUT = Symbol('timeout');
+
+/**
+ * get_syllabus: when the course's syllabus detail has not been read yet, read it now from the
+ * public syllabus (one course, about six requests paced like the sync) and answer with it. When
+ * that is not possible right now, the connector queues it for its next sync, before every other
+ * course, and the answer says so.
+ */
+export async function getSyllabusFetching(
+  uc: UniContext,
+  args: GetSyllabusArgs,
+  fetcher: SyllabusDetailFetcher | undefined,
+): Promise<SyllabusToolOutput> {
+  const first = resolveSyllabus(uc, args);
+  if (first.kind === 'ambiguous') return first.output;
+  if (detailFetched(first.picked) || !fetcher) return getSyllabus(uc, args);
+  const id = first.picked.offering.id;
+  const running = fetcher.fetch([id]);
+  running.catch(() => undefined); // keeps running after a timeout; errors are reported below
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let outcome: DetailFetchReport | typeof TIMED_OUT | Error;
+  try {
+    outcome = await Promise.race([
+      running,
+      new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), fetcher.waitMs ?? SYLLABUS_FETCH_WAIT_MS);
+      }),
+    ]);
+  } catch (e) {
+    outcome = e instanceof Error ? e : new Error(String(e));
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  const keep = (note: string): SyllabusToolOutput =>
+    renderSyllabus(uc, first.picked, first.others, note);
+  if (outcome === TIMED_OUT)
+    return keep(
+      'この科目のシラバス詳細を大学のシラバスからいま取得しています（大学のサーバーに負担をかけないよう1件ずつ取得します）。少し待ってからもう一度 get_syllabus を呼ぶと詳細が入ります。それまでは一覧の情報のみです。',
+    );
+  if (outcome instanceof Error)
+    return keep(`${NOT_FETCHED_NOTE}（その場での取得に失敗しました: ${outcome.message}）`);
+  const result = outcome.results.find((r) => r.id === id);
+  const reason = result?.error ? `（理由: ${result.error}）` : '';
+  switch (result?.status) {
+    case 'fetched':
+    case 'alreadyFetched': {
+      const again = resolveSyllabus(uc, args, id);
+      if (again.kind === 'one' && detailFetched(again.picked))
+        return renderSyllabus(
+          uc,
+          again.picked,
+          again.others,
+          result.status === 'fetched'
+            ? 'シラバス詳細は、いま大学のシラバスから取得しました。'
+            : undefined,
+        );
+      return keep(NOT_FETCHED_NOTE);
+    }
+    case 'queued':
+      return keep(
+        `この科目のシラバス詳細はいま取得できなかったため、次のシラバスの同期で最優先に取得します${reason}。それまでは一覧の情報のみです。`,
+      );
+    case 'notFound':
+      return keep(
+        'この科目は大学のシラバス検索で見つかりませんでした（掲載が変わった可能性があります）。一覧の情報のみです。',
+      );
+    default:
+      return keep(`${NOT_FETCHED_NOTE}${reason}`);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

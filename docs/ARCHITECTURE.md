@@ -939,7 +939,9 @@ must not write anything found in mail or calendar into UniContext.
   Every connector/adapter package is an optional dependency of the daemon.
   `src/wiring.ts`: `wireCourseProviders` feeds LiveCampusU's enrolled CourseOfferings (current academic year) to the
   public 休講 module (`courseProvider`, so own-course 休講 become cancelled class sessions on Today) and to the
-  syllabus module (`targetProvider`); `startWatchers` runs `watch()` of WatchableAdapters (local-files,
+  syllabus module (`targetProvider`), and gives the syllabus catalog the student's detail priorities
+  (`priorityProvider` <- context-engine `syllabusDetailPriorities`: registrations, courses still needed for
+  graduation, the department's electives; docs/connectors/syllabus.md); `startWatchers` runs `watch()` of WatchableAdapters (local-files,
   chatgpt-record) into `SyncEngine.ingest` while the scheduler runs. `unicontext login` calls `authenticate()` and,
   when that is not enough, the adapter's interactive `login()` (InteractiveAuthAdapter).
 - Remote endpoint (apps/daemon `src/remote/`, [docs/remote.md](remote.md)). Scopes: `unicontext.read` always,
