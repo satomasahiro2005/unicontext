@@ -7,6 +7,9 @@ import { UsageError } from './errors.js';
 import { colorEnabled, createStyle, type Style } from './format/style.js';
 import { sanitizeText } from './format/table.js';
 
+/** Max wait for a running daemon that does not answer yet (its start-up can take a minute). */
+const DAEMON_WAIT_MS = 120_000;
+
 /** Options shared by every command (spec §42 / task: global options). */
 export interface GlobalOptions {
   json?: boolean;
@@ -177,6 +180,13 @@ export class CliContext {
         paths: this.paths(),
         secrets: await this.secrets(),
         dev: this.dev,
+        // A daemon that is still starting (or busy) must not be mistaken for none: commands would
+        // then do in process what the daemon is doing (e.g. two browsers on one profile).
+        waitMs: DAEMON_WAIT_MS,
+        onWait: (pid) =>
+          this.err(
+            `デーモン（pid ${pid}）は起動中か処理中で、まだ応答しません。応答を待っています… / Waiting for the running daemon to answer…`,
+          ),
       }))();
     return this.daemonClient;
   }

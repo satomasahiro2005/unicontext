@@ -64,7 +64,7 @@ export function registerLogin(program: Command, h: Harness): void {
           ) {
             if (!ctx.json)
               ctx.err('ブラウザを開きます。大学のアカウントでログインを済ませてください…');
-            auth = await adapter.login();
+            auth = await adapter.login(ctx.json ? {} : { notify: (m) => ctx.err(ctx.text(m)) });
           }
         } catch (e) {
           if (e instanceof AuthRequiredError)

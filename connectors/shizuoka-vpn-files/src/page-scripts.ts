@@ -10,6 +10,32 @@ export function call(script: string, arg?: unknown): string {
 }
 
 /**
+ * A response that was redirected to the Ivanti sign-in area (`/dana-na/…`) or to the bare portal
+ * root (where an expired session ends up: `/dana-na/auth/welcome.cgi` → `/`, a 404 page): the
+ * session is gone, whatever the final status is.
+ */
+const SIGNED_OUT_REDIRECT = `(r) => {
+  if (!r.redirected) return false;
+  try { return /^\\/(?:dana-na\\/|$)/i.test(new URL(r.url).pathname); } catch (e) { return true; }
+}`;
+
+/**
+ * Is the portal session live? GETs the portal's own landing-page JSON (what the signed-in SPA
+ * loads first). Signed out, the endpoint redirects to the sign-in area instead of answering JSON.
+ */
+export const SESSION_CHECK = `async (arg) => {
+  const { url } = arg;
+  if (new URL(url, location.href).origin !== location.origin) return { live: false, error: 'cross-origin' };
+  let r;
+  try { r = await fetch(url, { method: 'GET', credentials: 'same-origin', headers: { accept: 'application/json' } }); }
+  catch (e) { return { live: false, error: 'network' }; }
+  const signedOut = (${SIGNED_OUT_REDIRECT})(r);
+  const ctype = r.headers.get('content-type') || '';
+  try { await r.body?.cancel(); } catch (e) { /* ignore */ }
+  return { live: r.ok && !signedOut && /json/i.test(ctype), status: r.status };
+}`;
+
+/**
  * GET a JSON endpoint (the fb list). Returns the parsed body only on 200; otherwise the status and
  * a short snippet so the caller can tell a 403 "ファイル参照エラー" from other failures. The caller
  * treats any non-200 (and a 200 with no entries) as a retryable/flaky result, never a deletion.
@@ -22,6 +48,10 @@ export const FETCH_JSON = `async (arg) => {
   catch (e) { return { error: 'network', message: String(e && e.message || e) }; }
   const status = r.status;
   const ctype = r.headers.get('content-type') || '';
+  if ((${SIGNED_OUT_REDIRECT})(r)) {
+    try { await r.body?.cancel(); } catch (e) { /* ignore */ }
+    return { ok: false, status, session: true };
+  }
   if (!r.ok) {
     let snippet = '';
     try { snippet = (await r.text()).slice(0, 200); } catch (e) { /* ignore */ }
@@ -48,6 +78,10 @@ export const DOWNLOAD_OPEN = `async (arg) => {
   let res;
   try { res = await fetch(url, { method: 'GET', credentials: 'same-origin' }); }
   catch (e) { return { error: 'network', status: 0, message: String(e && e.message || e) }; }
+  if ((${SIGNED_OUT_REDIRECT})(res)) {
+    try { await res.body?.cancel(); } catch (e) { /* ignore */ }
+    return { error: 'html', status: res.status };
+  }
   if (!res.ok || !res.body) {
     const retryAfter = res.headers.get('retry-after');
     try { await res.body?.cancel(); } catch (e) { /* ignore */ }

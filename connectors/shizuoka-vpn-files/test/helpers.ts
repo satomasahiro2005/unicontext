@@ -10,6 +10,7 @@ import {
   SHIZUOKA_VPN_DEPLOYMENT,
   type FbEntry,
   type ListResult,
+  type SessionMarker,
   type StreamFileResult,
   type VpnDeployment,
   type VpnPortalClient,
@@ -116,6 +117,10 @@ export function harness(
     clock?: ReturnType<typeof testClock>;
     profileExists?: boolean;
     authFail?: boolean;
+    sessionMarker?: SessionMarker;
+    verifySession?: () => Promise<AuthResult>;
+    profileInUse?: () => boolean;
+    login?: () => Promise<AuthResult>;
     extract?: (data: Uint8Array, ext: string) => Promise<{ text: string; pages?: { page: number; text: string }[] }>;
   } = {},
 ): Harness {
@@ -136,6 +141,10 @@ export function harness(
     logger: silentLogger,
     timezone: 'Asia/Tokyo',
     profileExists: () => overrides.profileExists !== false,
+    ...(overrides.sessionMarker ? { sessionMarker: overrides.sessionMarker } : {}),
+    ...(overrides.verifySession ? { verifySession: overrides.verifySession } : {}),
+    ...(overrides.profileInUse ? { profileInUse: overrides.profileInUse } : {}),
+    ...(overrides.login ? { login: overrides.login } : {}),
     withClient: async (fn) => {
       if (overrides.authFail)
         return { auth: { status: 'auth_required', message: 'login' } as AuthResult };

@@ -111,6 +111,8 @@ export interface InteractiveLoginOptions {
   openBrowser?: (url: string) => Promise<void> | void;
   /** Max time to wait for the human, in ms. */
   timeoutMs?: number;
+  /** Progress the human should see while nothing happens on screen (e.g. waiting for a lock). */
+  notify?: (message: string) => void;
 }
 
 /**

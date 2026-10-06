@@ -79,6 +79,8 @@ beforeAll(async () => {
     logger: silentLogger,
     timezone: 'Asia/Tokyo',
     profileExists: () => true,
+    // The student has just signed in: a live portal session was verified a moment ago.
+    sessionMarker: { read: () => clock.now().toISOString(), write: () => undefined },
     withClient: async (fn) => ({ result: await fn(client) }),
     random: () => 0,
   });

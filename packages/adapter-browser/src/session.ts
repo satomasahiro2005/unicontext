@@ -12,6 +12,7 @@ import {
 } from '@unicontext/core';
 import { CookieJar } from './cookies.js';
 import { playwrightDriver } from './driver.js';
+import { BrowserProfileInUseError, isProfileInUse } from './profile-lock.js';
 import {
   hasVisibleCredentialField,
   type InterstitialHandler,
@@ -71,6 +72,20 @@ export interface BrowserSessionOptions {
   refreshTimeoutMs?: number;
   /** Poll interval while waiting for the logged-in state (default 1 s). */
   pollIntervalMs?: number;
+  /**
+   * Keep the service's session cookies across browser restarts (Chrome drops cookies without an
+   * expiry when it closes). For services whose whole session is one such cookie, e.g. an Ivanti
+   * `DSID`: the human signs in once in a visible window and the next headless run must still have
+   * it. The cookie stays inside the profile (Chrome's own cookie store); nothing is exported.
+   */
+  keepSessionCookies?: boolean;
+  /**
+   * How long an interactive login waits for the profile to be released by another browser process
+   * (e.g. the daemon's background sync) before giving up (default 5 min). Headless runs never wait.
+   */
+  profileWaitMs?: number;
+  /** Profile lock probe (tests). Default: the Chrome process-singleton lock. */
+  isProfileInUse?: (profileDir: string) => boolean;
 }
 
 /**
@@ -136,8 +151,40 @@ export class BrowserSession {
         headless: false,
         timeoutMs: options.timeoutMs ?? this.options.timeoutMs ?? 10 * 60_000,
         ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.notify ? { notify: options.notify } : {}),
       }),
     );
+  }
+
+  /** True when another browser process has this source's profile open right now. */
+  profileInUse(): boolean {
+    if (this.context) return false; // our own browser
+    return (this.options.isProfileInUse ?? isProfileInUse)(this.options.profileDir);
+  }
+
+  /**
+   * Another process (the daemon's sync, a second CLI) has the profile open. Headless runs fail
+   * right away with an accurate error; an interactive login waits for it, saying so.
+   */
+  private async awaitProfile(
+    headless: boolean,
+    opts: { signal?: AbortSignal; notify?: (message: string) => void } = {},
+  ): Promise<void> {
+    if (!this.profileInUse()) return;
+    if (headless) throw new BrowserProfileInUseError(this.options.profileDir);
+    const waitMs = this.options.profileWaitMs ?? 5 * 60_000;
+    const deadline = this.clock.now().getTime() + waitMs;
+    opts.notify?.(
+      `別の処理（UniContext デーモンの同期など）がこのソースのブラウザを使っています。終わるまで待ちます（最大${Math.ceil(waitMs / 60_000)}分）… / Waiting for another process to release the browser profile…`,
+    );
+    this.logger.info('waiting for the browser profile to be released', {
+      profileDir: this.options.profileDir,
+    });
+    while (this.profileInUse()) {
+      if (opts.signal?.aborted || this.clock.now().getTime() >= deadline)
+        throw new BrowserProfileInUseError(this.options.profileDir);
+      await this.clock.sleep(this.options.pollIntervalMs ?? 1000, opts.signal);
+    }
   }
 
   /**
@@ -182,15 +229,21 @@ export class BrowserSession {
     return entry.promise;
   }
 
-  private async openContext(headless: boolean): Promise<BrowserContextLike> {
+  private async openContext(
+    headless: boolean,
+    wait: { signal?: AbortSignal; notify?: (message: string) => void } = {},
+  ): Promise<BrowserContextLike> {
     if (this.context && this.contextHeadless === headless) return this.context;
     await this.closeContext();
+    await this.awaitProfile(headless, wait);
     await mkdir(this.options.profileDir, { recursive: true });
     this.context = await this.driver.launchPersistentContext(this.options.profileDir, {
       headless,
       ...(this.options.channel ? { channel: this.options.channel } : {}),
       ...(this.options.executablePath ? { executablePath: this.options.executablePath } : {}),
       ...(this.options.launch ?? {}),
+      // "Continue where you left off" is what makes Chrome keep cookies without an expiry.
+      ...(this.options.keepSessionCookies ? { args: ['--restore-last-session'] } : {}),
     });
     this.contextHeadless = headless;
     if (this.options.prepareContext) await this.options.prepareContext(this.context);
@@ -202,6 +255,7 @@ export class BrowserSession {
     this.context = undefined;
     this.contextHeadless = undefined;
     if (ctx) {
+      if (this.options.keepSessionCookies) await this.tidyForRestore(ctx);
       try {
         await ctx.close();
       } catch (e) {
@@ -210,15 +264,36 @@ export class BrowserSession {
     }
   }
 
+  /**
+   * With session restore on, Chrome reopens (and reloads) the tabs that were open when it closed.
+   * Leave a single blank tab so the next launch neither re-requests a service page nor piles up
+   * tabs.
+   */
+  private async tidyForRestore(ctx: BrowserContextLike): Promise<void> {
+    try {
+      const pages = ctx.pages().filter((p) => !p.isClosed());
+      for (const extra of pages.slice(1)) await extra.close?.();
+      const first = pages[0];
+      if (first && first.url() !== 'about:blank')
+        await first.goto('about:blank', { waitUntil: 'commit', timeout: 5_000 });
+    } catch (e) {
+      this.logger.debug('tidying tabs before close failed', { error: String(e) });
+    }
+  }
+
   private async run(opts: {
     headless: boolean;
     timeoutMs: number;
     signal?: AbortSignal;
+    notify?: (message: string) => void;
   }): Promise<AuthResult> {
     const label = opts.headless ? 'refresh' : 'login';
     let result: AuthResult;
     try {
-      const context = await this.openContext(opts.headless);
+      const context = await this.openContext(opts.headless, {
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        ...(opts.notify ? { notify: opts.notify } : {}),
+      });
       const page = context.pages()[0] ?? (await context.newPage());
       await page.goto(this.options.startUrl, { waitUntil: 'load' });
       if (this.options.begin && !(await this.safeIsAuthenticated(page))) {

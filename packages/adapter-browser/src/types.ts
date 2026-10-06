@@ -36,6 +36,8 @@ export interface PageLike {
   locator(selector: string): LocatorLike;
   waitForLoadState(state?: LoadState, options?: { timeout?: number }): Promise<void>;
   isClosed(): boolean;
+  /** Close this tab (Playwright pages have it; optional for fakes). */
+  close?(): Promise<void>;
 }
 
 export interface BrowserContextLike {
@@ -59,6 +61,8 @@ export interface LaunchOptions {
   serviceWorkers?: 'allow' | 'block';
   /** Fixed viewport (default: none, the window size). */
   viewport?: { width: number; height: number };
+  /** Extra browser command-line switches. */
+  args?: string[];
 }
 
 /** Opens a persistent (on-disk) browser profile. */

@@ -150,6 +150,42 @@ describe('unicontextd', () => {
     rmSync(other, { recursive: true, force: true });
   });
 
+  it('discover waits for a live daemon that has not opened its port yet (start-up)', async () => {
+    const other = mkdtempSync(path.join(tmpdir(), 'uc-starting-'));
+    try {
+      const startedAt = new Date().toISOString();
+      // The lock is written before the runtime opens and the port is known.
+      writeFileSync(lockFile({ root: other }), JSON.stringify({ pid: process.pid, startedAt }));
+      writeFileSync(path.join(other, 'daemon.token'), `${'t'.repeat(43)}\n`);
+      const waited: number[] = [];
+      const found = DaemonClient.discover({ root: other }, new MemorySecretStore(), {
+        waitMs: 5_000,
+        retryDelayMs: 20,
+        onWait: (lock) => waited.push(lock.pid),
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      writeFileSync(
+        lockFile({ root: other }),
+        JSON.stringify({ pid: process.pid, port: daemon.port, startedAt }),
+      );
+      const client = await found;
+      expect(client?.baseUrl).toBe(daemon.url);
+      expect(waited).toEqual([process.pid]);
+      // Without waitMs, the same state is "no daemon" (the old behaviour).
+      writeFileSync(lockFile({ root: other }), JSON.stringify({ pid: process.pid, startedAt }));
+      expect(await DaemonClient.discover({ root: other }, new MemorySecretStore())).toBeUndefined();
+      // A dead pid is never waited for.
+      writeFileSync(lockFile({ root: other }), JSON.stringify({ pid: 2 ** 30, port: 1, startedAt }));
+      const t0 = Date.now();
+      expect(
+        await DaemonClient.discover({ root: other }, new MemorySecretStore(), { waitMs: 5_000 }),
+      ).toBeUndefined();
+      expect(Date.now() - t0).toBeLessThan(4_000);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it('discover does not hand the token to a listener whose pid does not own the lock', async () => {
     const other = mkdtempSync(path.join(tmpdir(), 'uc-squat-'));
     try {

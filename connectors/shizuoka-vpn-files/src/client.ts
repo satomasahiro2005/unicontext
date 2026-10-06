@@ -198,10 +198,13 @@ export class PlaywrightVpnClient implements VpnPortalClient {
       status?: number;
       html?: boolean;
       parse?: boolean;
+      session?: boolean;
       snippet?: string;
       body?: unknown;
     };
     const http = r.status ?? 0;
+    // Redirected to the sign-in area / portal root: the session is gone (never a 403 or a flake).
+    if (r.session) return { status: 'session', httpStatus: http };
     if (r.error === 'cross-origin' || r.error === 'network')
       return { status: 'error', httpStatus: http, message: r.error };
     if (r.ok && r.body !== undefined) {

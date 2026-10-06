@@ -89,6 +89,12 @@ export const ShizuokaVpnFilesConfigSchema = z.looseObject({
       executablePath: z.string().optional(),
       bootTimeoutMs: z.number().int().positive().default(90_000),
       loginTimeoutMs: z.number().int().positive().optional(),
+      /**
+       * A portal session verified this many minutes ago is assumed gone without opening the
+       * browser (the portal ends a session after at most 60 min, research §2.3). Within it,
+       * authenticate() re-checks against the portal before saying "signed in".
+       */
+      sessionMaxMinutes: z.number().int().positive().max(24 * 60).default(60),
     })
     .prefault({}),
 });

@@ -84,6 +84,16 @@ export class FakePage implements PageLike {
   isClosed(): boolean {
     return this.closed;
   }
+
+  close(): Promise<void> {
+    this.closed = true;
+    return Promise.resolve();
+  }
+
+  /** Page script evaluation, answered by `driver.evaluate` (undefined without one). */
+  evaluate(expression: string): Promise<unknown> {
+    return Promise.resolve(this.driver.evaluate?.(this, expression));
+  }
 }
 
 export class FakeBrowserContext implements BrowserContextLike {
@@ -124,6 +134,14 @@ export class FakeBrowserContext implements BrowserContextLike {
     for (const p of this.list) p.closed = true;
     return Promise.resolve();
   }
+
+  /** Request routes (Playwright `context.route`): recorded, never invoked. */
+  route(pattern: string): Promise<void> {
+    this.routes.push(pattern);
+    return Promise.resolve();
+  }
+
+  readonly routes: string[] = [];
 }
 
 export class FakeBrowserDriver implements BrowserDriver {
@@ -135,8 +153,12 @@ export class FakeBrowserDriver implements BrowserDriver {
   visited: string[] = [];
   clicked: string[] = [];
   checked: string[] = [];
+  /** Answers `page.evaluate(expression)` (e.g. an in-page fetch) for the current page. */
+  evaluate?: (page: FakePage, expression: string) => unknown;
 
-  constructor(init: Partial<Pick<FakeBrowserDriver, 'screens' | 'redirects' | 'cookies'>> = {}) {
+  constructor(
+    init: Partial<Pick<FakeBrowserDriver, 'screens' | 'redirects' | 'cookies' | 'evaluate'>> = {},
+  ) {
     Object.assign(this, init);
   }
 

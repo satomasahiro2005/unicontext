@@ -3,6 +3,7 @@ export * from './driver.js';
 export * from './cookies.js';
 export * from './interstitial.js';
 export * from './session.js';
+export * from './profile-lock.js';
 export * from './adapter.js';
 export * from './testing-driver.js';
 export * from './connector.js';

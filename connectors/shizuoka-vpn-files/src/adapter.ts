@@ -82,6 +82,16 @@ export interface WithClient {
   ): Promise<{ result: T } | { auth: AuthResult }>;
 }
 
+/** When a live portal session was last verified (ISO time), shared by the CLI and the daemon. */
+export interface SessionMarker {
+  read(): string | undefined;
+  /** `undefined` forgets it (signed out, session ended). */
+  write(verifiedAt: string | undefined): void;
+}
+
+/** A session verified this recently is trusted without opening the browser again. */
+const RECHECK_AFTER_MS = 2 * 60_000;
+
 export interface TeamsLikeExtract {
   (data: Uint8Array, ext: string): Promise<{ text: string; pages?: { page: number; text: string }[] }>;
 }
@@ -94,6 +104,12 @@ export interface ShizuokaVpnFilesAdapterOptions {
   logger: Logger;
   timezone: string;
   profileExists: () => boolean;
+  /** Another browser process has the profile open right now (default: never). */
+  profileInUse?: () => boolean;
+  /** Headless check against the portal itself (never prompts). Default: not verifiable. */
+  verifySession?: () => Promise<AuthResult>;
+  /** Default: in memory only. */
+  sessionMarker?: SessionMarker;
   withClient: WithClient;
   login?: (options?: InteractiveLoginOptions) => Promise<AuthResult>;
   logout?: () => Promise<void>;
@@ -141,32 +157,81 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
   readonly version = '1.0.0';
   private healthState: HealthStatus;
   lastRunCounts: Record<string, number> = {};
+  private readonly marker: SessionMarker;
 
   constructor(private readonly options: ShizuokaVpnFilesAdapterOptions) {
     this.id = `shizuoka-vpn-files:${options.sourceId}`;
     this.healthState = { state: 'healthy', checkedAt: options.clock.now().toISOString() };
+    let mem: string | undefined;
+    this.marker = options.sessionMarker ?? {
+      read: () => mem,
+      write: (at) => {
+        mem = at;
+      },
+    };
   }
 
   capabilities(): Promise<Capability[]> {
     return Promise.resolve([...CAPABILITIES]);
   }
 
-  authenticate(): Promise<AuthResult> {
-    if (this.options.profileExists())
-      return Promise.resolve({ status: 'authenticated', message: 'Browser profile present' });
-    return Promise.resolve({
+  private signInRequired(detail?: string): AuthResult {
+    return {
       status: 'auth_required',
-      message: `SSL-VPN ポータルのサインインが必要です。「unicontext login ${this.options.sourceId}」でサインインしてください。 / SSL-VPN portal sign-in required; run \`unicontext login ${this.options.sourceId}\`.`,
-    });
+      message: `SSL-VPN ポータルのサインインが必要です。「unicontext login ${this.options.sourceId}」でサインインしてください。 / SSL-VPN portal sign-in required; run \`unicontext login ${this.options.sourceId}\`.${detail ? ` (${detail})` : ''}`,
+    };
   }
 
-  login(options?: InteractiveLoginOptions): Promise<AuthResult> {
-    if (!this.options.login)
-      return Promise.resolve({ status: 'failed', message: 'Interactive login is not available' });
-    return this.options.login(options);
+  private verifiedAgoMs(): number | undefined {
+    const at = this.marker.read();
+    const t = at ? Date.parse(at) : NaN;
+    return Number.isNaN(t) ? undefined : this.now().getTime() - t;
+  }
+
+  private markVerified(): void {
+    this.marker.write(this.now().toISOString());
+  }
+
+  /**
+   * "Signed in" only for a portal session that was actually verified: a browser profile on disk
+   * proves nothing (a sign-in window that closed early leaves one behind). Never prompts.
+   * - never verified, or longer ago than the portal keeps a session → auth_required, without
+   *   opening a browser;
+   * - verified within the last 2 minutes (a sync or login just did) → authenticated;
+   * - otherwise a headless check against the portal decides.
+   */
+  async authenticate(): Promise<AuthResult> {
+    if (!this.options.profileExists()) return this.signInRequired();
+    const ago = this.verifiedAgoMs();
+    const maxMs = this.options.config.browser.sessionMaxMinutes * 60_000;
+    if (ago === undefined || ago < 0 || ago > maxMs) return this.signInRequired();
+    if (ago <= RECHECK_AFTER_MS)
+      return { status: 'authenticated', message: 'SSL-VPN portal session verified' };
+    // The other UniContext process (daemon sync / CLI) is using the session right now.
+    if (this.options.profileInUse?.())
+      return {
+        status: 'authenticated',
+        message: 'SSL-VPN portal session in use by another UniContext process',
+      };
+    if (!this.options.verifySession) return this.signInRequired();
+    const r = await this.options.verifySession();
+    if (r.status === 'authenticated') {
+      this.markVerified();
+      return { status: 'authenticated', message: 'SSL-VPN portal session verified' };
+    }
+    this.marker.write(undefined);
+    return this.signInRequired(r.message);
+  }
+
+  async login(options?: InteractiveLoginOptions): Promise<AuthResult> {
+    if (!this.options.login) return { status: 'failed', message: 'Interactive login is not available' };
+    const r = await this.options.login(options);
+    if (r.status === 'authenticated') this.markVerified();
+    return r;
   }
 
   async logout(): Promise<void> {
+    this.marker.write(undefined);
     await this.options.logout?.();
   }
 
@@ -212,6 +277,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
       out = await this.options.withClient((client) => this.run(client, state, input));
     } catch (e) {
       if (e instanceof AuthRequiredError) {
+        this.marker.write(undefined);
         this.healthState = {
           state: 'auth_required',
           checkedAt: this.now().toISOString(),
@@ -222,6 +288,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     }
     const now = this.now().toISOString();
     if ('auth' in out) {
+      this.marker.write(undefined);
       this.healthState = {
         state: 'auth_required',
         checkedAt: now,
@@ -230,6 +297,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
       throw new AuthRequiredError(out.auth.message ?? 'SSL-VPN portal sign-in required');
     }
     const r = out.result;
+    this.markVerified();
     this.lastRunCounts = r.counts;
     const degraded = (r.counts.listErrors ?? 0) > 0 && (r.counts.foldersListed ?? 0) === 0;
     this.healthState = degraded
@@ -618,10 +686,20 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
 
     const downloads = jobs.filter((j) => !j.req.extractOnly);
     if (downloads.length > 0) {
-      const out = await this.options.withClient((client) =>
-        this.downloadAll(client, downloads, results, warnings, options.signal),
-      );
-      if ('auth' in out) throw new AuthRequiredError(out.auth.message ?? 'SSL-VPN portal sign-in required');
+      let out: { result: void } | { auth: AuthResult };
+      try {
+        out = await this.options.withClient((client) =>
+          this.downloadAll(client, downloads, results, warnings, options.signal),
+        );
+      } catch (e) {
+        if (e instanceof AuthRequiredError) this.marker.write(undefined);
+        throw e;
+      }
+      if ('auth' in out) {
+        this.marker.write(undefined);
+        throw new AuthRequiredError(out.auth.message ?? 'SSL-VPN portal sign-in required');
+      }
+      this.markVerified();
     }
 
     const extract = this.options.extract ?? defaultExtract;

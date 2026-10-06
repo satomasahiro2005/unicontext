@@ -35,6 +35,11 @@ export const VpnDeploymentSchema = z.object({
   startPath: z.string().default('/dana/home/index.cgi'),
   /** Realm/role path segment of the sign-in URL (`/dana-na/auth/<realm>/welcome.cgi`). */
   realmPath: z.string().default('url_3'),
+  /**
+   * JSON the signed-in portal SPA loads first; signed out it redirects to the sign-in area. A
+   * 200 JSON answer is what proves a live session.
+   */
+  sessionCheckPath: z.string().default('/api/v1/enduser/landing-page'),
   /** fb list / download endpoint paths. */
   listPath: z.string().default('/api/v1/fb/list'),
   listSharesPath: z.string().default('/api/v1/fb/list-shares'),
@@ -92,4 +97,9 @@ export function resolveDeployment(settings: Record<string, unknown> | undefined)
   if (!parsed.success)
     throw new ConfigError(`invalid shizuoka-vpn-files deployment: ${parsed.error.message}`);
   return parsed.data;
+}
+
+/** The realm's sign-in form (`/dana-na/auth/<realm>/welcome.cgi`). */
+export function signInUrl(d: VpnDeployment): string {
+  return `${d.origin}/dana-na/auth/${d.realmPath}/welcome.cgi`;
 }

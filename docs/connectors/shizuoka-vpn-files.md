@@ -72,12 +72,36 @@ Unmapped folders stay fully visible.
    unicontext login shizuoka-vpn-files
    ```
 
-   A browser window opens on the portal. After sign-in, background syncs reuse that session
-   headlessly. When the session is gone, a sync stops with `auth_required` — run `login` again.
+   A browser window opens on the realm's sign-in form (`/dana-na/auth/url_3/welcome.cgi`) and stays
+   open until the portal itself confirms the session (a same-origin GET of
+   `/api/v1/enduser/landing-page` answers JSON), or until the login timeout (10 min). The URL alone
+   is never taken as proof: signed out, `/dana/home/index.cgi` redirects via
+   `/dana-na/auth/welcome.cgi` to `/`, a 404 page on the portal host (observed 2026-10-06).
+
+   After sign-in, background syncs reuse that session headlessly. `DSID` has no expiry, so Chrome
+   would drop it when the window closes; the profile is launched with `--restore-last-session`,
+   which keeps such cookies in the profile's own cookie store (nothing is exported), and closes with
+   a single blank tab so the next launch does not re-request a portal page. When the session is
+   gone (the portal ends it after at most 60 min), a sync stops with `auth_required` — run `login`
+   again.
+
+How "signed in" is decided (`authenticate()`, never prompts): a browser profile on disk proves
+nothing. UniContext records when a live portal session was last verified (`portal-session.json` in
+the source's cache directory; a timestamp only) by a sign-in, a sync or a download. Never verified,
+or longer ago than `browser.sessionMaxMinutes` (60) → `auth_required` without opening a browser;
+verified in the last 2 minutes → signed in; otherwise a headless check against the portal decides.
+
+One browser per profile: Chrome cannot open a profile twice. A headless run that finds the profile
+held by another process (the daemon's sync, an open sign-in window) fails at once with "the browser
+profile is in use" instead of a misleading "no browser could be launched"; `login` waits for it
+(up to 5 min, saying so). The CLI hands `sync` to the running daemon, and waits up to 2 min for a
+daemon that is alive but not answering yet (its start-up can take a minute on a large database)
+instead of running the sync next to it.
 
 Optional config (all under `sources.shizuoka-vpn-files`): `roots.disable` / `roots.include`,
 `courseMap` (`[{ path, root?, course }]`), `prefetch` (path prefixes to pre-download small files),
-`walk.*` (caps and intervals), `files.*` (download/extract limits), `mirror.*` (opt-in local copy).
+`walk.*` (caps and intervals), `files.*` (download/extract limits), `mirror.*` (opt-in local copy),
+`browser.*` (`channel`, `executablePath`, `loginTimeoutMs`, `bootTimeoutMs`, `sessionMaxMinutes`).
 
 ## Exploring from the AI (local index, read-only)
 

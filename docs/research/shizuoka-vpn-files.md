@@ -244,3 +244,15 @@ browser profile 流用の read-only connector。teams-web のダウンロード/
 - 本人の Chrome の VPN セッションは**失効**（`/dana/home/index.cgi` が `welcome.cgi` にリダイレクト、
   `/api/v1/enduser/landing-page` も未認証）。60 分アイドルの想定どおり。ライブのツリー再取得は
   本人の再ログインが要るため行わず、§1・§7 の既存所見で設計を確定した。
+
+## 9. 2026-10-06 初回有効化で分かったこと
+- 未ログインのリダイレクトは `/dana/home/index.cgi` → `/dana-na/auth/welcome.cgi`（realm なし）→ `/`
+  （ポータル host 上の **404 ページ**）[観測、curl]。「ポータル host で `/dana-na/auth/` 以外なら
+  ログイン済み」という URL 判定はこの `/` で成立してしまい、サインイン画面が出る前に login が
+  「認証できました」で閉じていた。→ サインインは `/dana-na/auth/url_3/welcome.cgi` へ直接行き、
+  ログイン判定はポータル自身に `GET /api/v1/enduser/landing-page`（JSON）で確かめる。
+- `DSID` は有効期限なしの Cookie の想定（未確認）。Chrome は閉じると期限なし Cookie を捨てるため、
+  そのままでは headless の同期が必ず未ログインになる。`--restore-last-session` 付きで起動すると
+  プロファイル内に残ることをローカルの検証サーバで確認した（既定では消える）。
+- daemon の同期が使っているプロファイルを CLI が開くと、Chrome は既存プロセスへ引き継いで
+  終了コード 21 で落ち、Playwright は「No browser could be launched」と誤報していた。

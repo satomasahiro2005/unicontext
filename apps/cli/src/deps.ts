@@ -43,6 +43,13 @@ export interface DaemonTarget {
   paths: DataPaths;
   secrets: SecretStore;
   dev: boolean;
+  /**
+   * How long to wait for a daemon whose process is alive but does not answer yet (starting or
+   * busy) before treating it as absent (default 0).
+   */
+  waitMs?: number;
+  /** Told once when discovery starts waiting for such a daemon. */
+  onWait?: (pid: number) => void;
 }
 
 export interface SecretStoreRequest {
@@ -225,8 +232,13 @@ export function defaultDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     createRuntime,
-    daemonClient: async ({ paths, secrets, dev }) =>
-      dev ? undefined : DaemonClient.discover(paths, secrets),
+    daemonClient: async ({ paths, secrets, dev, waitMs, onWait }) =>
+      dev
+        ? undefined
+        : DaemonClient.discover(paths, secrets, {
+            ...(waitMs ? { waitMs } : {}),
+            ...(onWait ? { onWait: (lock) => onWait(lock.pid) } : {}),
+          }),
     secretStore: async ({ noKeychain, onFallback }) =>
       noKeychain
         ? new MemorySecretStore()
