@@ -78,10 +78,15 @@ Unmapped folders stay fully visible.
    confirmation is asked on **any page of the portal host**, including a tab that stays on
    `/dana-na/auth/url_3/login.cgi` after sign-in (observed 2026-10-06): a same-origin GET of
    `/api/v1/enduser/landing-page` that answers 200 JSON (JSON content type, or a body that parses),
-   not redirected to the sign-in area; when that does not say so, a second probe (`list-shares`,
-   then the fb list of the first root) that answers JSON `files`/`shares`. The URL alone is never
-   proof: signed out, `/dana/home/index.cgi` redirects via `/dana-na/auth/welcome.cgi` to `/`, a 404
-   page on the portal host.
+   not redirected to the sign-in area; when that answered 200 without a redirect but not with JSON,
+   a second probe (`list-shares`, then the fb list of the first root) that answers JSON
+   `files`/`shares`. A landing-page that bounced to `/dana-na/auth/welcome.cgi` (signed out) is one
+   request and nothing more. The URL alone is never proof: signed out, `/dana/home/index.cgi`
+   redirects via `/dana-na/auth/welcome.cgi` to `/`, a 404 page on the portal host.
+
+   Polite while you type: no probe is sent from a page that shows a visible password or MFA field
+   (the session cannot be live there, and a probe would follow the sign-in redirect in the middle of
+   the flow), and a page is probed at most once every 5 s.
 
    While it waits, the terminal says what it is stuck on (every 15 s, tab paths without queries):
 
@@ -91,9 +96,13 @@ Unmapped folders stay fully visible.
 
    and, if the portal shows its "other user sessions in progress" notice (found by the field names
    `btnContinue` / `FormDataStr`; UniContext never presses it), `画面の「続行」を押してください`.
-   Non-read requests the read-only route blocked are logged at info (method and path only) during the
-   sign-in and counted in that line. Tabs restored from the last session are closed (one is kept)
-   before the sign-in page opens.
+   Non-read requests the read-only route blocked are counted in that line. Everything the sign-in
+   window went through is also written, without secrets, to `login-trace.jsonl` in the source's
+   cache directory (rewritten per interactive sign-in, capped at 64 KB): one line per tab-path
+   change (path without query, whether a password/MFA field or `btnContinue`/`FormDataStr` was on
+   screen), per probe result (the same summary as above), and per blocked non-read request (method
+   and path). That file is what UniContext reads next; the only thing you do is sign in once. Tabs
+   restored from the last session are closed (one is kept) before the sign-in page opens.
 
    When it succeeds, the result is printed **before** the daemon is contacted, and the daemon's
    sync is started without waiting for it:

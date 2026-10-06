@@ -286,8 +286,15 @@ browser profile 流用の read-only connector。teams-web のダウンロード/
 #### TODO（実機の観測が要る）
 Ivanti のサインイン直後の遷移（`login.cgi` が次に向かう先）は**まだ fixture に取れていない**。
 `routeDecision` は、その遷移が `/dana-na/` 配下のサインイン手順だと分かるまで広げない。
-次に本人がサインインするとき、login の窓から次を控える（クエリは載せない）:
-- サインイン送信後に各タブが通った URL のパス列（`login.cgi` の次の 1 手）
-- そのとき UniContext が止めた非 GET のメソッドとパス（`login` の出力の「ブロックした通信 N件」と
-  daemon ログの info 行 `blocked non-read request during sign-in`）
-- 画面に出ていたボタンの `name`（「他のセッションが進行中」画面なら `btnContinue` / `FormDataStr`）
+本人は次のサインインでいつもどおり 1 回サインインするだけでよい（何も控えない・貼らない）。
+interactive な `login` は、秘密を含まない記録を、このソースの cacheDir の `login-trace.jsonl` へ自分で書く
+（`%LOCALAPPDATA%` の unicontext 配下、サインインごとに作り直し、上限 64 KB）。次に読むのは UniContext で、このファイル:
+- `page` 行: タブのパスの変化（クエリなし）。パスワード/MFA 欄が見えていたか、`btnContinue` / `FormDataStr`
+  が見えていたか（「他のセッションが進行中」画面の判別）。サインイン送信後に各タブが通ったパス列と `login.cgi` の次の 1 手
+- `probe` 行: そのパスで `landing-page` などが何を返したか（`describeChecks` と同じ要約）
+- `blocked` 行: UniContext が止めた非 GET のメソッドとパス
+（`blocked non-read request during sign-in` の info 行は CLI の stderr に出るだけで daemon ログには載らない。読むのは上のファイル。）
+
+プローブの控えめさ（CONNECTOR_POLICY §4）: パスワード/MFA 欄が見えているページでは確認を送らない。
+`landing-page` が `/dana-na/auth/welcome.cgi` などへ戻された（未ログイン）ときは `list-shares` / fb list の
+2 本目以降を出さない（200・リダイレクトなしの HTML のときだけ）。同じページ・同じパスへは 5 秒に 1 回まで。

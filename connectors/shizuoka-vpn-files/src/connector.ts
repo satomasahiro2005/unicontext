@@ -4,6 +4,7 @@ import {
   BrowserSession,
   type BrowserDriver,
   defaultProfileDir,
+  hasVisibleCredentialField,
   type PageLike,
 } from '@unicontext/adapter-browser';
 import { type ConnectorModule, defineConnector } from '@unicontext/connector-sdk';
@@ -22,6 +23,7 @@ import {
 } from './client.js';
 import { type ShizuokaVpnFilesConfig, ShizuokaVpnFilesConfigSchema } from './config.js';
 import { resolveDeployment, signInUrl, type VpnDeployment } from './deployment.js';
+import { createLoginTrace, LOGIN_TRACE_FILE } from './login-trace.js';
 import { metadata, PRODUCT } from './metadata.js';
 import { createShizuokaVpnFilesNormalizer } from './normalizer.js';
 
@@ -35,8 +37,11 @@ export interface ShizuokaVpnFilesConnectorOptions {
 /** What the sign-in window says when the student has to press the portal's own button. */
 export const CONTINUE_NOTICE = '画面の「続行」を押してください';
 
-/** Minimum gap between two session probes from the same page path. */
-const PROBE_GAP_MS = 2_000;
+/**
+ * Minimum gap between two session probes from the same page on the same path. Each probe is one
+ * request when signed out (landing-page bounces) and at most three on a page that answers 200 HTML.
+ */
+const PROBE_GAP_MS = 5_000;
 
 /**
  * The URL alone says a page *might* be inside a signed-in portal session (home page, /files, …):
@@ -115,22 +120,43 @@ export function createShizuokaVpnFilesConnector(
       // A dedicated profile: never shared with LiveCampusU/Teams (different host and session).
       const profileDir = cfg.browser.profileDir ?? defaultProfileDir(ctx.sourceId, ctx.cacheDir);
       const startUrl = `${deployment.origin}${deployment.startPath}`;
-      // Said to the student during an interactive sign-in only (the notify line and the info log).
+      // Said to the student during an interactive sign-in only (the notify line), and written
+      // without secrets to <cacheDir>/login-trace.jsonl so nobody has to copy it off a terminal.
       const blocked = { count: 0 };
       let interactive = false;
       let lastSummary: string | undefined;
-      let lastNotLive: { path: string; at: number } | undefined;
+      const cacheBase = ctx.cacheDir ?? dirname(profileDir);
+      const trace = createLoginTrace(join(cacheBase, LOGIN_TRACE_FILE), () => ctx.clock.now());
+      // Per page: a path-change entry is written once, and a probe is not repeated within the gap.
+      let lastProbe = new WeakMap<PageLike, { path: string; at: number }>();
+      let lastSeen = new WeakMap<PageLike, string>();
       const isAuthenticated = async (page: PageLike): Promise<boolean> => {
         const url = page.url();
         if (!onPortalHost(deployment, url)) return false;
         const path = pathOf(url);
-        // Polled every second: do not send two or three probes a second while the student is
-        // still typing on the same sign-in page.
-        if (lastNotLive && lastNotLive.path === path && Date.now() - lastNotLive.at < PROBE_GAP_MS)
-          return false;
+        const credentials = await hasVisibleCredentialField(page);
+        if (interactive) {
+          const continuePrompt = await hasContinuePrompt(page);
+          const seen = `${path}|${credentials}|${continuePrompt}`;
+          if (lastSeen.get(page) !== seen) {
+            lastSeen.set(page, seen);
+            trace.add('page', {
+              path,
+              passwordOrMfaField: credentials,
+              btnContinueOrFormDataStr: continuePrompt,
+            });
+          }
+        }
+        // The session cannot be live while the student is typing a password or an MFA code, and a
+        // probe would follow the sign-in redirect in the middle of that flow.
+        if (credentials) return false;
+        // Polled every second: one probe per page and path per PROBE_GAP_MS.
+        const last = lastProbe.get(page);
+        if (last && last.path === path && Date.now() - last.at < PROBE_GAP_MS) return false;
         const probe = await probePortalSession(page, deployment);
         lastSummary = describeChecks(probe.checks);
-        lastNotLive = probe.live ? undefined : { path, at: Date.now() };
+        lastProbe.set(page, { path, at: Date.now() });
+        if (interactive) trace.add('probe', { path, live: probe.live, checks: lastSummary });
         return probe.live;
       };
       const session = new BrowserSession({
@@ -168,11 +194,14 @@ export function createShizuokaVpnFilesConnector(
         prepareContext: (context, info) => {
           interactive = info?.headless === false;
           blocked.count = 0;
-          lastNotLive = undefined;
+          lastProbe = new WeakMap();
+          lastSeen = new WeakMap();
+          if (interactive) trace.reset();
           return installReadOnlyRoute(context, deployment.origin, ctx.logger, {
             interactive: () => interactive,
-            onBlocked: () => {
+            onBlocked: (method, path) => {
               blocked.count++;
+              if (interactive) trace.add('blocked', { method, path });
             },
           });
         },
@@ -198,7 +227,7 @@ export function createShizuokaVpnFilesConnector(
         profileInUse: () => session.profileInUse(),
         verifySession: () => session.refresh(),
         sessionMarker: fileSessionMarker(
-          join(ctx.cacheDir ?? dirname(profileDir), 'portal-session.json'),
+          join(cacheBase, 'portal-session.json'),
         ),
         withClient,
         login: (o) => session.login(o),

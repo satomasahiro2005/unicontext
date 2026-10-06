@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -13,6 +13,7 @@ import {
   type SessionCheck,
   ShizuokaVpnFilesAdapter,
 } from '../src/index.js';
+import { createLoginTrace } from '../src/login-trace.js';
 import { call, SESSION_CHECK } from '../src/page-scripts.js';
 import { DEPLOYMENT } from './helpers.js';
 
@@ -90,7 +91,7 @@ describe('sign-in confirmation from the portal host, whatever the path', () => {
         cacheDir,
       },
     );
-    return { adapter: adapter as ShizuokaVpnFilesAdapter, driver, probes, pagesProbed };
+    return { adapter: adapter as ShizuokaVpnFilesAdapter, driver, probes, pagesProbed, cacheDir };
   }
 
   it('a tab that stays on login.cgi is confirmed by the landing-page JSON', async () => {
@@ -149,6 +150,50 @@ describe('sign-in confirmation from the portal host, whatever the path', () => {
     expect(driver.clicked).toEqual([]);
   }, 15_000);
 
+  it('sends no probe while a password field is shown, and leaves a secret-free trace file', async () => {
+    const { adapter, pagesProbed, cacheDir } = setup(() => BOUNCED);
+    const r = await adapter.login({ timeoutMs: 2_500, notify: () => undefined });
+    expect(r.status).toBe('failed');
+    // the welcome page shows input[type=password]: nothing is asked from it (the portal's bare
+    // root, where the start page ends before the form opens, may be asked once)
+    expect(pagesProbed.filter((u) => u.includes('/dana-na/'))).toEqual([]);
+    const lines = readFileSync(join(cacheDir, 'login-trace.jsonl'), 'utf8').trim().split('\n');
+    const entries = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.find((e) => e.path === '/dana-na/auth/url_3/welcome.cgi')).toMatchObject({
+      kind: 'page',
+      path: '/dana-na/auth/url_3/welcome.cgi',
+      passwordOrMfaField: true,
+      btnContinueOrFormDataStr: false,
+    });
+    expect(entries.some((e) => e.kind === 'probe' && String(e.path).includes('/dana-na/'))).toBe(false);
+    expect(lines.join('')).not.toContain('?');
+  }, 15_000);
+
+  it('traces each probe and the tab path, and probes a page at most once per gap', async () => {
+    let signedIn = false;
+    const { adapter, driver, probes, pagesProbed, cacheDir } = setup((url) =>
+      url === LANDING && signedIn ? JSON_OK : BOUNCED,
+    );
+    const login = adapter.login({ notify: () => undefined });
+    await new Promise((r) => setTimeout(r, 150));
+    driver.activePage?.navigate(LOGIN_CGI);
+    await new Promise((r) => setTimeout(r, 2_500));
+    // signed out and bounced: one request per probe, none of the fallbacks, one probe in 2.5 s
+    expect(new Set(probes)).toEqual(new Set([LANDING]));
+    expect(pagesProbed.filter((u) => u === LOGIN_CGI)).toHaveLength(1);
+    signedIn = true;
+    expect((await login).status).toBe('authenticated');
+    const entries = readFileSync(join(cacheDir, 'login-trace.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const first = entries.find((e) => e.kind === 'probe' && e.path === '/dana-na/auth/url_3/login.cgi');
+    expect(first).toMatchObject({ path: '/dana-na/auth/url_3/login.cgi', live: false });
+    expect(String(first?.checks)).toContain('landing-page 200→/dana-na/auth/welcome.cgi');
+    expect(entries.at(-1)).toMatchObject({ kind: 'probe', live: true });
+  }, 15_000);
+
   it('does not claim a session when landing-page and the lists all fail', async () => {
     const { adapter } = setup(() => HTML_200);
     const r = await adapter.login({ timeoutMs: 1_500 });
@@ -181,13 +226,41 @@ describe('second probe: the share list when landing-page is HTML', () => {
 
   it('the fb list of the root is the last resort; a failing portal is not live', async () => {
     const viaList = await probePortalSession(
-      page((url) => (url.startsWith(`${DEPLOYMENT.listPath}?`) ? { live: true, status: 200 } : { live: false })),
+      page((url) =>
+        url.startsWith(`${DEPLOYMENT.listPath}?`) ? { live: true, status: 200 } : HTML_200,
+      ),
       DEPLOYMENT,
     );
     expect(viaList.via).toBe('list');
     expect((await probePortalSession(page(() => ({ live: false, status: 404 })), DEPLOYMENT)).live).toBe(
       false,
     );
+  });
+
+  it('a landing-page bounced to the sign-in area sends no fallback request', async () => {
+    const asked: string[] = [];
+    const probe = await probePortalSession(
+      page((url) => {
+        asked.push(url);
+        return BOUNCED;
+      }),
+      DEPLOYMENT,
+    );
+    expect(probe.live).toBe(false);
+    expect(asked).toEqual([LANDING]);
+    expect(probe.checks.map((c) => c.probe)).toEqual(['landing-page']);
+    // a 404 or a network error is no reason to ask again either
+    for (const check of [{ live: false, status: 404 }, { live: false, error: 'network' }] as SessionCheck[]) {
+      asked.length = 0;
+      await probePortalSession(
+        page((url) => {
+          asked.push(url);
+          return check;
+        }),
+        DEPLOYMENT,
+      );
+      expect(asked).toEqual([LANDING]);
+    }
   });
 
   it('another host is never asked (a federated IdP page)', async () => {
@@ -312,5 +385,26 @@ describe('the read-only route reports what it blocked', () => {
     interactive = false;
     await ctx.fire('POST', `${O}/dana/fb/smb/wnf.cgi`);
     expect(lines.at(-1)?.level).toBe('debug');
+  });
+});
+
+
+describe('the sign-in trace file', () => {
+  it('is capped and survives an unwritable location', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'uc-vpn-trace-'));
+    try {
+      const file = join(dir, 'x', 'login-trace.jsonl');
+      const trace = createLoginTrace(file, () => new Date('2026-10-06T00:00:00Z'), 300);
+      trace.reset();
+      for (let i = 0; i < 20; i++) trace.add('page', { path: `/p${i}` });
+      const lines = readFileSync(file, 'utf8').trim().split('\n');
+      expect(lines.at(-1)).toContain('truncated');
+      expect(Buffer.byteLength(lines.join('\n'))).toBeLessThan(450);
+      trace.reset(); // a new sign-in starts a new file
+      expect(readFileSync(file, 'utf8')).toBe('');
+      createLoginTrace(join(dir, 'x', 'login-trace.jsonl', 'nope'), () => new Date()).add('page'); // no throw
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

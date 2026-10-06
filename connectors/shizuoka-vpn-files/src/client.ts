@@ -238,8 +238,9 @@ export interface PortalProbe {
 
 /**
  * Ask the portal itself, from the page, whether the session is live: the landing-page JSON first
- * and, when that does not say so, a second probe (the share list, then the list of the first
- * root) that only a signed-in session answers with JSON files/shares. Same-origin GETs only.
+ * and, only when that answered 200 without a redirect but not with JSON, a second probe (the
+ * share list, then the list of the first root) that only a signed-in session answers with JSON
+ * files/shares. Same-origin GETs only; a bounced landing-page stops at one request.
  */
 export async function probePortalSession(
   page: PageLike,
@@ -269,6 +270,10 @@ export async function probePortalSession(
     )) ?? { live: false }) as SessionCheck;
     checks.push({ probe: p.label, check });
     if (check.live === true) return { live: true, via: p.label, checks };
+    // The fallbacks exist for landing-page answering 200 HTML without a redirect. A redirect (to
+    // the sign-in area or the root), a 404 or a network error means signed out: asking again would
+    // only add traffic and follow the sign-in redirect while the student is still typing.
+    if (p.label === 'landing-page' && !(check.status === 200 && check.redirected !== true)) break;
   }
   return { live: false, checks };
 }
