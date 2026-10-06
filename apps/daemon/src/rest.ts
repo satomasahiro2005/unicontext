@@ -619,39 +619,43 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
   // ---- writes (bearer token or CSRF) -----------------------------------------------------
   // A sync can outlast any HTTP client timeout (LCU: minutes). `?wait=0` starts it in the
   // background and answers 202 with a job to poll; without it the request waits for the report.
-  app.post<{ Params: { id: string }; Querystring: { wait?: string }; Body: unknown }>(
-    '/api/v1/sources/:id/sync',
-    write,
-    async (request, reply) => {
-      const sourceId = request.params.id;
-      requireSource(runtime, sourceId);
-      if (request.query.wait !== '0' && request.query.wait !== 'false') {
-        const report = await uc.scheduler.trigger(sourceId);
-        return { report };
-      }
-      const job: SyncJob = {
-        id: `${sourceId}-${Date.now().toString(36)}-${(++syncJobSeq).toString(36)}`,
-        sourceId,
-        state: 'running',
-        startedAt: new Date().toISOString(),
-      };
-      rememberSyncJob(job);
-      uc.scheduler.trigger(sourceId).then(
-        (report) => {
-          job.report = report;
-          job.state = report.ok ? 'done' : 'failed';
-          if (!report.ok && report.error) job.error = report.error;
-          job.finishedAt = new Date().toISOString();
-        },
-        (e: unknown) => {
-          job.state = 'failed';
-          job.error = errorMessage(e);
-          job.finishedAt = new Date().toISOString();
-        },
-      );
-      return reply.code(202).send({ job } satisfies SyncJobResponse);
-    },
-  );
+  // `?reason=on-demand` (MCP refresh_sources): the run is rate-limited by the scheduler (429).
+  app.post<{
+    Params: { id: string };
+    Querystring: { wait?: string; reason?: string };
+    Body: unknown;
+  }>('/api/v1/sources/:id/sync', write, async (request, reply) => {
+    const sourceId = request.params.id;
+    requireSource(runtime, sourceId);
+    const trigger = request.query.reason === 'on-demand' ? { reason: 'on-demand' as const } : {};
+    if (request.query.wait !== '0' && request.query.wait !== 'false') {
+      const report = await uc.scheduler.trigger(sourceId, trigger);
+      return { report };
+    }
+    // Refuse before answering 202 so the caller sees the limit, not a job that fails.
+    if (trigger.reason) uc.scheduler.assertOnDemand(sourceId);
+    const job: SyncJob = {
+      id: `${sourceId}-${Date.now().toString(36)}-${(++syncJobSeq).toString(36)}`,
+      sourceId,
+      state: 'running',
+      startedAt: new Date().toISOString(),
+    };
+    rememberSyncJob(job);
+    uc.scheduler.trigger(sourceId, trigger).then(
+      (report) => {
+        job.report = report;
+        job.state = report.ok ? 'done' : 'failed';
+        if (!report.ok && report.error) job.error = report.error;
+        job.finishedAt = new Date().toISOString();
+      },
+      (e: unknown) => {
+        job.state = 'failed';
+        job.error = errorMessage(e);
+        job.finishedAt = new Date().toISOString();
+      },
+    );
+    return reply.code(202).send({ job } satisfies SyncJobResponse);
+  });
 
   app.post<{ Params: { id: string }; Body: unknown }>(
     '/api/v1/facts/:id/correct',

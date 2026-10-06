@@ -61,3 +61,14 @@ export {
   WRITE_TOOLS,
   writeOutput,
 } from './additions.js';
+export {
+  inProcessSyncStarter,
+  REFRESH_MAX_WAIT_MS,
+  REFRESH_TOOL,
+  refreshShape,
+  refreshSources,
+  registerRefreshTools,
+  type RefreshResult,
+  type SyncStart,
+  type SyncStarter,
+} from './refresh.js';

@@ -7,6 +7,14 @@
  */
 import { formatShortJa } from '@unicontext/core';
 import type { EstimatedDue } from './estimate.js';
+import {
+  ageMinutesOf,
+  FRESHNESS_BUDGET_MINUTES,
+  type FreshnessLevel,
+  freshnessLevel,
+  type FreshnessUse,
+  sourceServesUse,
+} from './freshness.js';
 
 /** What a source contributes to deadlines, by connector capability. */
 const COVERS: Record<string, string> = {
@@ -23,13 +31,25 @@ const PRESENCE_CAPABILITIES = new Set(['announcements', 'messages', 'materials']
 const NOT_A_PLATFORM = new Set(['local-file', 'transcript', 'student-statement', 'syllabus']);
 const DEFAULT_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Is the source working? 'stale' is kept for compatibility and is emitted only when the last
+ * success is older than max(3 × the schedule interval, 6 h) (the source has missed its runs);
+ * how old the data is for a given use is `freshness` (freshness.ts), a separate question.
+ */
 export type CoverageHealth = 'ok' | 'auth_required' | 'stale' | 'failing' | 'never_synced';
 
 export interface CoverageSource {
   sourceId: string;
   label: string;
   health: CoverageHealth;
+  /** Always present when the source was ever read successfully. */
   lastSuccessAt?: string | undefined;
+  /** Minutes since lastSuccessAt (undefined when never read). */
+  ageMinutes?: number | undefined;
+  /** The source's schedule interval in minutes (undefined for push/event/manual sources). */
+  intervalMinutes?: number | undefined;
+  /** Age against the budget of this coverage's use (freshness.ts). */
+  freshness: FreshnessLevel;
   /** What it feeds: 課題, お知らせ（文中の締切）, ... */
   covers: string[];
 }
@@ -78,6 +98,8 @@ export interface CoverageSourceInput {
   state: string | undefined;
   lastSuccessAt: string | undefined;
   staleAfterMs: number | undefined;
+  /** The source's schedule interval (undefined: push/event/manual, or unknown). */
+  intervalMs?: number | undefined;
 }
 
 export interface CoverageCourse {
@@ -110,6 +132,24 @@ export function coverageHealth(s: CoverageSourceInput, now: Date): CoverageHealt
   return age > (s.staleAfterMs ?? DEFAULT_STALE_AFTER_MS) ? 'stale' : 'ok';
 }
 
+/** Health, age and freshness of a source (the `covers` text is the coverage's own). */
+export function coverageSourceView(
+  s: CoverageSourceInput,
+  now: Date,
+  budgetMinutes: number,
+): Omit<CoverageSource, 'covers'> {
+  const ageMinutes = ageMinutesOf(s.lastSuccessAt, now);
+  return {
+    sourceId: s.sourceId,
+    label: s.label,
+    health: coverageHealth(s, now),
+    ...(s.lastSuccessAt ? { lastSuccessAt: s.lastSuccessAt } : {}),
+    ...(ageMinutes !== undefined ? { ageMinutes } : {}),
+    ...(s.intervalMs ? { intervalMinutes: Math.round(s.intervalMs / 60_000) } : {}),
+    freshness: freshnessLevel(ageMinutes, budgetMinutes),
+  };
+}
+
 function feedsDeadlines(s: CoverageSourceInput): boolean {
   if (s.referenceOnly) return false;
   // Not loaded: it may well carry deadlines; its state decides whether it shows up.
@@ -136,10 +176,7 @@ export function buildDeadlineCoverage(input: {
     (s) => feedsDeadlines(s) && (!input.courseScoped || courseSources.has(s.sourceId)),
   );
   const sources: CoverageSource[] = relevant.map((s) => ({
-    sourceId: s.sourceId,
-    label: s.label,
-    health: coverageHealth(s, input.now),
-    ...(s.lastSuccessAt ? { lastSuccessAt: s.lastSuccessAt } : {}),
+    ...coverageSourceView(s, input.now, FRESHNESS_BUDGET_MINUTES.deadlines),
     covers: s.capabilities
       ? s.capabilities.filter((c) => c in COVERS).map((c) => COVERS[c] as string)
       : ['不明（コネクタを読み込めていません）'],
@@ -215,4 +252,115 @@ export function buildDeadlineCoverage(input: {
       ? '締切は上の情報源から取得したものです。ここに無いことは締切が無いことを意味しません（口頭・紙・同期していない場所の課題もありえます）。'
       : '締切の取得に欠けがあります（gaps）。ここに無い締切や期限不明の課題は、すぐ締切が来る可能性があるものとして扱い、gaps の確認先を学生に伝えてください。期限不明の課題は estimatedDue（早めの推定・根拠つき）に合わせて動き、「推定」と明記して確定した締切のように言わないでください。「締切はない」「余裕がある」とは言わないでください。',
   };
+}
+
+// --- capability coverage (stream E) ---
+
+/** The capabilities a course's view reports coverage for besides its deadlines. */
+export const COVERAGE_CAPABILITIES = [
+  'assignments',
+  'messages',
+  'materials',
+  'calendar',
+  'attendance',
+  'grades',
+  'announcements',
+] as const;
+export type CoverageCapability = (typeof COVERAGE_CAPABILITIES)[number];
+
+const CAPABILITY_TEXT: Record<CoverageCapability, string> = {
+  assignments: '課題',
+  messages: '投稿',
+  materials: '資料',
+  calendar: '予定',
+  attendance: '出席',
+  grades: '成績',
+  announcements: 'お知らせ',
+};
+
+/** Capabilities that belong to the student, not to a course: every source of it counts. */
+const UNIVERSITY_WIDE = new Set<CoverageCapability>(['calendar', 'attendance']);
+
+export type CapabilityGap =
+  | {
+      kind: 'source_unhealthy';
+      capability: CoverageCapability;
+      sourceId: string;
+      label: string;
+      health: Exclude<CoverageHealth, 'ok'>;
+      lastSuccessAt?: string | undefined;
+      detail: string;
+    }
+  | {
+      /** No known source reads this for the course (or at all). */
+      kind: 'no_source';
+      capability: CoverageCapability;
+      course?: { id: string; title: string } | undefined;
+      detail: string;
+    };
+
+export interface CapabilityCoverage {
+  capability: CoverageCapability;
+  /** At least one source reads it and none of them is unhealthy. Age is `sources[].freshness`. */
+  complete: boolean;
+  sources: CoverageSource[];
+  gaps: CapabilityGap[];
+}
+
+/**
+ * Which sources read one capability (assignments, messages, materials, calendar, attendance,
+ * grades, announcements) for the courses, their health and age, and what is missing: no source
+ * at all, or a source that is down. With `courseScoped`, only the courses' own sources count
+ * (calendar and attendance are the student's, not a course's, so every source counts).
+ * `buildDeadlineCoverage` is the same idea for deadlines, which several capabilities feed.
+ */
+export function buildCapabilityCoverage(
+  capability: CoverageCapability,
+  input: {
+    now: Date;
+    sources: CoverageSourceInput[];
+    courses: CoverageCourse[];
+    courseScoped: boolean;
+    formatTime: (iso: string) => string;
+  },
+): CapabilityCoverage {
+  const courseSources = new Set(input.courses.flatMap((c) => c.sourceIds));
+  const scoped = input.courseScoped && !UNIVERSITY_WIDE.has(capability);
+  const use: FreshnessUse = capability;
+  const relevant = input.sources.filter(
+    (s) => sourceServesUse(s, use) && (!scoped || courseSources.has(s.sourceId)),
+  );
+  const what = CAPABILITY_TEXT[capability];
+  const sources: CoverageSource[] = relevant.map((s) => ({
+    ...coverageSourceView(s, input.now, FRESHNESS_BUDGET_MINUTES[use]),
+    covers: [what],
+  }));
+  const gaps: CapabilityGap[] = [];
+  for (const s of sources) {
+    if (s.health === 'ok') continue;
+    const since = s.lastSuccessAt
+      ? `最終取得 ${input.formatTime(s.lastSuccessAt)}`
+      : '取得実績なし';
+    gaps.push({
+      kind: 'source_unhealthy',
+      capability,
+      sourceId: s.sourceId,
+      label: s.label,
+      health: s.health,
+      ...(s.lastSuccessAt ? { lastSuccessAt: s.lastSuccessAt } : {}),
+      detail: `${s.label}: ${HEALTH_TEXT[s.health]}（${since}）。そこの${what}は反映されていない可能性があります。${s.label}を直接確認してください。`,
+    });
+  }
+  if (sources.length === 0) {
+    const course = scoped && input.courses.length === 1 ? input.courses[0] : undefined;
+    gaps.push({
+      kind: 'no_source',
+      capability,
+      ...(course ? { course: { id: course.id, title: course.title } } : {}),
+      detail: course
+        ? `「${course.title}」の${what}を取得できる情報源がありません。${what}はUniContextに載っていない可能性があります。授業や提出先で直接確認してください。`
+        : `${what}を取得できる情報源がありません。${what}はUniContextに載っていない可能性があります。`,
+    });
+  }
+  return { capability, complete: gaps.length === 0, sources, gaps };
 }

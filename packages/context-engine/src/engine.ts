@@ -49,12 +49,26 @@ import {
 } from '@unicontext/database';
 import type { IdentityResolver } from '@unicontext/identity';
 import {
+  buildCapabilityCoverage,
   buildDeadlineCoverage,
+  COVERAGE_CAPABILITIES,
+  type CapabilityCoverage,
+  type CoverageCapability,
+  coverageSourceView,
   type CoverageCourse,
   type CoverageSourceInput,
   type CoverageUndated,
   type DeadlineCoverage,
 } from './coverage.js';
+import {
+  buildViewFreshness,
+  FRESHNESS_USES,
+  FRESHNESS_BUDGET_MINUTES,
+  type FreshnessUse,
+  sourceServesUse,
+  type SourceFreshness,
+  type ViewFreshness,
+} from './freshness.js';
 import {
   type ConflictResolver,
   type Resolution,
@@ -240,8 +254,15 @@ export class ContextEngine {
     return this.clock.now();
   }
 
-  private base<V extends string>(view: V): { view: V; generatedAt: string; timezone: string } {
-    return { view, generatedAt: this.now().toISOString(), timezone: this.timezone };
+  private base<V extends string>(
+    view: V,
+  ): { view: V; generatedAt: string; timezone: string; freshness: ViewFreshness } {
+    return {
+      view,
+      generatedAt: this.now().toISOString(),
+      timezone: this.timezone,
+      freshness: this.viewFreshness(),
+    };
   }
 
   citationsFor(entityIds: readonly string[]): Citation[] {
@@ -1985,6 +2006,7 @@ export class ContextEngine {
         { courseOfferingId: c.id },
       ),
       coverage: this.deadlineCoverage(c.id),
+      capabilityCoverage: this.capabilityCoverageOf(c.id),
       announcements: this.entities
         .list('announcement', { where: { courseOfferingId: ids } })
         .sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''))
@@ -2622,6 +2644,96 @@ export class ContextEngine {
   /** Day-of-week helper for callers rendering timetables. */
   weekdayOf(date: string): number {
     return zonedParts(parseZonedDate(date, this.timezone), this.timezone).weekday;
+  }
+
+  // --- freshness (stream E) ---
+
+  /** How old the information behind a view is against its uses (freshness.ts). */
+  viewFreshness(): ViewFreshness {
+    return buildViewFreshness(this.coverageSources(), this.now());
+  }
+
+  /** Which sources read each kind of information for a course, and what is missing. */
+  capabilityCoverageOf(courseOfferingId: string): Record<CoverageCapability, CapabilityCoverage> {
+    const ref = this.courseRef(courseOfferingId);
+    const ids = ref?.linkedIds ?? [courseOfferingId];
+    const course: CoverageCourse = {
+      id: ref?.id ?? courseOfferingId,
+      title: ref?.title ?? courseOfferingId,
+      sourceIds: this.sourceIdsOf(ids),
+    };
+    const sources = this.coverageSources();
+    const tz = this.timezone;
+    const now = this.now();
+    const formatTime = (iso: string): string => {
+      const p = zonedParts(new Date(iso), tz);
+      return `${p.month}/${p.day} ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
+    };
+    return Object.fromEntries(
+      COVERAGE_CAPABILITIES.map((c) => [
+        c,
+        buildCapabilityCoverage(c, {
+          now,
+          sources,
+          courses: [course],
+          courseScoped: true,
+          formatTime,
+        }),
+      ]),
+    ) as Record<CoverageCapability, CapabilityCoverage>;
+  }
+
+  private sourceIdsOf(entityIds: readonly string[]): string[] {
+    return [
+      ...new Set(
+        entityIds
+          .map((id) => this.entities.meta(id)?.sourceId)
+          .filter((x): x is string => x !== undefined),
+      ),
+    ];
+  }
+
+  /**
+   * The sources that read what a course or a use needs, with their age (refresh_sources): the
+   * sources of the course's linked offerings, narrowed to those that serve the uses. Without a
+   * course, every source; reference-only sources (the syllabus catalog) only when named.
+   */
+  sourceFreshness(
+    options: {
+      courseOfferingId?: string | undefined;
+      uses?: readonly FreshnessUse[] | undefined;
+      sourceIds?: readonly string[] | undefined;
+    } = {},
+  ): SourceFreshness[] {
+    const now = this.now();
+    const wanted = options.sourceIds;
+    let all = this.coverageSources();
+    if (wanted) all = all.filter((s) => wanted.includes(s.sourceId));
+    else all = all.filter((s) => !s.referenceOnly);
+    if (options.courseOfferingId) {
+      const ref = this.courseRef(options.courseOfferingId);
+      const ids = new Set(this.sourceIdsOf(ref?.linkedIds ?? [options.courseOfferingId]));
+      all = all.filter((s) => ids.has(s.sourceId));
+    }
+    const uses = options.uses?.length ? options.uses : undefined;
+    return all
+      .map((s) => {
+        const served = (uses ?? FRESHNESS_USES).filter((u) => sourceServesUse(s, u));
+        return { s, served };
+      })
+      .filter(({ served }) => !uses || served.length > 0)
+      .map(({ s, served }) => {
+        const budget = served.length
+          ? Math.min(...served.map((u) => FRESHNESS_BUDGET_MINUTES[u]))
+          : FRESHNESS_BUDGET_MINUTES.deadlines;
+        return {
+          ...coverageSourceView(s, now, budget),
+          state: s.state,
+          uses: [...served],
+          budgetMinutes: budget,
+        };
+      })
+      .sort((a, b) => (b.ageMinutes ?? Infinity) - (a.ageMinutes ?? Infinity));
   }
 }
 

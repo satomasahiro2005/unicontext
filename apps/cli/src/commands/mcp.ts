@@ -6,6 +6,8 @@ import {
   openAnnouncements,
   type OpenAnnouncementsReport,
 } from '@unicontext/context-engine';
+import { inProcessSyncStarter } from '@unicontext/mcp';
+import type { SyncJobResponse } from '@unicontext/daemon/api-types';
 import type { Command } from 'commander';
 import { action, type Harness } from '../harness.js';
 import { VERSION } from '../version.js';
@@ -49,6 +51,31 @@ export function registerMcp(program: Command, h: Harness): void {
                     { timeoutMs: 5 * 60_000 },
                   )
                 : fetchDetailsOnRequest(rt.uc, ids);
+            },
+            // A forced refresh goes to the daemon, which owns the schedule and its rate limits.
+            startSync: async (sourceId) => {
+              const daemon = await ctx.daemon();
+              if (!daemon) return inProcessSyncStarter(rt.uc)(sourceId);
+              const { job } = await daemon.post<SyncJobResponse>(
+                `/api/v1/sources/${encodeURIComponent(sourceId)}/sync?wait=0&reason=on-demand`,
+              );
+              return {
+                jobId: job.id,
+                finished: async () => {
+                  for (;;) {
+                    await new Promise((r) => setTimeout(r, 2_000));
+                    try {
+                      const { job: j } = await daemon.get<SyncJobResponse>(
+                        `/api/v1/sync-jobs/${encodeURIComponent(job.id)}`,
+                      );
+                      if (j.state !== 'running')
+                        return { ok: j.state === 'done', ...(j.error ? { error: j.error } : {}) };
+                    } catch (e) {
+                      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                    }
+                  }
+                },
+              };
             },
             // The daemon holds the browser profile and serializes downloads with its sync.
             filesDir: rt.filesDir,

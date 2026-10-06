@@ -28,6 +28,7 @@ import {
   type ContextViewName,
   type UniContext,
   type DeadlineCoverage,
+  freshnessHint,
 } from '@unicontext/context-engine';
 import {
   errorMessage,
@@ -104,6 +105,7 @@ import {
   type McpEnvelope,
 } from './envelope.js';
 import { HIGH_RISK_SUBJECT_KINDS, isHighRiskPredicate, type ProposalStore } from './proposals.js';
+import { registerRefreshTools, type SyncStarter } from './refresh.js';
 import {
   CREDIT_SUMMARY_DESCRIPTION,
   CREDIT_SUMMARY_TITLE,
@@ -153,6 +155,11 @@ export interface McpDeps {
    * sync); `unicontext mcp` routes it to the running daemon. Default: in-process.
    */
   fetchDetails?: (ids: string[]) => Promise<DetailFetchReport>;
+  /**
+   * Start a forced, rate-limited sync of one source (refresh_sources). The daemon runs it
+   * in-process; `unicontext mcp` routes it to the running daemon. Default: in-process.
+   */
+  startSync?: SyncStarter;
   /** `<data dir>/files` (download_course_file in-process). */
   filesDir?: string;
   /**
@@ -199,6 +206,10 @@ export const HOW_TO_CONFIRM =
  * must not read an empty list as "no deadline"); a complete one gets a one-line reminder.
  */
 export function coverageHint(data: unknown): string | undefined {
+  return [deadlineCoverageHint(data), freshnessHint(data)].filter(Boolean).join(' ') || undefined;
+}
+
+function deadlineCoverageHint(data: unknown): string | undefined {
   const d = data as { coverage?: DeadlineCoverage; estimated?: unknown[] } | undefined;
   const cov = d?.coverage;
   if (!cov) return undefined;
@@ -260,6 +271,7 @@ export const SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
+  'answerHint に「◯◯ は N分前の情報です。refresh_sources で更新できます」とあるときは、学生に確認を頼まず先に refresh_sources を呼んで読み直してから答えてください（大学には読みに行くだけで、何も送信しません）。',
 ].join('\n');
 
 /** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */
@@ -1198,6 +1210,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
     },
     (a) => getSource(a),
   );
+
+  registerRefreshTools(tool, { uc, startSync: deps.startSync });
 
   tool(
     'get_conflicts',

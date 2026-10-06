@@ -789,6 +789,44 @@ next_class | default, basis, confidence: medium | low, text, checkWhere, checkUr
   never estimated while that assignment has a known due date: its due date is used, with the
   assignment named in the basis and 「同じものか要確認」.
 
+#### Freshness and capability coverage (`freshness.ts`, `coverage.ts`, MCP `refresh_sources`)
+
+The student never checks anything, so an answer must know how old its information is and the AI
+must refresh by itself. **Health** (is the source working: `ok / auth_required / failing /
+never_synced`, and `stale` only past max(3 × interval, 6 h), kept for compatibility) and
+**freshness** (is what it last read recent enough for this use) are separate: a healthy 30-minute
+source read 90 minutes ago is `ok` and stale for the schedule.
+
+- Budgets per use (minutes, `FRESHNESS_BUDGET_MINUTES`): schedule 45 (cancellations and rooms: the
+  academic system, its public cancellation notices, Teams), deadlines / assignments 90 (LMS, Ed,
+  Teams assignments), messages / announcements 120, calendar 60, materials / grades / attendance 1440. Which sources feed a use is `sourceServesUse` (connector capabilities and authority;
+  reference-only sources such as the syllabus catalog feed none). Level from age and budget:
+  `fresh` (≤ budget), `aging` (< 2 ×), `stale` (≥ 2 ×), `unknown` (never read).
+- `evaluateFreshness(sources, use)` → `{fresh, oldestAgeMinutes, staleSources: [{sourceId, label,
+ageMinutes, budgetMinutes}]}` (over the budget or never read, oldest first).
+- Every `CoverageSource` carries `lastSuccessAt` (when ever read), `ageMinutes`, `intervalMinutes`
+  and `freshness`; field names are unchanged for the attention engine. `DeadlineCoverage`
+  (`buildDeadlineCoverage`) is the `deadlines` instance; `buildCapabilityCoverage(capability, …)`
+  does the same for assignments / messages / materials / calendar / attendance / grades /
+  announcements → `{capability, complete, sources, gaps}`. Gaps: `source_unhealthy` and
+  `no_source` (no source reads it for the course); age is `sources[].freshness`, not completeness.
+  Calendar and attendance are the student's, not a course's, so every source counts.
+- Views: every bundle has `freshness: {asOf, perUse: {deadlines, schedule, announcements}}` (each
+  use = the evaluation + `budgetMinutes`, worst `freshness`, `sourceCount`); `CourseContext
+.capabilityCoverage` has one coverage per capability above. MCP answer hints add
+  「<label> は <n>分前の情報です。refresh_sources で更新できます」 for the uses the view depends on
+  when one is over budget (not `prefer-live` on every read tool).
+- `refresh_sources {course?, capabilities?, sources?, wait?}` (read-only toward the university):
+  maps course + capabilities to sources (`context.sourceFreshness`), skips (with a reason) sources
+  needing a login, backing off (retry-after, or two failures in a row), read less than 10 minutes
+  ago, forced less than 10 minutes ago, or beyond 6 forced runs an hour; answers `{started: [{sourceId,
+jobId}], skipped: [{sourceId, reason}], freshnessBefore}` (+ `finished`, `freshnessAfter` with
+  `wait`, at most 60 s). The limits live in the scheduler (`trigger(sourceId, {reason:
+'on-demand', minIntervalMs})`, `checkOnDemand`; refusal = `OnDemandRefusedError`, a
+  `RateLimitedError`), so the daemon REST `POST /api/v1/sources/:id/sync?reason=on-demand` (429)
+  is limited the same way; a plain sync (CLI) is not. `unicontext mcp` next to a daemon starts the
+  run with `…/sync?wait=0&reason=on-demand` and polls `sync-jobs/:id`.
+
 #### Recorded work that already exists (`task-engine/assignment-match.ts`)
 
 2026-10: the student told ChatGPT 「レポート1：レンタル店のER図を作成する（提出期限は現時点で未確認）」
