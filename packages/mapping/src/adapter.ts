@@ -51,6 +51,7 @@ export abstract class MappedSourceAdapter implements SourceAdapter {
    */
   readonly fileSourceTypes?: readonly string[];
   readonly fileTextSourceTypes?: readonly string[];
+  readonly hostExtractsFileText?: boolean;
   readonly fileSettings?: () => FileDownloadSettings;
   readonly describeFile?: (item: FileItemLike) => DownloadableFile | undefined;
   readonly downloadFiles?: (
@@ -73,6 +74,7 @@ export abstract class MappedSourceAdapter implements SourceAdapter {
       });
       this.fileSourceTypes = f.fileSourceTypes;
       this.fileTextSourceTypes = f.fileTextSourceTypes;
+      this.hostExtractsFileText = f.hostExtractsFileText;
       this.fileSettings = f.fileSettings;
       this.describeFile = f.describeFile;
       this.downloadFiles = f.downloadFiles;

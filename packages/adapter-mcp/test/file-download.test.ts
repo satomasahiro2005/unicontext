@@ -249,13 +249,20 @@ describe('Ed file downloads (mapping `files:`)', () => {
     expect(res.results[0]?.status).toBe('tooLarge');
   });
 
-  it('reports a missing file as notFound and an extract-only request as nothing to fetch', async () => {
+  it('reports a missing file as notFound, and an extract-only request only for a file that is on disk', async () => {
     const adapter = edAdapter();
+    const onDisk = request('on-disk', `${EDU}/files/ok`);
+    await adapter.downloadFiles([onDisk]);
+    seen.length = 0;
     const out = await adapter.downloadFiles([
       request('missing', `${EDU}/files/missing`),
-      { ...request('x', `${EDU}/files/ok`), extractOnly: true },
+      { ...onDisk, extractOnly: true },
+      { ...request('gone', `${EDU}/files/ok`), extractOnly: true },
     ]);
-    expect(out.results.map((r) => r.status)).toEqual(['notFound', 'extracted']);
+    expect(out.results.map((r) => r.status)).toEqual(['notFound', 'extracted', 'failed']);
+    expect(out.results[2]?.error).toBe('the file is not on disk');
+    // extract-only fetches nothing (only the missing file was asked for)
+    expect(seen.map((x) => x.url)).toEqual(['/files/missing']);
   });
 
   it('never sends anything but GET to the file host', () => {

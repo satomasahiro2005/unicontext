@@ -13,13 +13,17 @@ import path from 'node:path';
 import { isIdOf, type Document, type DocumentChunk } from '@unicontext/canonical-model';
 import {
   type DownloadableFile,
+  FILE_TEXT_SOURCE_TYPE,
   type FileDownloadAdapter,
   type FileDownloadOutcome,
   type FileDownloadRequest,
+  type FileTextPayload,
   type RawDeletion,
+  type RawItem,
   supportsFileDownloads,
 } from '@unicontext/connector-sdk';
 import { errorMessage, NotFoundError, ValidationError } from '@unicontext/core';
+import { chunkText, extractContent } from '@unicontext/local-files';
 import { rawItemId, type RawItemRecord } from '@unicontext/database';
 import type { UniContext } from './runtime.js';
 
@@ -442,6 +446,8 @@ export async function downloadCourseFiles(
       outcomes = out.results;
       warnings.push(...out.warnings);
       if (out.items.length > 0) await uc.sync.ingest(sourceId, { items: out.items });
+      if (adapter.hostExtractsFileText)
+        await extractFileTexts(uc, sourceId, list, outcomes, warnings);
     } catch (e) {
       for (const x of list)
         results.push({ ...resultFor(uc, x.target, 'failed'), error: errorMessage(e) });
@@ -495,6 +501,115 @@ export async function downloadCourseFiles(
     downloaded: results.filter((r) => r.status === 'downloaded').length,
     warnings,
   };
+}
+
+const TEXT_CHUNK_SIZE = 1200;
+const TEXT_CHUNK_OVERLAP = 100;
+
+function extensionFor(name: string, mimeType: string | undefined): string {
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec(name);
+  if (m) return m[1]!.toLowerCase();
+  if (mimeType === 'application/pdf') return 'pdf';
+  if (mimeType?.startsWith('text/plain')) return 'txt';
+  return '';
+}
+
+/** The text of a file on disk, cut into searchable pieces in reading order. */
+async function readFileText(
+  file: string,
+  name: string,
+  mimeType: string | undefined,
+): Promise<FileTextPayload['chunks']> {
+  const content = await extractContent(
+    new Uint8Array(readFileSync(file)),
+    extensionFor(name, mimeType),
+  );
+  const out: FileTextPayload['chunks'] = [];
+  if (content.pages) {
+    for (const p of content.pages)
+      for (const text of chunkText(p.text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP))
+        out.push({ text, page: p.page });
+  } else if (content.slides) {
+    for (const s of content.slides) {
+      const body = s.notes
+        ? `${s.text}
+
+[Notes]
+${s.notes}`
+        : s.text;
+      for (const text of chunkText(body, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP))
+        out.push({ text, page: s.slide, ...(s.title ? { heading: s.title } : {}) });
+    }
+  } else if (content.text) {
+    for (const text of chunkText(content.text, TEXT_CHUNK_SIZE, TEXT_CHUNK_OVERLAP))
+      out.push({ text });
+  }
+  return out;
+}
+
+/**
+ * For an adapter that only fetches bytes (`hostExtractsFileText`): read the text of each file that
+ * is on disk (just downloaded, or there already without text) and ingest it as one
+ * FILE_TEXT_SOURCE_TYPE raw item per file, so search and the text excerpt see it. The outcome
+ * says what was read; a file that could not be read says why instead of reporting success.
+ */
+async function extractFileTexts(
+  uc: UniContext,
+  sourceId: string,
+  list: readonly { target: FileTarget; request: FileDownloadRequest }[],
+  outcomes: FileDownloadOutcome[],
+  warnings: string[],
+): Promise<void> {
+  const items: RawItem[] = [];
+  for (const x of list) {
+    const o = outcomes.find((r) => r.externalId === x.request.externalId);
+    if (!x.request.extract || !o || (o.status !== 'downloaded' && o.status !== 'extracted'))
+      continue;
+    const { info, documentId } = x.target;
+    try {
+      const chunks = await readFileText(x.request.targetPath, info.name, info.mimeType);
+      if (chunks.length === 0) {
+        o.text = { chars: 0, pages: 0 };
+        continue;
+      }
+      // cited like the document itself (Ed Lessons, not the source's default label)
+      const cite = uc.sync.stores.sourceRefs
+        .forEntity(documentId)
+        .find((r) => r.sourceLabel || r.url);
+      const payload: FileTextPayload = {
+        documentId,
+        name: info.name,
+        version: o.version ?? info.version,
+        ...(cite
+          ? {
+              ref: {
+                authority: cite.authority,
+                ...(cite.sourceLabel ? { sourceLabel: cite.sourceLabel } : {}),
+                ...(cite.url ? { url: cite.url } : {}),
+              },
+            }
+          : {}),
+        chunks,
+      };
+      items.push({
+        sourceType: FILE_TEXT_SOURCE_TYPE,
+        externalId: x.request.externalId,
+        payload,
+      });
+      o.text = {
+        chars: chunks.reduce((n, c) => n + c.text.length, 0),
+        pages: new Set(chunks.map((c) => c.page).filter((p) => p !== undefined)).size,
+      };
+    } catch (e) {
+      const msg = `text of ${info.name}: ${errorMessage(e)}`;
+      warnings.push(msg);
+      if (x.request.extractOnly) {
+        o.status = 'failed';
+        o.error = msg;
+      }
+    }
+  }
+  if (items.length > 0) await uc.sync.ingest(sourceId, { items });
 }
 
 function resultFor(

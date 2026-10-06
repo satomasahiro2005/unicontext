@@ -268,6 +268,22 @@ export interface FileDownloadOutcome {
   error?: string;
 }
 
+/** Raw source type of file text the host extracted for an adapter with `hostExtractsFileText`. */
+export const FILE_TEXT_SOURCE_TYPE = 'unicontext.fileText';
+
+/** Payload of a `FILE_TEXT_SOURCE_TYPE` raw item (external id: the file's external id). */
+export interface FileTextPayload {
+  /** Canonical id of the document (document:…) the text belongs to. */
+  documentId: string;
+  name: string;
+  /** Version of the file the text was read from. */
+  version?: string;
+  /** Where the document is cited from (label, link): the chunks are cited the same way. */
+  ref?: { sourceLabel?: string; url?: string; authority?: string };
+  /** The text, already cut into searchable pieces in reading order (page / slide when known). */
+  chunks: { text: string; page?: number; heading?: string }[];
+}
+
 export interface FileDownloadSettings {
   /** Largest file an on-demand download accepts (bytes). */
   maxDownloadBytes: number;
@@ -298,6 +314,12 @@ export interface FileDownloadAdapter extends SourceAdapter {
   readonly fileSourceTypes: readonly string[];
   /** Raw source types holding text extracted from those files (same external ids). */
   readonly fileTextSourceTypes: readonly string[];
+  /**
+   * The adapter does not extract text itself: after a download the host reads the file (local
+   * files extractor) and ingests the text as `FILE_TEXT_SOURCE_TYPE` raw items, which this
+   * adapter's normalizer turns into document chunks (see `FileTextPayload`).
+   */
+  readonly hostExtractsFileText?: boolean;
   fileSettings(): FileDownloadSettings;
   describeFile(item: {
     sourceType: string;

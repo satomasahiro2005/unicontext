@@ -1,3 +1,4 @@
+import { pdfDataOptions } from '@unicontext/local-files';
 import {
   CANVAS_WARNING,
   type CanvasModule,
@@ -44,7 +45,7 @@ export async function renderPdf(
   options: RenderOptions,
 ): Promise<RenderedDocument> {
   const { getDocumentProxy, renderPageAsImage } = await import('unpdf');
-  const pdf = await getDocumentProxy(new Uint8Array(bytes));
+  const pdf = await getDocumentProxy(new Uint8Array(bytes), pdfDataOptions());
   const warnings: string[] = [];
   try {
     const pageCount = pdf.numPages;

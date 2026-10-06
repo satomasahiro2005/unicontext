@@ -3,6 +3,7 @@ import { imageSize } from 'image-size';
 import JSZip from 'jszip';
 import mammoth from 'mammoth';
 import { extractText, getDocumentProxy } from 'unpdf';
+import { pdfDataOptions } from './pdf-options.js';
 import type { FileSlide } from './types.js';
 
 export const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -281,7 +282,7 @@ export function htmlToText(html: string): string {
 }
 
 async function extractPdf(buf: Uint8Array): Promise<ExtractedContent> {
-  const pdf = await getDocumentProxy(new Uint8Array(buf));
+  const pdf = await getDocumentProxy(new Uint8Array(buf), pdfDataOptions());
   try {
     const { text } = await extractText(pdf, { mergePages: false });
     let total = 0;

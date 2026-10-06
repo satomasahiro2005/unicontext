@@ -34,6 +34,7 @@ export {
   relTargets,
   type ExtractedContent,
 } from './extract.js';
+export { type PdfDataOptions, pdfDataOptions } from './pdf-options.js';
 export { compileGlobs, globToRegExp, matchesExclude, matchesInclude } from './glob.js';
 export { Manifest, type ManifestEntry } from './manifest.js';
 export {

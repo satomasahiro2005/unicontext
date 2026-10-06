@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { createWriteStream, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type {
   DownloadableFile,
@@ -148,6 +148,7 @@ export function createFileDownloads(
 ): {
   fileSourceTypes: readonly string[];
   fileTextSourceTypes: readonly string[];
+  hostExtractsFileText: true;
   fileSettings: () => FileDownloadSettings;
   describeFile: (item: FileItemLike) => DownloadableFile | undefined;
   downloadFiles: (
@@ -163,6 +164,8 @@ export function createFileDownloads(
   return {
     fileSourceTypes: options.rawTypes,
     fileTextSourceTypes: [],
+    // The mapping only fetches bytes; the host reads the text of the downloaded file (files.ts).
+    hostExtractsFileText: true,
     fileSettings: () => ({ maxDownloadBytes: files.maxBytes }),
     describeFile: (item) => {
       const payload =
@@ -194,7 +197,12 @@ export function createFileDownloads(
       const results: FileDownloadOutcome[] = [];
       for (const r of requests) {
         if (r.extractOnly) {
-          results.push({ externalId: r.externalId, status: 'extracted' });
+          // Nothing to fetch, but only claim the file is there when it is.
+          results.push(
+            isFile(r.targetPath)
+              ? { externalId: r.externalId, status: 'extracted', version: r.externalId }
+              : { externalId: r.externalId, status: 'failed', error: 'the file is not on disk' },
+          );
           continue;
         }
         const out = await fetchAllowedFile(r.externalId, {
@@ -219,6 +227,14 @@ export function createFileDownloads(
       return { results, items: [], warnings: [] };
     },
   };
+}
+
+function isFile(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function decodeURIComponentSafe(s: string): string {
