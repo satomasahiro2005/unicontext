@@ -49,6 +49,13 @@ import { ClassSchedule } from './class-schedule.js';
 import { doneMarker, groupAddress, shortDeadlineTitle } from './deadline-context.js';
 import { extractDeadlines } from './deadline-extractor.js';
 import { extractSessionRuleFacts } from './session-rules.js';
+import {
+  isStudentStatementStatus,
+  latestTaskProgress,
+  TASK_PROGRESS_PREDICATE,
+  type TaskProgress,
+  taskProgressSubject,
+} from './progress.js';
 import { paceStatus, type PaceStatus, weekStartOf, weekStartOfDue } from './pace.js';
 
 export const DEADLINE_PREDICATE = 'deadline';
@@ -95,8 +102,21 @@ export function linkedTodoDetails(notes: string | undefined): string | undefined
 
 export const EXTRACTOR_ID = 'ja-deadline-rules';
 
-/** Who is asking to change a task status. AI may never mark work as submitted/completed (§19). */
-export type StatusActor = 'user' | 'ai' | 'system';
+/** The fact a student's own status rests on survives re-derivation (record_task_progress). */
+const keepStudentEvidence = (
+  prev: Task | undefined,
+): { statusEvidenceFactId?: Task['statusEvidenceFactId'] } =>
+  prev?.statusSetBy === 'user' && prev.statusEvidenceFactId
+    ? { statusEvidenceFactId: prev.statusEvidenceFactId }
+    : {};
+
+/**
+ * Who is asking to change a task status. AI may never mark work as submitted/completed (§19).
+ * `student-statement` is the student's own word relayed by an AI client (record_task_progress):
+ * it may set pending / in_progress / completed / cancelled and is stored as the student's own
+ * status, but never `submitted` (submission systems only) or `expired_past_term`.
+ */
+export type StatusActor = 'user' | 'ai' | 'system' | 'student-statement';
 
 export interface TaskEngineOptions {
   db: UniContextDatabase;
@@ -231,12 +251,14 @@ export class TaskEngine {
 
   /**
    * Change status with policy checks: AI cannot set submitted/completed; the system cannot set
-   * submitted (that only comes from submission-system facts during derive()).
+   * submitted (that only comes from submission-system facts during derive()); the student's own
+   * statement (`student-statement`) sets pending / in_progress / completed / cancelled as the
+   * student's own status with the fact that quotes them (`evidenceFactId`), never submitted.
    */
   setStatus(
     taskId: string,
     status: TaskStatus,
-    options: { actor: StatusActor; note?: string },
+    options: { actor: StatusActor; note?: string; evidenceFactId?: string },
   ): Task {
     const t = this.get(taskId);
     if (!t) throw new NotFoundError(`task ${taskId}`);
@@ -255,16 +277,63 @@ export class TaskEngine {
         'The system marks tasks submitted only from submission-system facts',
       );
     }
+    if (options.actor === 'student-statement' && !isStudentStatementStatus(status)) {
+      throw new PolicyViolationError(
+        status === 'submitted'
+          ? 'A student statement cannot mark a task submitted; only the submission system does'
+          : `A student statement cannot set a task to ${status}`,
+      );
+    }
+    const own = options.actor === 'user' || options.actor === 'student-statement';
     const next: Task = {
       ...t,
       status,
-      statusSetBy: options.actor === 'user' ? 'user' : 'system',
+      statusSetBy: own ? 'user' : 'system',
       ...(options.note ? { notes: options.note } : {}),
       updatedAt: this.clock.now().toISOString(),
     };
-    if (options.actor !== 'user') delete next.statusEvidenceFactId;
+    if (options.actor === 'student-statement' && options.evidenceFactId)
+      next.statusEvidenceFactId = options.evidenceFactId as Task['statusEvidenceFactId'];
+    else if (options.actor !== 'user') delete next.statusEvidenceFactId;
     this.save(next);
     return next;
+  }
+
+  /**
+   * Put a task's status fields back to an earlier snapshot (a retracted student statement).
+   * Only the status, who set it and its evidence fact change.
+   */
+  restoreStatus(
+    taskId: string,
+    previous: {
+      status: TaskStatus;
+      statusSetBy: Task['statusSetBy'];
+      statusEvidenceFactId?: string | undefined;
+    },
+  ): Task {
+    const t = this.get(taskId);
+    if (!t) throw new NotFoundError(`task ${taskId}`);
+    const next: Task = {
+      ...t,
+      status: previous.status,
+      statusSetBy: previous.statusSetBy,
+      updatedAt: this.clock.now().toISOString(),
+    };
+    if (previous.statusEvidenceFactId)
+      next.statusEvidenceFactId = previous.statusEvidenceFactId as Task['statusEvidenceFactId'];
+    else delete next.statusEvidenceFactId;
+    this.save(next);
+    return next;
+  }
+
+  /** The student's newest statement about how far a task has come (record_task_progress). */
+  progressOf(taskId: string): TaskProgress | undefined {
+    return latestTaskProgress(
+      this.facts.active({
+        subjects: [taskProgressSubject(taskId)],
+        predicate: TASK_PROGRESS_PREDICATE,
+      }),
+    );
   }
 
   createManualTask(input: {
@@ -716,6 +785,7 @@ export class TaskEngine {
             taskKind: 'weekly_pace',
             origin: 'inferred',
             statusSetBy: prev?.statusSetBy ?? 'system',
+            ...keepStudentEvidence(prev),
             ...(text ? { notes: text } : {}),
             createdAt: prev?.createdAt ?? now,
             updatedAt: now,
@@ -897,6 +967,7 @@ export class TaskEngine {
           taskKind: 'exam_preparation',
           origin: 'inferred',
           statusSetBy: prev?.statusSetBy ?? 'system',
+          ...keepStudentEvidence(prev),
           ...(prev?.notes ? { notes: prev.notes } : {}),
           createdAt: prev?.createdAt ?? now,
           updatedAt: now,
@@ -981,6 +1052,7 @@ export class TaskEngine {
           ...(done && prev?.statusSetBy !== 'user'
             ? { statusEvidenceFactId: f.id as Task['statusEvidenceFactId'] }
             : {}),
+          ...keepStudentEvidence(prev),
           evidence,
           ...(prev?.notes ? { notes: prev.notes } : {}),
           createdAt: prev?.createdAt ?? now,
@@ -1078,6 +1150,7 @@ export class TaskEngine {
           taskKind: 'extracted',
           origin: f.origin,
           statusSetBy: prev?.statusSetBy ?? 'system',
+          ...keepStudentEvidence(prev),
           ...(f.evidence ? { evidence: f.evidence } : {}),
           ...(prev?.notes
             ? { notes: prev.notes }

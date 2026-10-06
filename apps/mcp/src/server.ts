@@ -95,6 +95,7 @@ import {
   runStudentState,
   STUDENT_STATE_TOOL,
 } from './next-action.js';
+import { registerTaskProgressTools, TASK_PROGRESS_INSTRUCTION_JA } from './task-progress.js';
 import { trimCourseForAi } from './trim.js';
 import {
   buildEnvelope,
@@ -260,6 +261,7 @@ export const SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
+  TASK_PROGRESS_INSTRUCTION_JA,
 ].join('\n');
 
 /** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */
@@ -303,6 +305,7 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
+  TASK_PROGRESS_INSTRUCTION_JA,
 ].join('\n');
 
 // ---------- shared plumbing ----------
@@ -962,6 +965,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
       return { data: { tasks: buildAssignments(uc, filter) } };
     },
   );
+
+  registerTaskProgressTools({ uc, caller, writeTool });
 
   // ----- syllabus / course planning (read-only) -----
 

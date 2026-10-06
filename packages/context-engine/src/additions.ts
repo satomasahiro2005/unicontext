@@ -57,6 +57,12 @@ import {
   TODO_PREDICATE,
   type TodoValue,
 } from '@unicontext/task-engine';
+import {
+  prepareTaskProgress,
+  type RecordTaskProgressInput,
+  type TaskProgressDeps,
+  undoTaskProgress,
+} from './task-progress.js';
 
 /*
  * Writes from AI clients (§11, §19–22, §47–49, §74): lectures, deadlines, notes and things to do
@@ -618,6 +624,48 @@ export class AdditionsService {
     input: AddSessionRuleInput,
   ): Promise<AdditionResult> {
     return this.write(client, this.sessionRuleSpec(input));
+  }
+
+  /**
+   * record_task_progress: what the student said about how far a task has come (stored unconfirmed
+   * but applied at once; retracting restores the earlier status). See task-progress.ts.
+   */
+  async recordTaskProgress(
+    client: AdditionClient,
+    input: RecordTaskProgressInput,
+  ): Promise<AdditionResult> {
+    return this.write(client, this.progressSpec(input));
+  }
+
+  private progressSpec(input: RecordTaskProgressInput): WriteSpec {
+    const p = prepareTaskProgress(this.progressDeps(), {
+      ...input,
+      courseOfferingId: this.course(input.courseOfferingId),
+    });
+    return {
+      tool: 'record_task_progress',
+      kind: 'progress',
+      input: p.input,
+      via: viaOf(input),
+      course: p.course,
+      title: p.title,
+      dedupeKey: p.dedupeKey,
+      dueAt: undefined,
+      data: p.data,
+      apply: (a, ref) => p.apply(a, ref),
+    };
+  }
+
+  private progressDeps(): TaskProgressDeps {
+    return {
+      tasks: this.deps.tasks,
+      facts: this.deps.resolver.facts,
+      now: () => this.now(),
+      courseIds: (id) => this.deps.identity.expand(id),
+      courseTitle: (id) => this.deps.courseTitle(id),
+      assignment: (id) => this.entities.getOfKind('assignment', id),
+      exam: (id) => this.entities.getOfKind('exam', id),
+    };
   }
 
   /**
@@ -1378,6 +1426,7 @@ export class AdditionsService {
   private undo(a: Addition, status: 'retracted' | 'rejected'): Addition {
     const now = this.now().toISOString();
     return this.deps.db.transaction(() => {
+      if (a.kind === 'progress') undoTaskProgress({ tasks: this.deps.tasks }, a);
       this.deps.resolver.facts.retract(a.factIds, now);
       for (const id of a.ownEntityIds) this.entities.softDelete(id, now);
       return this.store.save({ ...a, status, updatedAt: now, decidedAt: now });

@@ -698,6 +698,11 @@ export const WRITE_TOOLS = {
     description:
       'この接続が追加した、まだ本人が確認していない内容を取り消す（記録・締切・タスクが消える）。他のクライアントの追加や、本人が確認済みのものは取り消せない。 / Withdraw one of this client’s own unconfirmed additions.',
   },
+  record_task_progress: {
+    title: '課題の進み具合を記録',
+    description:
+      '学生が課題・やることを始めた、途中まで終えた、終えたと言ったら、聞き返さずにすぐ呼ぶ（例「レポート書き始めた」「ER図は終わった」「課題終わった」）。学生が自分から確認しなくても UniContext が進み具合を持ち、次の「今やること」から終えた段取りが外れ、状態（in_progress / completed）が他の会話・クライアントにも見える。statement に学生の言葉をそのまま引用する。自分の推測や、学生が言っていないことでは絶対に呼ばない。提出済み（submitted）は記録できない（提出システムだけが反映する）。保存先は UniContext だけで大学のシステムには何も送らない。間違えたら retract_addition で取り消すと前の状態に戻る。 / Call right away, without asking, when the student says they started, finished part of, or finished a task. UniContext then holds the progress: the next actions drop the steps that are done and the status is visible to every client. Quote the student’s own words in statement. Never call it from your own inference or for something the student did not say. submitted cannot be recorded (only the submission system reports it). Stored only in UniContext; retract_addition restores the earlier status.',
+  },
 } as const;
 
 /** Drop undefined/empty fields so structuredContent stays small. */

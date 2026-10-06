@@ -61,7 +61,7 @@ describe('remote (read-only) MCP surface', () => {
       );
       // Record tools need the unicontext.write scope (apps/mcp/test/additions.test.ts).
       const record =
-        /^(ingest_lecture|record_lecture|add_deadline|add_note|add_task|set_course_condition|add_session_rule|list_my_additions|retract_addition|open_announcement)$/;
+        /^(ingest_lecture|record_lecture|add_deadline|add_note|add_task|set_course_condition|add_session_rule|record_task_progress|list_my_additions|retract_addition|open_announcement)$/;
       for (const n of localNames.filter(
         (x) => !['correct_fact', 'propose_pace_slot'].includes(x) && !record.test(x),
       ))

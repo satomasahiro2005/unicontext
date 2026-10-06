@@ -18,3 +18,4 @@ export * from './personal-schedule.js';
 export * from './estimate.js';
 export * from './detail-fetch.js';
 export * from './syllabus-priority.js';
+export * from './task-progress.js';
