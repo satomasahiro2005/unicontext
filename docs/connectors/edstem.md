@@ -197,8 +197,9 @@ text), lecture PDFs are `pdf` slides (`fileUrl`).
 ## Checking a submission: `verify_submission`
 
 Right after the student says they handed a lesson in, `verify_submission({id})` (MCP) re-reads
-that one lesson through the same `details` rule, at most once per assignment every 30 s (a repeat
-answers with that read; nothing else is rate-limited away by freshness), and returns:
+that one lesson through the same `details` rule, one read per assignment at a time and the next no
+sooner than 30 s after the previous one finished (a call while a read runs waits for it, a repeat
+inside the 30 s answers with it; nothing else is rate-limited away by freshness), and returns:
 
 - `submission`: `status` / `submitted` (lesson progress `completed` → submitted), `sourceStatus`
   (Ed's progress), `answeredQuestions` (questions with a saved answer / all quiz questions),

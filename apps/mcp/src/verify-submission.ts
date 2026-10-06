@@ -24,14 +24,21 @@ import type { ToolRegistrar } from './refresh.js';
  * Read-only at every source: Ed (the lesson's progress, its quiz slides and the student's saved
  * answers, through the edstem-mcp read tools), LiveCampusU (the 課題・アンケートリスト row: 提出済 /
  * 未提出; the 課題提出 screen and every download stay denied), Teams (the Assignments app's list of
- * the student's work; assignments are never opened). At most one live read per assignment every
- * VERIFY_SUBMISSION_INTERVAL_MS; a repeat inside that window answers with the read just made.
+ * the student's work; assignments are never opened). One live read per assignment at a time: a
+ * call while it runs waits for that same read (also after an earlier caller stopped waiting), and
+ * the next read starts no sooner than VERIFY_SUBMISSION_INTERVAL_MS after the previous one
+ * finished; a repeat inside that window answers with the read just made.
  */
 
-/** One live read per assignment per this interval. */
+/** The next live read of an assignment starts at least this long after the previous one finished. */
 export const VERIFY_SUBMISSION_INTERVAL_MS = 30_000;
 /** How long the tool waits for the live read before answering with what is stored. */
 export const VERIFY_SUBMISSION_WAIT_MS = 45_000;
+/**
+ * A read still running after this long is no longer joined (its connector never answered), so the
+ * assignment can be read again. Far above a Teams boot (90 s) plus a sync it waits behind.
+ */
+export const VERIFY_SUBMISSION_STALE_MS = 10 * 60_000;
 /** Longest question prompt echoed next to an answer. */
 const PROMPT_CHARS = 120;
 
@@ -135,7 +142,7 @@ export const verifySubmissionShape = {
 export const VERIFY_SUBMISSION_TOOL = {
   title: '提出の確認',
   description:
-    '課題1件の提出状態を、その提出先（Ed・学務情報システム・Teams）から今すぐ読み直して確かめる（自動の更新を待たない・新しさで飛ばさない）。提出済みか、提出日時、提出した内容（Ed なら各設問に保存された回答の本文・選んだ選択肢）、提出したファイルの名前・種類（files[].documentId を get_document に渡すと中身を開ける。中身はそのとき初めて取得）を返す。学生が「出した」「提出した」と言ったら、この課題の id でこれを呼ぶ。同じ課題を読み直すのは30秒に1回まで（それより早いと直前に読んだ結果を返す）。大学の画面には何も送信しない（提出・保存・既読化はしない）。 / Re-read ONE assignment’s submission state from its submission system now (Ed, LiveCampusU, Teams), regardless of the sync schedule: whether it is submitted, when, what was submitted (Ed: each question’s saved answer) and the submitted files’ names and types (pass files[].documentId to get_document to open one; content is fetched only then). Call it whenever the student says they handed something in. At most one live read per assignment every 30 s (a repeat returns that read). Read-only: never submits, saves or marks anything.',
+    '課題1件の提出状態を、その提出先（Ed・学務情報システム・Teams）から今すぐ読み直して確かめる（自動の更新を待たない・新しさで飛ばさない）。提出済みか、提出日時、提出した内容（Ed なら各設問に保存された回答の本文・選んだ選択肢）、提出したファイルの名前・種類（files[].documentId を get_document に渡すと中身を開ける。中身はそのとき初めて取得）を返す。学生が「出した」「提出した」と言ったら、この課題の id でこれを呼ぶ。同じ課題を読み直すのは一度に1回で、前の読み直しが終わってから30秒たつまで次は読まない（それより早いと直前に読んだ結果を返す）。大学の画面には何も送信しない（提出・保存・既読化はしない）。 / Re-read ONE assignment’s submission state from its submission system now (Ed, LiveCampusU, Teams), regardless of the sync schedule: whether it is submitted, when, what was submitted (Ed: each question’s saved answer) and the submitted files’ names and types (pass files[].documentId to get_document to open one; content is fetched only then). Call it whenever the student says they handed something in. One live read per assignment at a time, and the next no sooner than 30 s after it finished (a repeat returns that read). Read-only: never submits, saves or marks anything.',
 } as const;
 
 /** One sentence for the server instructions. */
@@ -150,9 +157,20 @@ interface LiveOutcome {
   error?: string;
 }
 
+/** The read of one assignment that is running now (the connector's own promise, not a wait). */
+interface InflightRead {
+  seq: number;
+  /** Settles when the connector's read settles, however long that takes. */
+  done: Promise<LiveOutcome>;
+  startedAt: string;
+  startedMs: number;
+}
+
 interface VerifyState {
+  /** The last finished read of each assignment; atMs is when it finished. */
   last: Map<string, { atMs: number; outcome: LiveOutcome }>;
-  inflight: Map<string, Promise<LiveOutcome>>;
+  inflight: Map<string, InflightRead>;
+  seq: number;
 }
 
 const STATES = new WeakMap<UniContext, VerifyState>();
@@ -160,7 +178,7 @@ const STATES = new WeakMap<UniContext, VerifyState>();
 function stateOf(uc: UniContext): VerifyState {
   let s = STATES.get(uc);
   if (!s) {
-    s = { last: new Map(), inflight: new Map() };
+    s = { last: new Map(), inflight: new Map(), seq: 0 };
     STATES.set(uc, s);
   }
   return s;
@@ -199,8 +217,47 @@ function platformOf(raw: RawItemRecord | undefined): SubmissionPlatform {
 }
 
 /**
- * Live read of one assignment through its connector, rate-limited per assignment. Concurrent calls
- * for the same assignment share one read.
+ * Start the connector's read of one assignment. The entry stays in `inflight` until that read
+ * settles (also after every caller stopped waiting for it), and `last` records when it finished.
+ */
+function startRead(
+  uc: UniContext,
+  state: VerifyState,
+  assignmentId: string,
+  fetchDetails: (ids: string[]) => Promise<DetailFetchReport>,
+): InflightRead {
+  const startedMs = uc.clock.now().getTime();
+  state.seq += 1;
+  const seq = state.seq;
+  const read = async (): Promise<LiveOutcome> => {
+    let outcome: LiveOutcome;
+    try {
+      // started a tick later, so the entry is in `inflight` even when fetchDetails throws at once
+      const report = await Promise.resolve().then(() => fetchDetails([assignmentId]));
+      const r = report.results.find((x) => x.id === assignmentId);
+      outcome = {
+        status: r?.status ?? 'failed',
+        at: uc.clock.now().toISOString(),
+        ...(r?.error ? { error: r.error } : {}),
+      };
+    } catch (e) {
+      outcome = { status: 'failed', at: uc.clock.now().toISOString(), error: errorMessage(e) };
+    }
+    state.last.set(assignmentId, { atMs: uc.clock.now().getTime(), outcome });
+    // a read that went stale may finish after a newer one started: leave that one in place
+    if (state.inflight.get(assignmentId)?.seq === seq) state.inflight.delete(assignmentId);
+    return outcome;
+  };
+  const entry = { seq, done: read(), startedAt: new Date(startedMs).toISOString(), startedMs };
+  state.inflight.set(assignmentId, entry);
+  return entry;
+}
+
+/**
+ * Live read of one assignment through its connector, rate-limited per assignment: one read at a
+ * time (a call while one runs waits for that same read), and the next one no sooner than
+ * VERIFY_SUBMISSION_INTERVAL_MS after the previous one finished. The caller waits at most waitMs;
+ * the read goes on in the background after that.
  */
 async function liveRead(
   uc: UniContext,
@@ -209,49 +266,34 @@ async function liveRead(
   waitMs: number,
 ): Promise<LiveOutcome & { retryAfterSeconds?: number }> {
   const state = stateOf(uc);
-  const running = state.inflight.get(assignmentId);
-  if (running) return running;
   const nowMs = uc.clock.now().getTime();
-  const last = state.last.get(assignmentId);
-  if (last && nowMs - last.atMs < VERIFY_SUBMISSION_INTERVAL_MS) {
-    const retry = Math.ceil((VERIFY_SUBMISSION_INTERVAL_MS - (nowMs - last.atMs)) / 1000);
-    return last.outcome.status === 'fetched' || last.outcome.status === 'alreadyFetched'
-      ? { ...last.outcome, status: 'recent', retryAfterSeconds: retry }
-      : { ...last.outcome, retryAfterSeconds: retry };
-  }
-  const startedAt = uc.clock.now().toISOString();
-  const run = (async (): Promise<LiveOutcome> => {
-    const pending = fetchDetails([assignmentId]);
-    pending.catch(() => undefined);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const outcome = await Promise.race([
-        pending,
-        new Promise<'timeout'>((resolve) => {
-          timer = setTimeout(() => resolve('timeout'), waitMs);
-        }),
-      ]);
-      if (outcome === 'timeout') return { status: 'timeout', at: startedAt };
-      const r = outcome.results.find((x) => x.id === assignmentId);
-      return {
-        status: r?.status ?? 'failed',
-        at: uc.clock.now().toISOString(),
-        ...(r?.error ? { error: r.error } : {}),
-      };
-    } catch (e) {
-      return { status: 'failed', at: startedAt, error: errorMessage(e) };
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  })();
-  state.inflight.set(assignmentId, run);
-  state.last.set(assignmentId, { atMs: nowMs, outcome: { status: 'timeout', at: startedAt } });
-  try {
-    const outcome = await run;
-    state.last.set(assignmentId, { atMs: nowMs, outcome });
-    return outcome;
-  } finally {
+  let entry = state.inflight.get(assignmentId);
+  if (entry && nowMs - entry.startedMs >= VERIFY_SUBMISSION_STALE_MS) {
+    // the connector never answered: stop joining it so the assignment can be read again
     state.inflight.delete(assignmentId);
+    entry = undefined;
+  }
+  if (!entry) {
+    const last = state.last.get(assignmentId);
+    if (last && nowMs - last.atMs < VERIFY_SUBMISSION_INTERVAL_MS) {
+      const retry = Math.ceil((VERIFY_SUBMISSION_INTERVAL_MS - (nowMs - last.atMs)) / 1000);
+      return last.outcome.status === 'fetched' || last.outcome.status === 'alreadyFetched'
+        ? { ...last.outcome, status: 'recent', retryAfterSeconds: retry }
+        : { ...last.outcome, retryAfterSeconds: retry };
+    }
+    entry = startRead(uc, state, assignmentId, fetchDetails);
+  }
+  const { done, startedAt } = entry;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      done,
+      new Promise<LiveOutcome>((resolve) => {
+        timer = setTimeout(() => resolve({ status: 'timeout', at: startedAt }), waitMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -436,7 +478,7 @@ function hintFor(v: VerifySubmissionView): string {
   const live = v.live;
   if (live.status === 'timeout')
     parts.push(
-      '提出先からの読み直しが時間内に終わりませんでした（続きは裏で取り込まれます）。下は前に読んだ時点（submission.checkedAt）の状態です。1分ほどおいて verify_submission をもう一度呼べます。',
+      '提出先からの読み直しが時間内に終わりませんでした（読み直しは裏で続いていて、終われば取り込まれます）。下は前に読んだ時点（submission.checkedAt）の状態です。1分ほどおいて verify_submission をもう一度呼ぶと、その読み直しの結果を返します。',
     );
   else if (live.status === 'failed' || live.status === 'queued' || live.status === 'notFound')
     parts.push(

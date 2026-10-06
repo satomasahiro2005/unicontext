@@ -13,7 +13,12 @@ import type {
   RawItem,
   SyncResult,
 } from '../../../packages/connector-sdk/src/index.js';
-import { createUniContext, type UniContext } from '@unicontext/context-engine';
+import {
+  createUniContext,
+  type DetailFetchReport,
+  fetchDetailsOnRequest,
+  type UniContext,
+} from '@unicontext/context-engine';
 import { type FetchLike, ManualClock, type SecretStore } from '@unicontext/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -41,7 +46,12 @@ import {
   SHIZUOKA_DEPLOYMENT,
 } from '../../../connectors/livecampusu/src/index.js';
 import { createMcpServer, ProposalStore, type McpEnvelope } from '../src/index.js';
-import type { VerifySubmissionView } from '../src/verify-submission.js';
+import type { ToolRegistrar } from '../src/refresh.js';
+import {
+  registerVerifySubmissionTool,
+  VERIFY_SUBMISSION_STALE_MS,
+  type VerifySubmissionView,
+} from '../src/verify-submission.js';
 
 /*
  * verify_submission: right after the student says they handed it in, one assignment is read again
@@ -385,5 +395,154 @@ describe('verify_submission (LiveCampusU / Teams)', () => {
       sourceStatus: 'submitted',
     });
     expect(out.data.limits.join(' ')).toMatch(/Teams の課題画面/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// One read at a time per assignment, and the 30 s counted from when the read finished: a slow or
+// timed-out read is joined, never started again while it runs (the Teams page and the LiveCampusU
+// queue would run a second read after the first instead of dropping it).
+
+function gate() {
+  let open!: () => void;
+  const opened = new Promise<void>((r) => {
+    open = r;
+  });
+  return { opened, open };
+}
+
+async function setupPaced(waitMs: number) {
+  const clock = new ManualClock(NOW);
+  const uc = createUniContext({ profile: 'shizuoka-university', clock });
+  const adapter = new StateAdapter('teams', [teamsWork('working', null)]);
+  uc.sync.register({
+    sourceId: 'teams-web',
+    adapter,
+    normalizer: createTeamsWebNormalizer(),
+    metadata: teamsMetadata,
+  });
+  expect((await uc.sync.sync('teams-web')).ok).toBe(true);
+  await uc.runPipeline();
+  adapter.items = [teamsWork('submitted', '2026-10-05T00:29:00Z')];
+  const id = uc.sync.stores.entities.list('assignment')[0]?.id ?? '';
+  const paced = {
+    clock,
+    reads: 0,
+    /** Runs inside each read before the connector answers (a slow source). */
+    beforeAnswer: undefined as (() => Promise<void> | void) | undefined,
+    /** Settles when the latest read's connector call settled. */
+    latest: Promise.resolve() as Promise<unknown>,
+    fail: false,
+  };
+  const fetchDetails = (ids: string[]): Promise<DetailFetchReport> => {
+    paced.reads += 1;
+    if (paced.fail) throw new Error('connector exploded');
+    const p = (async () => {
+      await paced.beforeAnswer?.();
+      return fetchDetailsOnRequest(uc, ids);
+    })();
+    paced.latest = p.catch(() => undefined);
+    return p;
+  };
+  let run: ((a: { id: string }) => Promise<{ data: unknown }>) | undefined;
+  const tool: ToolRegistrar = (name, _meta, _shape, fn) => {
+    if (name === 'verify_submission')
+      run = async (a) => fn(a as unknown as Parameters<typeof fn>[0]);
+  };
+  registerVerifySubmissionTool(tool, { uc, fetchDetails, waitMs });
+  cleanup = () => uc.close();
+  const verify = async (): Promise<Verified> => {
+    if (!run) throw new Error('verify_submission not registered');
+    return (await run({ id })).data as Verified;
+  };
+  /** Wait until the background read has finished and been recorded. */
+  const settle = async () => {
+    await paced.latest;
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  return { paced, verify, settle };
+}
+
+describe('verify_submission (one read at a time)', () => {
+  it('a read that times out keeps running; a repeat joins it instead of starting another', async () => {
+    const { paced, verify, settle } = await setupPaced(20);
+    const slow = gate();
+    paced.beforeAnswer = () => slow.opened;
+
+    const first = await verify();
+    expect(first.live.status).toBe('timeout');
+    expect(first.live.at).toBe(NOW);
+    // following the hint: a minute later, while the source is still busy
+    paced.clock.set(new Date(Date.parse(NOW) + 60_000));
+    const second = await verify();
+    expect(second.live.status).toBe('timeout');
+    expect(paced.reads).toBe(1);
+
+    // the background read finishes; the next call answers with it, without reading again
+    slow.open();
+    await settle();
+    const third = await verify();
+    expect(third.live.status).toBe('recent');
+    expect(third.live.at).toBe(new Date(Date.parse(NOW) + 60_000).toISOString());
+    expect(third.submission.submitted).toBe(true);
+    expect(paced.reads).toBe(1);
+
+    // 30 s after that read finished, a new one
+    paced.beforeAnswer = undefined;
+    paced.clock.set(new Date(Date.parse(NOW) + 90_000));
+    expect((await verify()).live.status).toBe('fetched');
+    expect(paced.reads).toBe(2);
+  });
+
+  it('a read that never answers is not joined forever', async () => {
+    const { paced, verify } = await setupPaced(20);
+    const hung = gate();
+    paced.beforeAnswer = () => hung.opened;
+    expect((await verify()).live.status).toBe('timeout');
+    paced.clock.set(new Date(Date.parse(NOW) + VERIFY_SUBMISSION_STALE_MS));
+    paced.beforeAnswer = undefined;
+    expect((await verify()).live.status).toBe('fetched');
+    expect(paced.reads).toBe(2);
+  });
+
+  it('two calls at once share one read', async () => {
+    const { paced, verify } = await setupPaced(5_000);
+    const slow = gate();
+    paced.beforeAnswer = () => slow.opened;
+    const a = verify();
+    const b = verify();
+    await Promise.resolve();
+    slow.open();
+    const [x, y] = await Promise.all([a, b]);
+    expect(x.live.status).toBe('fetched');
+    expect(y.live.status).toBe('fetched');
+    expect(y.submission.submitted).toBe(true);
+    expect(paced.reads).toBe(1);
+  });
+
+  it('counts the 30 s from when a long read finished, not from when it started', async () => {
+    const { paced, verify } = await setupPaced(5_000);
+    // the read takes 31 s (a live Ed read took about that long)
+    paced.beforeAnswer = () => {
+      paced.clock.set(new Date(Date.parse(NOW) + 31_000));
+    };
+    expect((await verify()).live.status).toBe('fetched');
+    const again = await verify();
+    expect(again.live.status).toBe('recent');
+    expect(again.live.retryAfterSeconds).toBe(30);
+    expect(paced.reads).toBe(1);
+  });
+
+  it('a read that fails at once does not stay running', async () => {
+    const { paced, verify } = await setupPaced(5_000);
+    paced.fail = true;
+    const first = await verify();
+    expect(first.live).toMatchObject({ status: 'failed', error: 'connector exploded' });
+    expect((await verify()).live.retryAfterSeconds).toBe(30);
+    expect(paced.reads).toBe(1);
+    paced.fail = false;
+    paced.clock.set(new Date(Date.parse(NOW) + 30_000));
+    expect((await verify()).live.status).toBe('fetched');
+    expect(paced.reads).toBe(2);
   });
 });

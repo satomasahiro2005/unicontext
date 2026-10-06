@@ -1210,8 +1210,10 @@ own inference. Output `{taskId, title, previousStatus, status, steps, percent?, 
   something in: it re-reads that ONE assignment through the same `fetchDetailsOnRequest` path
   (Ed: the `details` rule incl. `list_lessons` for the lesson's progress; LiveCampusU: the
   assignment list row; Teams: the Assignments app's work list), bypassing freshness budgets and the
-  schedule, at most once per assignment per 30 s (in-process; a repeat answers with that read,
-  concurrent calls share one read), waits up to 45 s, and returns `submission` (status, submitted,
+  schedule, one read per assignment at a time and the next no sooner than 30 s after the previous
+  one finished (in-process; a call while a read runs, also after an earlier caller timed out, waits
+  for that same read; a repeat inside the 30 s answers with it), waits up to 45 s (the read goes on
+  in the background after that), and returns `submission` (status, submitted,
   submittedAt where the source has it, sourceStatus, checkedAt), Ed's saved `answers[]`, the
   submitted `files[]` (Ed: documents mapped from the files/images in the student's answers, opened
   only by `get_document`) and `limits` (what the source cannot confirm). Syncs stay metadata-only for
