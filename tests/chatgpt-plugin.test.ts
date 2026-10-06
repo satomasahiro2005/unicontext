@@ -134,12 +134,20 @@ describe('ChatGPT plugin package', () => {
     for (const task of ['watcher.ja.txt', 'morning.ja.txt', 'evening.ja.txt', 'weekly.ja.txt']) {
       const text = readFileSync(join(BASE, 'tasks', task), 'utf8');
       expect(text).toContain('書き込み');
-      // Gmail / Google Calendar are read only and never stored in UniContext.
       expect(text).toContain('既読にする');
-      expect(text).toContain('UniContextに保存もしない');
       expect(text).toContain('effectiveSchedule');
     }
+    // The watcher, evening and weekly tasks never write: not even mail or calendar findings.
+    for (const task of ['watcher.ja.txt', 'evening.ja.txt', 'weekly.ja.txt']) {
+      const text = readFileSync(join(BASE, 'tasks', task), 'utf8');
+      expect(text, task).toContain('UniContextに保存もしない');
+      expect(text, task).not.toContain('ingest_external_signal');
+    }
+    // The morning task stores university findings from Gmail / Calendar, nothing else.
     const morning = readFileSync(join(BASE, 'tasks', 'morning.ja.txt'), 'utf8');
+    expect(morning).toContain('ingest_external_signal');
+    expect(morning).toContain('聞かずに');
+    expect(morning).toContain('nativeId');
     expect(morning).toContain('「通知なし」の1行だけ');
     for (const h of [
       'まず今やること',
@@ -152,5 +160,21 @@ describe('ChatGPT plugin package', () => {
     const watcher = readFileSync(join(BASE, 'tasks', 'watcher.ja.txt'), 'utf8');
     expect(watcher).toContain('何も出力しない');
     expect(watcher).toContain('attentionId');
+  });
+
+  it('tells the interactive skill and the morning skill to store university findings', () => {
+    const skills = join(BASE, 'plugin', 'unicontext', 'skills');
+    const support = readFileSync(join(skills, 'student-support', 'SKILL.md'), 'utf8');
+    const briefing = readFileSync(join(skills, 'student-briefing', 'SKILL.md'), 'utf8');
+    for (const [name, text] of [
+      ['student-support', support],
+      ['student-briefing', briefing],
+    ] as const) {
+      expect(text, name).toContain('ingest_external_signal');
+      expect(text, name).toContain('nativeId');
+      expect(text, name).toContain('enrollment=not_taking');
+      expect(text, name).not.toMatch(/future\s+`ingest_external_signal`/);
+    }
+    expect(briefing).toContain('Watcher: store nothing');
   });
 });

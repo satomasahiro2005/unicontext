@@ -11,6 +11,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createMcpServer,
   ProposalStore,
+  ATTENDANCE_INSTRUCTION_JA,
+  EXTERNAL_SIGNAL_INSTRUCTION_EN,
+  EXTERNAL_SIGNAL_INSTRUCTION_JA,
   RECORDING_INSTRUCTION_EN,
   RECORDING_INSTRUCTION_JA,
   REMOTE_SERVER_INSTRUCTIONS,
@@ -622,6 +625,17 @@ describe('ingest_lecture: one call for a whole lecture recording', () => {
     expect(client.getInstructions()).toContain(RECORDING_INSTRUCTION_EN);
     const local = await connect();
     expect(local.getInstructions()).toContain(RECORDING_INSTRUCTION_JA);
+    // Mail / calendar findings and attendance are in the server-level instructions too.
+    for (const instructions of [client.getInstructions(), local.getInstructions()]) {
+      expect(instructions).toContain(EXTERNAL_SIGNAL_INSTRUCTION_JA);
+      expect(instructions).toContain(ATTENDANCE_INSTRUCTION_JA);
+    }
+    expect(local.getInstructions()).toContain(EXTERNAL_SIGNAL_INSTRUCTION_EN);
+    expect(EXTERNAL_SIGNAL_INSTRUCTION_JA).toContain('ingest_external_signal');
+    expect(EXTERNAL_SIGNAL_INSTRUCTION_JA).toContain('聞かない');
+    expect(EXTERNAL_SIGNAL_INSTRUCTION_JA).toContain('Gmail（本人のメール）');
+    expect(EXTERNAL_SIGNAL_INSTRUCTION_JA).toContain('Googleカレンダー');
+    expect(EXTERNAL_SIGNAL_INSTRUCTION_JA).toContain('duplicate');
   });
 
   it('rejects input outside the schema before writing anything', async () => {

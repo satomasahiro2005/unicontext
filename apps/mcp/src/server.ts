@@ -12,6 +12,7 @@ import {
   type AdditionResult,
   CONTEXT_VIEWS,
   downloadCourseFiles,
+  EXTERNAL_SIGNAL_LABELS,
   type DetailFetchReport,
   type DownloadFilesReport,
   fetchDetailsOnRequest,
@@ -233,6 +234,18 @@ export const RECORDING_INSTRUCTION_JA =
 export const RECORDING_INSTRUCTION_EN =
   'When a lecture recording or transcript is given as input and the course and date can reasonably be determined, call ingest_lecture even without a request to save, in addition to answering. Do not ask the user to confirm, or to restate a course, date or period that the conversation, the recording or the timetable tells; it is stored as unconfirmed and never overrides university data.';
 
+/** Findings in the student's own Gmail / Google Calendar are stored without being asked (write surfaces). */
+export const EXTERNAL_SIGNAL_INSTRUCTION_JA =
+  `ユーザーのGmailやGoogleカレンダーを読んで大学に関すること（履修登録の結果・休講・教室変更・締切・日程変更）が見つかったら、頼まれなくても ingest_external_signal を1通・1予定につき1回呼んでください。保存してよいか聞かないでください。メールや予定の全文は貼らず、summary に大事なことを1〜2文、quote に根拠の文をそのまま入れ、nativeId にメール・予定のidを付けます。同じものを2回送っても二重にならず duplicate が返ります。大学に関係ないメール・予定は保存しません。履修を取り消された・不許可・抽選に落ちたと分かったら enrollment=not_taking と course を付けます。保存した内容は「${EXTERNAL_SIGNAL_LABELS.gmail}」「${EXTERNAL_SIGNAL_LABELS.calendar}」と表示され、大学側の値は上書きしません。`;
+export const EXTERNAL_SIGNAL_INSTRUCTION_EN =
+  'When you read the student’s Gmail or Google Calendar and find something about the university (a registration result, a cancellation, a room change, a deadline, a schedule change), call ingest_external_signal once per mail or event without asking; never paste whole mails (summary and a verbatim quote only, plus the mail or event id as nativeId). A repeat returns duplicate. Skip anything not about the university. Stored items are labelled Gmail / Google Calendar and never override university data.';
+
+/** Attendance questions go to get_attendance (read-only surfaces included). */
+export const ATTENDANCE_INSTRUCTION_JA =
+  '出欠（「何回休んだ？」「出席は足りてる？」）は get_attendance で調べてください。回数は学務情報システムの公開値そのままで、推測せず、危ないかどうかは判断しません（基準はシラバスの成績評価）。';
+export const ATTENDANCE_INSTRUCTION_EN =
+  'Attendance questions go to get_attendance: counts exactly as the academic system publishes them; never guess a missing count and never judge risk (the rule is in the syllabus).';
+
 /** Working on an assignment needs its content, not just its existence (get_assignment). */
 export const ASSIGNMENT_CONTENT_INSTRUCTION_JA =
   '課題を実際に解く・設問の中身を確かめるときは、get_assignments・get_course・search の課題の id（assignmentId または taskId）で get_assignment を呼び、設問の本文（質問1・質問2…）・選択肢・添付ファイル・本人が保存済みの回答・締切を取ってから答えてください。get_assignments だけでは課題があることしか分かりません。提出・回答の保存は本人が Ed など提出先で行います（UniContext からはできません）。';
@@ -252,6 +265,8 @@ export const SERVER_INSTRUCTIONS = [
   'UniContextが取り込んでいない情報（例: EdのLessonsにある課題の設問）が答えに要るときは、本人に貼り付け・スクリーンショット・自分で確認を求めないでください。UniContextの何が取り込めていないか、何を追加すれば答えられるかをそのまま伝え、分かる範囲で答えます。',
   EXISTING_ITEM_RULE_JA,
   RECORDING_INSTRUCTION_JA,
+  EXTERNAL_SIGNAL_INSTRUCTION_JA,
+  ATTENDANCE_INSTRUCTION_JA,
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
@@ -259,6 +274,8 @@ export const SERVER_INSTRUCTIONS = [
   'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only. Deadlines, to-dos and notes the student mentions in any chat can be registered with add_deadline / add_task / add_note so every other session sees them; they never override a university system.',
   EXISTING_ITEM_RULE_EN,
   RECORDING_INSTRUCTION_EN,
+  EXTERNAL_SIGNAL_INSTRUCTION_EN,
+  ATTENDANCE_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
@@ -272,11 +289,13 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
   UNKNOWN_DEADLINE_POLICY_JA,
   'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
+  ATTENDANCE_INSTRUCTION_JA,
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Read-only: answers must cite sources and report conflicting sources instead of picking one.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   UNKNOWN_DEADLINE_POLICY_EN,
+  ATTENDANCE_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
@@ -294,7 +313,9 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   'evidence にはユーザーの言葉をそのまま引用してください。締切は言われたままの表現（10月20日17時・来週の金曜など）でよく、解決した日時が返るのでユーザーに伝えてください。',
   EXISTING_ITEM_RULE_JA,
   RECORDING_INSTRUCTION_JA,
-  '保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
+  EXTERNAL_SIGNAL_INSTRUCTION_JA,
+  `保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」、メール・予定から見つけたものは「${EXTERNAL_SIGNAL_LABELS.gmail}」「${EXTERNAL_SIGNAL_LABELS.calendar}」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。`,
+  ATTENDANCE_INSTRUCTION_JA,
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Register deadlines, to-dos and notes the student mentions or plans in any chat (add_deadline / add_task / add_note) so every other session and client sees them. Writes go to UniContext only (never to a university system) and cannot change authoritative data, task status or grades.',
@@ -302,6 +323,8 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   UNKNOWN_DEADLINE_POLICY_EN,
   EXISTING_ITEM_RULE_EN,
   RECORDING_INSTRUCTION_EN,
+  EXTERNAL_SIGNAL_INSTRUCTION_EN,
+  ATTENDANCE_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
