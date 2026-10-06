@@ -886,14 +886,25 @@ minutes. Everything below is deterministic and read-only.
   - a day: the `room` fact (confidence 0.6, evidence = the sentence) gets `validFrom` / `validUntil` = that
     local day, like LiveCampusU's 講義室変更 notice. The meeting of that day shows the new room
     (`resolve(..., {at})`), every other day the regular one;
-  - 以降 / 今後 without a day: course-wide, as before; with a day (「10/13以降」): course-wide from that day;
-  - no day and not permanent: **no room fact**. The announcement carries
-    `extra.roomHint {room, unresolved: true}` so the change still reaches the student as news.
+  - 以降 / 今後 / これから, or a start day with から / より (「10/13から21教室で行います」「来週から」「次回から」)
+    without a resolvable day: course-wide, as before; with a day (「10/13以降」「10/13から」): course-wide
+    from that day (a permanent move is never a one-day change);
+  - no day and not permanent (「次回は21教室」, a post without a day): **no room fact**. The announcement
+    carries `extra.roomHint {room, unresolved: true, datePhrase?, postedAt?}`. The normalizer does not
+    know the course's sessions; the engine does: `classItem` resolves the hint with
+    `resolveRoomChangeScope(..., sessionsOfCourse)` (the day the phrase names, else the first class meeting
+    after the post, within 60 days) and shows the hinted room next to the timetable's as a `conflict`
+    (`room.candidates`, the post marked 未確認; `ClassItem.roomHint` says who said what). A hint that
+    names the room the meeting already has changes nothing. Attention adds a `room_change` alert
+    (【教室変更の可能性】, warning for today / tomorrow, info within the next 7 days) so a student who never
+    checks is still told.
     The course-level `room` of `get_course` is resolved without any fact that has a `validUntil`: a
     one-session change never becomes the course's room.
-    Normalizer versions went up (teams-web 3, microsoft365 2). **One-shot re-derive:** the stored posts are
-    normalized again on the next run, so the old course-wide hint facts (a 「本日は21教室」 that had become
-    the course's room) disappear and only the dated or permanent ones come back.
+    Normalizer versions went up (teams-web 4, microsoft365 3). **One-shot re-derive:** the stored posts are
+    normalized again on the next run. A fact id does not cover the validity window, so sync-engine
+    `assert()` re-puts an active fact whose `validFrom` / `validUntil` / confidence / evidence differ from
+    the newly derived one: the old course-wide copy of a 「本日は21教室」 gets its one-day window, and
+    posts that no longer yield a fact are retracted as stale.
 - **Busy time.** `busyIntervals(uc, from, to)` merges non-cancelled class sessions (not self-study), timed
   calendar events and the trips below into `[{id, kind: class | event | travel, title, start, end,
 location?, citations}]`. Left out: all-day events, the holiday categories (`holiday` / 祝日 / 休日),

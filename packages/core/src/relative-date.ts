@@ -72,13 +72,20 @@ export function findDatePhrase(text: string): string | undefined {
   return scan(text)?.phrase;
 }
 
+/** A date phrase directly followed by から / より: 「10/13から」「来週から」「次回から」 start something. */
+const FROM_DATE_RES: readonly RegExp[] = RULES.map(
+  ([, re]) => new RegExp(`(?:${re.source})\\s*(?:から|より)`),
+);
+
 /**
- * The text says the change is not for one day: 以降 / 今後 / これから / from now on.
- * 「今後ともよろしくお願いします」 is a greeting, not a change.
+ * The text says the change is not for one day: 以降 / 今後 / これから / from now on, or a start
+ * day with から / より (「10/13から21教室で行います」「来週から」「次回から」). 「今後ともよろしくお願いします」
+ * is a greeting, not a change; 「10:30から」 is a clock time, not a day.
  */
 export function isPermanentChange(text: string): boolean {
   const t = text.normalize('NFKC');
-  return /以降|以後|今後(?!とも|ご|の連絡)|これから|from now on|henceforth/i.test(t);
+  if (/以降|以後|今後(?!とも|ご|の連絡)|これから|from now on|henceforth/i.test(t)) return true;
+  return FROM_DATE_RES.some((re) => re.test(t));
 }
 
 function parts(date: string): { year: number; month: number; day: number } | undefined {

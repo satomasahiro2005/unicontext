@@ -297,6 +297,37 @@ describe('graph.channelMessage', () => {
     });
   });
 
+  it('次回: no fact, the hint keeps the date phrase and the post time for the engine', async () => {
+    const out = await run(
+      'graph.channelMessage',
+      ext('1759300000006'),
+      postWith('次回の授業は21教室で行います。'),
+    );
+    expect(out.facts ?? []).toEqual([]);
+    expect(entity(out)).toMatchObject({
+      kind: 'announcement',
+      extra: {
+        roomHint: {
+          room: '21教室',
+          unresolved: true,
+          datePhrase: '次回',
+          postedAt: expect.any(String),
+        },
+      },
+    });
+  });
+
+  it('a start day with から is course-wide from that day', async () => {
+    const out = await run(
+      'graph.channelMessage',
+      ext('1759300000006'),
+      postWith('10/13から21教室で行います。'),
+    );
+    expect(out.facts).toHaveLength(1);
+    expect(out.facts?.[0]).toMatchObject({ value: '21教室', validFrom: expect.any(String) });
+    expect(out.facts?.[0]).not.toHaveProperty('validUntil');
+  });
+
   it('今後 stays course-wide: no validity window', async () => {
     const out = await run(
       'graph.channelMessage',

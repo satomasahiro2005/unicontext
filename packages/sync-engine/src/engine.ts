@@ -612,15 +612,28 @@ export class SyncEngine {
       const id = factId(ref.id, subject, predicate, value);
       keptFacts.add(id);
       const existing = this.facts.get(id);
-      if (existing && !existing.retractedAt) return;
+      const confidence = extra.confidence ?? (origin === 'authoritative' ? 1 : 0.8);
+      if (existing && !existing.retractedAt) {
+        // The id does not cover the validity window, so a normalizer that now scopes the same
+        // value to a day (or the other way round) re-puts the fact instead of keeping the old one.
+        const same =
+          existing.validFrom === (extra.validFrom || undefined) &&
+          existing.validUntil === (extra.validUntil || undefined) &&
+          existing.confidence === confidence &&
+          existing.evidence === (extra.evidence || undefined);
+        if (same) return;
+      }
       this.facts.put({
         id,
         subject: subject as EntityId,
         predicate,
         value,
         origin,
-        confidence: extra.confidence ?? (origin === 'authoritative' ? 1 : 0.8),
-        observedAt: extra.observedAt ?? observedAt,
+        confidence,
+        observedAt:
+          existing && !existing.retractedAt
+            ? existing.observedAt
+            : (extra.observedAt ?? observedAt),
         ...(extra.validFrom ? { validFrom: extra.validFrom } : {}),
         ...(extra.validUntil ? { validUntil: extra.validUntil } : {}),
         sourceReferenceId: ref.id,

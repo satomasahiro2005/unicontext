@@ -20,6 +20,7 @@ import {
   zonedDateString,
   zonedParts,
 } from '@unicontext/core';
+import { uniqueCitations } from '@unicontext/provenance';
 import type { UniContextDatabase } from '@unicontext/database';
 import type { CoverageGap, CoverageHealth, CoverageSource } from './coverage.js';
 import type { EstimatedDue } from './estimate.js';
@@ -689,6 +690,33 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
           : `${b.room ? `${b.room}へ` : '教室へ'}向かう（${hhmm(c.startsAt, tz)}開始）`,
       });
     }
+  }
+
+  // An instructor's post without a fact-grade day (「次回は21教室」, no day at all) names another room
+  // for an upcoming meeting: the timetable still shows the old one, so say it (unconfirmed).
+  const hintUntil = zonedDateString(new Date(nowMs + 7 * DAY), tz);
+  for (const c of host.classes(todayDate, hintUntil)) {
+    const h = c.roomHint;
+    if (!h || c.cancelled || c.sessionKind !== 'class') continue;
+    const start = c.startsAt ? Date.parse(c.startsAt) : Number.NaN;
+    if (Number.isFinite(start) && start < nowMs) continue;
+    const b = classOf(c);
+    const when = formatDateJa(parseZonedDate(c.date, tz), tz);
+    const soon = c.date === todayDate || c.date === tomorrowDate;
+    const was = h.otherRoom ? `（時間割・情報源は${h.otherRoom}）` : '';
+    out.push({
+      subject: `class:${c.sessionId}`,
+      key: `room-hint:${c.sessionId}:${h.room}`,
+      kind: 'room_change',
+      severity: soon ? 'warning' : 'info',
+      line: `【教室変更の可能性】${when}${c.period ? ` ${c.period}限` : ''} ${b.course}は、先生の投稿「${h.title}」では${h.room}です${was}。日付がはっきりしない投稿なので未確認`,
+      course: b.course,
+      at: c.startsAt,
+      link: undefined,
+      citations: uniqueCitations([...h.citations, ...b.citations]).slice(0, 3),
+      nextEscalationAt: soon ? undefined : iso(parseZonedDate(c.date, tz).getTime() - DAY),
+      recommendedAction: `${when}の${b.course}の教室を確かめる（${[h.room, h.otherRoom].filter(Boolean).join('か')}。先生の投稿「${h.title}」を読む）`,
+    });
   }
 
   // New room changes / cancellations / important notices since the last call.

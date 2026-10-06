@@ -91,6 +91,18 @@ describe('findDatePhrase and isPermanentChange', () => {
     expect(isPermanentChange('From now on we meet in room 21')).toBe(true);
     expect(isPermanentChange('本日は21教室です。今後ともよろしくお願いします')).toBe(false);
   });
+
+  it('a start day with から / より is a permanent change', () => {
+    expect(isPermanentChange('10/13から21教室で行います')).toBe(true);
+    expect(isPermanentChange('10月13日(月)より21教室で行います')).toBe(true);
+    expect(isPermanentChange('来週から21教室で行います')).toBe(true);
+    expect(isPermanentChange('次回から21教室で行います')).toBe(true);
+    expect(isPermanentChange('来週の火曜日から21教室です')).toBe(true);
+    // A clock time and a one-day change are not permanent.
+    expect(isPermanentChange('10:30から21教室で行います')).toBe(false);
+    expect(isPermanentChange('本日は10:30から21教室で行います')).toBe(false);
+    expect(isPermanentChange('次回は21教室で行います')).toBe(false);
+  });
 });
 
 describe('resolveRoomChangeScope', () => {
@@ -111,6 +123,32 @@ describe('resolveRoomChangeScope', () => {
       date: '2025-10-13',
     });
     expect(resolveRoomChangeScope({ permanent: true }, POSTED, TZ)).toEqual({ kind: 'permanent' });
+  });
+
+  it('「10/13から」 is course-wide from that day, 「来週から」 / 「次回から」 from the session', () => {
+    const scope = (text: string, sessions?: readonly string[]) =>
+      resolveRoomChangeScope(
+        { datePhrase: findDatePhrase(text), permanent: isPermanentChange(text) },
+        POSTED,
+        TZ,
+        sessions,
+      );
+    expect(scope('10/13から21教室で行います')).toEqual({
+      kind: 'permanent',
+      validFrom: '2025-10-12T15:00:00.000Z',
+      date: '2025-10-13',
+    });
+    expect(scope('来週から21教室で行います', SESSIONS)).toMatchObject({
+      kind: 'permanent',
+      date: '2025-10-13',
+    });
+    expect(scope('次回から21教室で行います', SESSIONS)).toMatchObject({
+      kind: 'permanent',
+      date: '2025-10-13',
+    });
+    // No session to anchor on: course-wide, like 今後.
+    expect(scope('来週から21教室で行います')).toEqual({ kind: 'permanent' });
+    expect(scope('次回から21教室で行います')).toEqual({ kind: 'permanent' });
   });
 
   it('no day and not permanent is unresolved', () => {

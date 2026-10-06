@@ -195,6 +195,41 @@ describe('teams-web normalizer', () => {
       expect(ann?.entity.extra).toMatchObject({ roomHint: { room: '21教室', unresolved: true } });
     });
 
+    it('次回: no fact, the hint keeps the date phrase and the post time for the engine', async () => {
+      const out = await roomPost('次回の授業は21教室で行います', TUE);
+      expect(out.facts ?? []).toEqual([]);
+      const ann = out.entities.find((e) => e.entity.kind === 'announcement');
+      expect(ann?.entity.extra).toMatchObject({
+        roomHint: {
+          room: '21教室',
+          unresolved: true,
+          datePhrase: '次回',
+          postedAt: '2026-10-06T01:00:00.000Z',
+        },
+      });
+    });
+
+    it('a start day with から is course-wide from that day, not a one-day change', async () => {
+      const out = await roomPost('10/13から21教室で行います', TUE);
+      expect(out.facts).toHaveLength(1);
+      expect(out.facts?.[0]).toMatchObject({
+        value: '21教室',
+        validFrom: '2026-10-12T15:00:00.000Z',
+      });
+      expect(out.facts?.[0]).not.toHaveProperty('validUntil');
+    });
+
+    it('来週から / 次回から stay course-wide, as before: a fact, no news-only hint', async () => {
+      for (const text of ['来週から21教室で行います', '次回から21教室で行います']) {
+        const out = await roomPost(text, TUE);
+        expect(out.facts).toHaveLength(1);
+        expect(out.facts?.[0]).not.toHaveProperty('validFrom');
+        expect(out.facts?.[0]).not.toHaveProperty('validUntil');
+        const ann = out.entities.find((e) => e.entity.kind === 'announcement');
+        expect((ann?.entity.extra as Record<string, unknown>)['roomHint']).toBeUndefined();
+      }
+    });
+
     it('今後 stays course-wide (no validity window)', async () => {
       const out = await roomPost('今後は21教室で行います', TUE);
       expect(out.facts).toHaveLength(1);

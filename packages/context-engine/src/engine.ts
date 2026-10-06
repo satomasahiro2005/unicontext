@@ -30,6 +30,7 @@ import {
   NotFoundError,
   ValidationError,
   parseZonedDate,
+  resolveRoomChangeScope,
   startOfZonedDay,
   startOfZonedWeek,
   systemClock,
@@ -150,6 +151,7 @@ import type {
   PreparationItem,
   QuestionItem,
   ResolvedValue,
+  RoomHintInfo,
   SegmentItem,
   SourceStatus,
   TaskItem,
@@ -554,7 +556,7 @@ export class ContextEngine {
     );
     // The group schedule names the room of the student's group (科学実験室 / C&C): it wins over
     // the timetable's 「情報科学科実習室1 他」, which stays in the candidates and in rawSchedule.
-    const room: ResolvedValue<string> =
+    const groupRoom: ResolvedValue<string> =
       personal && effectiveRoom && roomRes.status !== 'conflict'
         ? {
             value: effectiveRoom,
@@ -574,6 +576,14 @@ export class ContextEngine {
             ],
           }
         : roomRes;
+    // An instructor's post without a fact-grade day (「次回は21教室」) names this meeting's room:
+    // shown next to the timetable's, never instead of it.
+    const hint = this.roomHintFor(
+      course,
+      session,
+      typeof groupRoom.value === 'string' ? groupRoom.value : undefined,
+    );
+    const room = hint ? this.withRoomHint(groupRoom, hint, session) : groupRoom;
     const status = this.resolvedValue<string>(
       this.resolver.resolve([session.id], 'class_status', { at }),
       session.status,
@@ -645,12 +655,127 @@ export class ContextEngine {
       summary: `${summary}${attendanceNote}`,
       ...(raw ? { rawSchedule: raw } : {}),
       effectiveSchedule,
+      ...(hint ? { roomHint: hint } : {}),
       ...this.classPlaceFields(typeof room.value === 'string' ? room.value : undefined),
       citations: uniqueCitations([
         ...this.citationsFor([session.id]),
         ...room.candidates.flatMap((c) => (c.citation ? [c.citation] : [])),
         ...effectiveSchedule.citations,
       ]),
+    };
+  }
+
+  /**
+   * The unconfirmed room an announcement's `extra.roomHint` (a post whose day could not be told at
+   * normalization: 次回 / 来週 / no day) gives to this meeting. The normalizer cannot tell which meeting
+   * the post means; the engine has the course's sessions, so it does: the day the post names when that
+   * resolves against the sessions, else the first class meeting after the post. Undefined when no post
+   * applies or it names the room the meeting already has.
+   */
+  private roomHintFor(
+    course: CourseRef,
+    session: ClassSession,
+    currentRoom: string | undefined,
+  ): RoomHintInfo | undefined {
+    if (session.sessionKind === 'self_study') return undefined;
+    const today = zonedDateString(this.now(), this.timezone);
+    if (session.date < addLocalDays(today, -1)) return undefined;
+    const hinted: { a: Announcement; room: string; datePhrase?: string; postedAt: string }[] = [];
+    for (const a of this.entities.list('announcement', {
+      where: { courseOfferingId: course.linkedIds },
+    })) {
+      const h = (a.extra as Record<string, unknown> | undefined)?.['roomHint'];
+      if (typeof h !== 'object' || h === null) continue;
+      const hint = h as Record<string, unknown>;
+      const room = hint['room'];
+      const postedAt =
+        typeof hint['postedAt'] === 'string' ? hint['postedAt'] : (a.publishedAt ?? undefined);
+      if (typeof room !== 'string' || !room || !postedAt || Number.isNaN(Date.parse(postedAt)))
+        continue;
+      hinted.push({
+        a,
+        room,
+        postedAt,
+        ...(typeof hint['datePhrase'] === 'string' ? { datePhrase: hint['datePhrase'] } : {}),
+      });
+    }
+    if (hinted.length === 0) return undefined;
+    hinted.sort((x, y) => Date.parse(y.postedAt) - Date.parse(x.postedAt));
+    for (const h of hinted) {
+      const postedDate = zonedDateString(new Date(h.postedAt), this.timezone);
+      if (session.date < postedDate || session.date > addLocalDays(postedDate, 60)) continue;
+      const sessions = this.tasks.schedule
+        .sessionsBetween(postedDate, addLocalDays(postedDate, 60), course.linkedIds)
+        .filter((s) => (s.sessionKind ?? 'class') === 'class' && s.status !== 'cancelled')
+        .sort(
+          (x, y) =>
+            x.date.localeCompare(y.date) || (x.startsAt ?? '').localeCompare(y.startsAt ?? ''),
+        );
+      const scope = resolveRoomChangeScope(
+        { datePhrase: h.datePhrase, permanent: false },
+        h.postedAt,
+        this.timezone,
+        sessions.map((s) => s.date),
+      );
+      let basis: RoomHintInfo['basis'];
+      if (scope.kind === 'dated') {
+        if (scope.date !== session.date) continue;
+        basis = 'named-day';
+      } else {
+        const postedMs = Date.parse(h.postedAt);
+        const next = sessions.find(
+          (s) => s.date >= postedDate && (!s.startsAt || Date.parse(s.startsAt) > postedMs),
+        );
+        if (!next || next.date !== session.date) continue;
+        basis = 'next-session';
+      }
+      if (h.room === currentRoom) return undefined;
+      return {
+        room: h.room,
+        announcementId: h.a.id,
+        title: h.a.title,
+        postedAt: h.postedAt,
+        basis,
+        otherRoom: currentRoom,
+        citations: this.citationsFor([h.a.id]),
+      };
+    }
+    return undefined;
+  }
+
+  /** The hinted room as a candidate next to the timetable's: the two disagree, say both. */
+  private withRoomHint(
+    room: ResolvedValue<string>,
+    hint: RoomHintInfo,
+    session: ClassSession,
+  ): ResolvedValue<string> {
+    const candidates = [...room.candidates];
+    if (typeof room.value === 'string' && !candidates.some((c) => c.value === room.value)) {
+      const citation = this.citationsFor([session.id])[0];
+      candidates.push({
+        value: room.value,
+        origin: room.origin ?? 'authoritative',
+        authority: 'timetable',
+        source: citation?.sourceLabel ?? citation?.sourceSystem ?? '時間割',
+        observedAt: citation?.retrievedAt ?? this.now().toISOString(),
+        citation,
+      });
+    }
+    const citation = hint.citations[0];
+    candidates.push({
+      value: hint.room,
+      origin: 'extracted',
+      authority: 'instructor-post (unconfirmed)',
+      source: `${citation?.sourceLabel ?? citation?.sourceSystem ?? 'お知らせ'}「${hint.title}」（日付を特定できない先生の投稿・未確認）`,
+      observedAt: hint.postedAt ?? this.now().toISOString(),
+      citation,
+    });
+    return {
+      value: room.value,
+      status: 'conflict',
+      origin: room.origin,
+      method: 'room_hint',
+      candidates,
     };
   }
 

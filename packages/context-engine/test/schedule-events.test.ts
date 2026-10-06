@@ -565,3 +565,265 @@ describe('a room change for one session', () => {
     expect(uc.context.course(net).room.value).toBe('21教室');
   });
 });
+
+describe('re-deriving stored room posts with a newer normalizer', () => {
+  // An install that stored 「本日の授業は21教室で行います」 with the old normalizer holds a course-wide room
+  // fact. The fact id does not cover the validity window, so the new normalizer's dated fact has the
+  // same id: the stored fact must get its window instead of being kept as it is.
+  const GROUP = 'group-net';
+  const teams = createTeamsWebNormalizer();
+  const teamsCtx = createNormalizeContext({
+    sourceId: 'teams-web',
+    sourceSystem: 'teams-web',
+    sourceLabel: 'Teams',
+    defaultAuthority: 'collaboration',
+    timezone: 'Asia/Tokyo',
+    now: new Date('2026-10-06T00:00:00Z'),
+  });
+  const teamsOffering = teamsCtx.id('courseOffering', GROUP);
+  const at = '2026-10-06T08:50:00+09:00';
+
+  const chainItem = {
+    sourceType: 'teamsweb.replychain',
+    externalId: 'chain-1',
+    payload: {
+      teamGroupId: GROUP,
+      teamId: '19:team@thread.tacv2',
+      teamName: 'ネットワーク',
+      spaceType: 'class',
+      channelId: '19:general@thread.tacv2',
+      channelName: 'General',
+      instructorMris: ['8:orgid:teacher'],
+      replyChainId: '1790000000001',
+      messages: [
+        {
+          id: '1790000000001',
+          parentMessageId: '1790000000001',
+          type: 'Message',
+          messageType: 'RichText/Html',
+          originalArrivalTime: Date.parse(at),
+          imDisplayName: '教員 一郎',
+          creator: '8:orgid:teacher',
+          content: '<p>本日の授業は21教室で行います</p>',
+          properties: {},
+        },
+      ],
+    },
+  };
+  const offeringItem = {
+    sourceType: 'test.entities',
+    externalId: 'offering',
+    payload: {
+      entities: [
+        {
+          id: teamsOffering,
+          kind: 'courseOffering',
+          title: 'ネットワーク',
+          academicYear: 2026,
+          term: '後期',
+          instructorNames: [],
+          schedule: [],
+        },
+      ],
+    },
+  };
+
+  /** The Teams normalizer; `old` drops the validity window like the version before the day scoping. */
+  const teamsNormalizer = (version: string, old: boolean): Normalizer => ({
+    ...teams,
+    version,
+    sourceTypes: [...teams.sourceTypes, 'test.entities'],
+    normalize: async (item, ctx) => {
+      if (item.sourceType === 'test.entities') return normalizer.normalize(item, ctx);
+      const out = await teams.normalize(item, ctx);
+      if (!old) return out;
+      return {
+        ...out,
+        facts: (out.facts ?? []).map(({ validFrom: _f, validUntil: _u, ...rest }) => rest),
+      };
+    },
+  });
+
+  const register = (n: Normalizer): void =>
+    uc.sync.register({
+      sourceId: 'teams-web',
+      adapter: {
+        ...staticAdapter('teams-web', () => []),
+        sync: () =>
+          Promise.resolve({
+            items: [chainItem, offeringItem],
+            hasMore: false,
+            complete: { sourceTypes: ['teamsweb.replychain', 'test.entities'] },
+          }),
+      },
+      normalizer: n,
+      metadata: {
+        ...meta('teams-web', 'Teams', 'collaboration', ['courses']),
+        rawTypes: ['teamsweb.replychain', 'test.entities'],
+      },
+    });
+
+  const netOn = (date: string) =>
+    uc.context.classesOn(date).find((c) => c.course.title === 'ネットワーク');
+
+  it('the course-wide fact stored by the old version gets its one-day window', async () => {
+    await setup('2026-10-06T00:00:00.000Z', () => [], 2);
+    register(teamsNormalizer('old', true));
+    expect((await uc.sync.sync('teams-web')).ok).toBe(true);
+    uc.identity.confirm(net, teamsOffering);
+    await uc.runPipeline();
+    // the old behaviour: the one-day room became the course's room, for every session
+    expect(uc.context.course(net).room.value).toBe('21教室');
+    expect(netOn('2026-10-13')?.room.value).toBe('21教室');
+
+    register(teamsNormalizer(teams.version, false));
+    const r = await uc.sync.sync('teams-web', { mode: 'full' });
+    expect(r.ok).toBe(true);
+    expect(r.normalized.items).toBeGreaterThan(0);
+    await uc.runPipeline();
+
+    const history = uc.sync.facts.history(teamsOffering, 'room');
+    const live = history.filter((f) => !f.retractedAt);
+    expect(live).toHaveLength(1);
+    expect(live[0]).toMatchObject({
+      value: '21教室',
+      validFrom: jst('2026-10-06', '00:00'),
+      validUntil: jst('2026-10-07', '00:00'),
+    });
+    expect(netOn('2026-10-06')?.room.value).toBe('21教室');
+    expect(netOn('2026-10-13')?.room.value).toBe('工３－３１');
+    expect(uc.context.course(net).room.value ?? '工３－３１').not.toBe('21教室');
+  });
+});
+
+describe('a room post that names no fact-grade day (roomHint)', () => {
+  // 次回 / no day: the normalizer only keeps extra.roomHint; the engine resolves it with the
+  // course's sessions, shows the room next to the timetable's and raises an alert.
+  const GROUP = 'group-net';
+  const teams = createTeamsWebNormalizer();
+  const teamsCtx = createNormalizeContext({
+    sourceId: 'teams-web',
+    sourceSystem: 'teams-web',
+    sourceLabel: 'Teams',
+    defaultAuthority: 'collaboration',
+    timezone: 'Asia/Tokyo',
+    now: new Date('2026-10-06T00:00:00Z'),
+  });
+  const teamsOffering = teamsCtx.id('courseOffering', GROUP);
+
+  async function withHintPost(text: string, at: string): Promise<NormalizeOutput> {
+    const view: RawItemView = {
+      id: 'raw:1',
+      sourceId: 'teams-web',
+      sourceType: 'teamsweb.replychain',
+      externalId: 'chain-1',
+      payload: {
+        teamGroupId: GROUP,
+        teamId: '19:team@thread.tacv2',
+        teamName: 'ネットワーク',
+        spaceType: 'class',
+        channelId: '19:general@thread.tacv2',
+        channelName: 'General',
+        instructorMris: ['8:orgid:teacher'],
+        replyChainId: '1790000000001',
+        messages: [
+          {
+            id: '1790000000001',
+            parentMessageId: '1790000000001',
+            type: 'Message',
+            messageType: 'RichText/Html',
+            originalArrivalTime: Date.parse(at),
+            imDisplayName: '教員 一郎',
+            creator: '8:orgid:teacher',
+            content: `<p>${text}</p>`,
+            properties: {},
+          },
+        ],
+      },
+      fetchedAt: at,
+      sourceUpdatedAt: undefined,
+      contentHash: 'h',
+    };
+    const out = (await teams.normalize(view, teamsCtx)) as NormalizeOutput;
+    await setup('2026-10-06T00:00:00.000Z', () => [], 2);
+    uc.sync.register({
+      sourceId: 'teams-web',
+      adapter: staticAdapter('teams-web', () => []),
+      normalizer: {
+        ...normalizer,
+        normalize: () => ({
+          entities: [
+            {
+              entity: {
+                id: teamsOffering,
+                kind: 'courseOffering',
+                title: 'ネットワーク',
+                academicYear: 2026,
+                term: '後期',
+                instructorNames: [],
+                schedule: [],
+              } as CanonicalEntityInput,
+              ref: { url: 'https://example.ac.jp/' },
+            },
+            ...out.entities,
+          ],
+          facts: out.facts ?? [],
+        }),
+      },
+      metadata: meta('teams-web', 'Teams', 'collaboration', ['courses']),
+    });
+    expect((await uc.sync.sync('teams-web')).ok).toBe(true);
+    uc.identity.confirm(net, teamsOffering);
+    await uc.runPipeline();
+    return out;
+  }
+
+  const netOn = (date: string) =>
+    uc.context.classesOn(date).find((c) => c.course.title === 'ネットワーク');
+
+  it('次回 → the next meeting shows the hinted room next to the timetable’s, and an alert', async () => {
+    const out = await withHintPost('次回の授業は21教室で行います', '2026-10-06T08:50:00+09:00');
+    expect(out.facts ?? []).toEqual([]);
+    const next = netOn('2026-10-13');
+    expect(next?.roomHint).toMatchObject({
+      room: '21教室',
+      basis: 'named-day',
+      otherRoom: '工３－３１',
+    });
+    expect(next?.room.status).toBe('conflict');
+    expect(next?.room.candidates.map((c) => c.value).sort()).toEqual(['21教室', '工３－３１']);
+    expect(next?.room.value).toBe('工３－３１');
+    expect(next?.summary).toContain('食い違');
+    // today's meeting and the one after are untouched
+    expect(netOn('2026-10-06')?.roomHint).toBeUndefined();
+    expect(netOn('2026-10-06')?.room.value).toBe('工３－３１');
+    expect(netOn('2026-10-20')?.roomHint).toBeUndefined();
+    // the course's own room stays the regular one
+    expect(uc.context.course(net).room.value ?? '工３－３１').not.toBe('21教室');
+    const att = attentionRequired(uc, 'watcher', { dryRun: true });
+    const alert = att.items.find((i) => i.kind === 'room_change' && i.line.includes('21教室'));
+    expect(alert).toBeDefined();
+    expect(alert?.line).toContain('教室変更の可能性');
+    expect(alert?.line).toContain('工３－３１');
+    expect(alert?.severity).toBe('info');
+    expect(alert?.citations.length).toBeGreaterThan(0);
+    expect(alert?.recommendedAction).toContain('確かめる');
+  });
+
+  it('no day at all → the first meeting after the post (today’s, still ahead), warning', async () => {
+    await withHintPost('教室を21教室に変更します', '2026-10-06T08:50:00+09:00');
+    const today = netOn('2026-10-06');
+    expect(today?.roomHint?.basis).toBe('next-session');
+    expect(today?.room.status).toBe('conflict');
+    expect(netOn('2026-10-13')?.roomHint).toBeUndefined();
+    const att = attentionRequired(uc, 'watcher', { dryRun: true });
+    const alert = att.items.find((i) => i.kind === 'room_change' && i.line.includes('21教室'));
+    expect(alert?.severity).toBe('warning');
+  });
+
+  it('a hint that names the room the meeting already has changes nothing', async () => {
+    await withHintPost('次回の授業は工３－３１で行います', '2026-10-06T08:50:00+09:00');
+    expect(netOn('2026-10-13')?.roomHint).toBeUndefined();
+    expect(netOn('2026-10-13')?.room.status).toBe('resolved');
+  });
+});

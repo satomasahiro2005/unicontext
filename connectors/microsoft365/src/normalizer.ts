@@ -221,12 +221,9 @@ function normalizeChannelMessage(
     const title = p.subject?.trim() || firstLine(text) || '(無題の投稿)';
     const hint = extractRoomChange(text);
     // Which day the room is for: the post's own (本日), a named one, or the course from now on.
+    const datePhrase = hint ? (hint.datePhrase ?? findDatePhrase(p.subject ?? '')) : undefined;
     const scope = hint
-      ? resolveRoomChangeScope(
-          { ...hint, datePhrase: hint.datePhrase ?? findDatePhrase(p.subject ?? '') },
-          sentAt,
-          ctx.timezone,
-        )
+      ? resolveRoomChangeScope({ ...hint, datePhrase }, sentAt, ctx.timezone)
       : undefined;
     const announcement: NormalizedEntity = {
       entity: {
@@ -242,7 +239,17 @@ function normalizeChannelMessage(
         ...opt('url', p.webUrl),
         extra:
           hint && scope?.kind === 'unresolved'
-            ? { teamId, channelId, roomHint: { room: hint.room, unresolved: true } }
+            ? {
+                teamId,
+                channelId,
+                // The engine has the course's sessions: it resolves 次回 / 来週 / no day later.
+                roomHint: {
+                  room: hint.room,
+                  unresolved: true,
+                  ...(datePhrase ? { datePhrase } : {}),
+                  ...(sentAt ? { postedAt: sentAt } : {}),
+                },
+              }
             : { teamId, channelId },
       },
       ref: { ...ref, authority: ANNOUNCEMENT_AUTHORITY },
@@ -292,7 +299,7 @@ function normalizeChannelMessage(
  * and is not permanent (以降/今後) gives no course-wide room fact any more, only news. Bumping
  * re-derives the stored posts, so the old course-wide hint facts disappear.
  */
-export const NORMALIZER_VERSION = '2';
+export const NORMALIZER_VERSION = '3';
 
 /** Graph raw items → canonical entities (+ the room-change hint fact). Pure and deterministic. */
 export function createMicrosoft365Normalizer(): Normalizer {

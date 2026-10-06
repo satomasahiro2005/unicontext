@@ -89,11 +89,30 @@ export interface ClassItem extends Cited {
   /** The meeting for this student, after personal conditions (group …). */
   effectiveSchedule: EffectiveSchedule;
   // stream D
+  /**
+   * An instructor's post says this meeting is in another room but names no fact-grade day (「次回は
+   * 21教室」, a post without a day). `room` shows both values as a conflict; this says who said what.
+   */
+  roomHint?: RoomHintInfo | undefined;
   /** The room as a place (building, campus) and the Location id derived from it; absent without a room. */
   place?: PlaceInfo | undefined;
   locationId?: string | undefined;
   /** The trip from the previous meeting of the day (or from home) when the student told its length. */
   travelFromPrevious?: TravelInfo | undefined;
+}
+
+/** An unconfirmed room from an announcement (`extra.roomHint`), resolved to one meeting. */
+export interface RoomHintInfo {
+  /** The room the post names. */
+  room: string;
+  announcementId: string;
+  title: string;
+  postedAt: string | undefined;
+  /** How the meeting was chosen: the day the post names, or the next meeting after the post. */
+  basis: 'named-day' | 'next-session';
+  /** The room the timetable / facts give for the meeting (absent when none). */
+  otherRoom: string | undefined;
+  citations: Citation[];
 }
 
 export interface RawSchedule {

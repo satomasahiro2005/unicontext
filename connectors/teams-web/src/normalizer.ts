@@ -57,7 +57,7 @@ import {
  * and is not permanent (以降/今後) gives no course-wide room fact any more, only news. Bumping
  * re-derives the stored posts, so the old course-wide hint facts disappear.
  */
-export const NORMALIZER_VERSION = '3';
+export const NORMALIZER_VERSION = '4';
 export const INSTRUCTOR_AUTHORITY = 'instructor-announcement';
 export const SUBMISSION_AUTHORITY = 'submission-system';
 const ROOM_HINT_CONFIDENCE = 0.6;
@@ -236,12 +236,9 @@ function normalizeReplyChain(p: ReplyChainPayload, ctx: NormalizeContext): Norma
             }).importance;
       const hint = courseOfferingId ? extractRoomChange(text) : undefined;
       // Which day the room is for: the post's own (本日), a named one, or the course from now on.
+      const datePhrase = hint ? (hint.datePhrase ?? findDatePhrase(subject ?? '')) : undefined;
       const scope = hint
-        ? resolveRoomChangeScope(
-            { ...hint, datePhrase: hint.datePhrase ?? findDatePhrase(subject ?? '') },
-            sentAt,
-            ctx.timezone,
-          )
+        ? resolveRoomChangeScope({ ...hint, datePhrase }, sentAt, ctx.timezone)
         : undefined;
       entities.push({
         entity: {
@@ -258,7 +255,16 @@ function normalizeReplyChain(p: ReplyChainPayload, ctx: NormalizeContext): Norma
           url,
           extra:
             hint && scope?.kind === 'unresolved'
-              ? { ...extra, roomHint: { room: hint.room, unresolved: true } }
+              ? {
+                  ...extra,
+                  // The engine has the course's sessions: it resolves 次回 / 来週 / no day later.
+                  roomHint: {
+                    room: hint.room,
+                    unresolved: true,
+                    ...(datePhrase ? { datePhrase } : {}),
+                    ...(sentAt ? { postedAt: sentAt } : {}),
+                  },
+                }
               : extra,
         },
         ref: { ...ref, authority: INSTRUCTOR_AUTHORITY },
