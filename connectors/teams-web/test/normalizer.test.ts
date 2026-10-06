@@ -127,17 +127,121 @@ describe('teams-web normalizer', () => {
     expect((card as { body: string }).body).toBe('課題: 第2回レポート（合成）（期限 10月9日）');
   });
 
-  it('extracts a room hint from an instructor post', async () => {
+  it('a room post that names no day is news, not a room fact of the course', async () => {
     const outs = await normalizeAll(await syncItems());
-    const facts = outs.flatMap((o) => o.facts ?? []);
-    expect(facts).toEqual([
-      expect.objectContaining({
+    // 「来週の授業は201講義室で行います。」: 来週 alone cannot be tied to a session here.
+    expect(outs.flatMap((o) => o.facts ?? [])).toEqual([]);
+    const ann = entities(outs).find(
+      (e) =>
+        e.entity.kind === 'announcement' &&
+        (e.entity.extra as Record<string, unknown> | undefined)?.['roomHint'] !== undefined,
+    );
+    expect(ann?.entity).toMatchObject({
+      kind: 'announcement',
+      extra: { roomHint: { room: '201講義室', unresolved: true } },
+    });
+  });
+
+  describe('room changes are scoped to the session they name', () => {
+    // The fixture's 「来週の授業は201講義室で行います。」 post (Fri 2026-10-02 JST), reworded.
+    async function roomPost(content: string, arrival?: number): Promise<NormalizeOutput> {
+      const items = await syncItems();
+      const item = items.find((i) => JSON.stringify(i.payload).includes('201講義室'));
+      if (!item) throw new Error('fixture post not found');
+      const payload = structuredClone(item.payload) as {
+        messages: { content: string; originalArrivalTime: number }[];
+      };
+      const first = payload.messages[0];
+      if (!first) throw new Error('no message');
+      first.content = `<p>${content}</p>`;
+      if (arrival !== undefined) first.originalArrivalTime = arrival;
+      return normalizer.normalize(toView({ ...item, payload }), ctx);
+    }
+    // 2026-10-06 10:00 JST (Tuesday)
+    const TUE = Date.parse('2026-10-06T01:00:00Z');
+
+    it('本日 is the day of the post and nothing else', async () => {
+      const out = await roomPost('本日の授業は21教室で行います', TUE);
+      expect(out.facts).toHaveLength(1);
+      expect(out.facts?.[0]).toMatchObject({
         subject: ctx.id('courseOffering', CLASS_GROUP),
         predicate: 'room',
-        value: '201講義室',
+        value: '21教室',
         origin: 'extracted',
-      }),
-    ]);
+        confidence: 0.6,
+        evidence: '本日の授業は21教室で行います',
+        validFrom: '2026-10-05T15:00:00.000Z',
+        validUntil: '2026-10-06T15:00:00.000Z',
+      });
+      const ann = out.entities.find((e) => e.entity.kind === 'announcement');
+      expect((ann?.entity.extra as Record<string, unknown>)['roomHint']).toBeUndefined();
+    });
+
+    it('a named date, with its weekday checked', async () => {
+      const out = await roomPost('10月13日(火)の授業は21教室で行います', TUE);
+      // 10/13/2026 is a Tuesday: dated.
+      expect(out.facts?.[0]).toMatchObject({
+        validFrom: '2026-10-12T15:00:00.000Z',
+        validUntil: '2026-10-13T15:00:00.000Z',
+      });
+      const wrong = await roomPost('10月13日(月)の授業は21教室で行います', TUE);
+      expect(wrong.facts ?? []).toEqual([]);
+    });
+
+    it('no day: no fact, an announcement extra roomHint.unresolved', async () => {
+      const out = await roomPost('教室を21教室に変更します', TUE);
+      expect(out.facts ?? []).toEqual([]);
+      const ann = out.entities.find((e) => e.entity.kind === 'announcement');
+      expect(ann?.entity.extra).toMatchObject({ roomHint: { room: '21教室', unresolved: true } });
+    });
+
+    it('次回: no fact, the hint keeps the date phrase and the post time for the engine', async () => {
+      const out = await roomPost('次回の授業は21教室で行います', TUE);
+      expect(out.facts ?? []).toEqual([]);
+      const ann = out.entities.find((e) => e.entity.kind === 'announcement');
+      expect(ann?.entity.extra).toMatchObject({
+        roomHint: {
+          room: '21教室',
+          unresolved: true,
+          datePhrase: '次回',
+          postedAt: '2026-10-06T01:00:00.000Z',
+        },
+      });
+    });
+
+    it('a start day with から is course-wide from that day, not a one-day change', async () => {
+      const out = await roomPost('10/13から21教室で行います', TUE);
+      expect(out.facts).toHaveLength(1);
+      expect(out.facts?.[0]).toMatchObject({
+        value: '21教室',
+        validFrom: '2026-10-12T15:00:00.000Z',
+      });
+      expect(out.facts?.[0]).not.toHaveProperty('validUntil');
+    });
+
+    it('来週から / 次回から stay course-wide, as before: a fact, no news-only hint', async () => {
+      for (const text of ['来週から21教室で行います', '次回から21教室で行います']) {
+        const out = await roomPost(text, TUE);
+        expect(out.facts).toHaveLength(1);
+        expect(out.facts?.[0]).not.toHaveProperty('validFrom');
+        expect(out.facts?.[0]).not.toHaveProperty('validUntil');
+        const ann = out.entities.find((e) => e.entity.kind === 'announcement');
+        expect((ann?.entity.extra as Record<string, unknown>)['roomHint']).toBeUndefined();
+      }
+    });
+
+    it('今後 stays course-wide (no validity window)', async () => {
+      const out = await roomPost('今後は21教室で行います', TUE);
+      expect(out.facts).toHaveLength(1);
+      expect(out.facts?.[0]).toMatchObject({ value: '21教室' });
+      expect(out.facts?.[0]).not.toHaveProperty('validFrom');
+      expect(out.facts?.[0]).not.toHaveProperty('validUntil');
+    });
+
+    it('a greeting with 今後とも does not make a one-day change permanent', async () => {
+      const out = await roomPost('本日は21教室で行います。今後ともよろしくお願いします。', TUE);
+      expect(out.facts?.[0]).toMatchObject({ validUntil: '2026-10-06T15:00:00.000Z' });
+    });
   });
 
   it("mirrors Assignments and the student's submission state (never sets it)", async () => {

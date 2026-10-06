@@ -1,5 +1,11 @@
 import { htmlToText } from '@unicontext/adapter-browser';
-import { DEFAULT_SENSITIVE_KEY_PATTERN, zonedParts, zonedTime } from '@unicontext/core';
+import {
+  DEFAULT_SENSITIVE_KEY_PATTERN,
+  findDatePhrase,
+  isPermanentChange,
+  zonedParts,
+  zonedTime,
+} from '@unicontext/core';
 
 /** Microsoft's global Assignments bot / app ids (the same in every tenant). */
 export const ASSIGNMENTS_BOT_MRI = '28:7254e396-868c-4bf7-96b2-6fe763590b5a';
@@ -400,17 +406,35 @@ const ROOM_PATTERNS: RegExp[] = [
   new RegExp(`(${ROOM_WITH_SUFFIX})\\s*(?:で|にて)\\s*(?:行い|行う|実施|開催|おこな)`),
 ];
 
-export function extractRoomChange(text: string): { room: string; sentence: string } | undefined {
+export interface RoomChangeHint {
+  room: string;
+  /** The sentence the room was read from. */
+  sentence: string;
+  /** The words that name the day (「本日」「10/6(月)」「次回」), from this sentence or the one before. */
+  datePhrase?: string;
+  /** 以降 / 今後 / これから: the change is for the course from now on, not for one day. */
+  permanent: boolean;
+}
+
+export function extractRoomChange(text: string): RoomChangeHint | undefined {
   for (const re of ROOM_PATTERNS) {
     const m = re.exec(text);
     if (!m?.[1]) continue;
     const room = m[1].normalize('NFKC').replace(/\s+/g, '');
-    const sentence =
-      text
-        .split(/(?<=[。！？!?\n])/)
-        .map((x) => x.trim())
-        .find((x) => x.includes(m[0])) ?? m[0];
-    return { room, sentence: sentence.slice(0, 200) };
+    const sentences = text
+      .split(/(?<=[。！？!?\n])/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const at = sentences.findIndex((x) => x.includes(m[0]));
+    const sentence = sentences[at] ?? m[0];
+    const near = [sentence, sentences[at - 1]].filter((x): x is string => Boolean(x));
+    const datePhrase = near.map((x) => findDatePhrase(x)).find(Boolean);
+    return {
+      room,
+      sentence: sentence.slice(0, 200),
+      ...(datePhrase ? { datePhrase } : {}),
+      permanent: near.some((x) => isPermanentChange(x)),
+    };
   }
   return undefined;
 }

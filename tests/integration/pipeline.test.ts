@@ -167,7 +167,8 @@ describe('integration: seed → today context', () => {
     const course = getView(uc.context, 'course', { courseOfferingId: teamsDb });
     expect(course.course.id).toBe(lcuDb);
     expect(course.instructors).toEqual(expect.arrayContaining(['山田 太郎']));
-    expect(course.room.status).toBe('conflict'); // the Teams post is still in effect today
+    // The Teams post moves today's class only (a room fact dated to 10/1): the course keeps its room.
+    expect(course.room).toMatchObject({ status: 'resolved', value: '情報学部2号館21教室' });
     expect(course.conflicts).toHaveLength(1);
     expect(uc.context.tomorrow().classes.map((c) => c.course.title)).toEqual(['情報ネットワーク']);
     expect(uc.context.admin().sources.find((s) => s.sourceId === 'lcu')).toMatchObject({

@@ -63,6 +63,14 @@ import {
   type TaskProgressDeps,
   undoTaskProgress,
 } from './task-progress.js';
+import {
+  placeKey,
+  placeLabel,
+  TRAVEL_MODES,
+  TRAVEL_PREDICATE,
+  travelSubject,
+  travelValue,
+} from './places.js';
 
 /*
  * Writes from AI clients (§11, §19–22, §47–49, §74): lectures, deadlines, notes and things to do
@@ -267,6 +275,19 @@ export interface AddTaskInput extends Common {
    * as details of that assignment, whose due date and status come from its source.
    */
   assignmentId?: string | undefined;
+}
+
+/**
+ * How long a trip takes, in the student's words (set_travel_time): `from` is `home` or a place named
+ * in words (「工学部」「情13」), `to` a place. Never looked up on a map.
+ */
+export interface SetTravelTimeInput extends Common {
+  from: string;
+  to: string;
+  minutes: number;
+  mode?: (typeof TRAVEL_MODES)[number] | undefined;
+  /** What the student said (the quote). */
+  statement: string;
 }
 
 /** Fields every item of an ingest_lecture call carries: it was said in the recording. */
@@ -608,6 +629,14 @@ export class AdditionsService {
 
   async addTask(client: AdditionClient, input: AddTaskInput): Promise<AdditionResult> {
     return this.write(client, this.taskSpec(input));
+  }
+
+  /**
+   * set_travel_time: a trip the student says takes N minutes. Applied at once as the student's own
+   * word (a user-origin `travel:minutes` fact); the client can retract it until the owner confirms.
+   */
+  async setTravelTime(client: AdditionClient, input: SetTravelTimeInput): Promise<AdditionResult> {
+    return this.write(client, this.placeSpec(input));
   }
 
   /** set_course_condition: the student's group in a course (unconfirmed until the owner confirms). */
@@ -1077,6 +1106,68 @@ export class AdditionsService {
           ownEntityIds: [],
           factIds: [...new Set(ids)],
           stored: { predicate: SESSION_RULE_PREDICATE, rows: rows.length },
+        };
+      },
+    };
+  }
+
+  private placeSpec(input: SetTravelTimeInput): WriteSpec {
+    if (!input.from.trim() || !input.to.trim()) throw new ValidationError('from and to are needed');
+    const from = placeKey(input.from);
+    const to = placeKey(input.to);
+    if (from === to) throw new ValidationError('from and to are the same place');
+    if (!Number.isInteger(input.minutes) || input.minutes < 1 || input.minutes > 300)
+      throw new ValidationError('minutes must be a whole number from 1 to 300');
+    if (input.mode !== undefined && !TRAVEL_MODES.includes(input.mode))
+      throw new ValidationError(`mode must be one of ${TRAVEL_MODES.join(', ')}`);
+    const statement = input.statement.trim().slice(0, ADDITION_LIMITS.evidence);
+    if (!statement) throw new ValidationError('statement is empty: quote what the student said');
+    const value = travelValue(from, to, input.minutes, input.mode);
+    return {
+      tool: 'set_travel_time',
+      kind: 'place',
+      input,
+      via: viaOf(input),
+      course: undefined,
+      title: `移動時間: ${placeLabel(from)}→${placeLabel(to)} ${input.minutes}分`,
+      dedupeKey: `place|${from}|${to}|${input.minutes}|${input.mode ?? ''}`,
+      dueAt: undefined,
+      data: {
+        from,
+        to,
+        minutes: input.minutes,
+        ...(input.mode ? { mode: input.mode } : {}),
+        evidence: statement,
+      },
+      apply: (a, ref) => {
+        const now = this.now().toISOString();
+        // The newest statement of a pair replaces the older ones.
+        const subject = travelSubject(from);
+        const older = this.deps.resolver.facts
+          .active({ subjects: [subject], predicate: TRAVEL_PREDICATE })
+          .filter((f) => (f.value as Record<string, JsonValue>)['to'] === to);
+        this.deps.resolver.facts.retract(
+          older.filter((f) => !a.factIds.includes(f.id)).map((f) => f.id),
+          now,
+        );
+        // The student said it: a user fact, shown at once, retractable by this client.
+        const fact = this.deps.resolver.facts.put({
+          id: factId(ref.id, subject, TRAVEL_PREDICATE, value),
+          subject: subject as EntityId,
+          predicate: TRAVEL_PREDICATE,
+          value,
+          origin: 'user',
+          confidence: 1,
+          observedAt: now,
+          sourceReferenceId: ref.id,
+          producer: { type: 'user', id: 'self' },
+          evidence: statement,
+        });
+        return {
+          entityIds: [],
+          ownEntityIds: [],
+          factIds: [fact.id],
+          stored: { predicate: TRAVEL_PREDICATE, from, to, minutes: input.minutes },
         };
       },
     };

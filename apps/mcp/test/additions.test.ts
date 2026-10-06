@@ -27,6 +27,7 @@ const WRITE_TOOL_NAMES = [
   'add_deadline',
   'add_note',
   'add_task',
+  'set_travel_time',
   'set_course_condition',
   'add_session_rule',
   'list_my_additions',

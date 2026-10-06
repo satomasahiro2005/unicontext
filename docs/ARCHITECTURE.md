@@ -938,6 +938,72 @@ topic, rule {provenance, confirmed, source, documentTitle, evidence}, conflicts,
   「teams 登録について」 → 「teams 登録」, 「履修登録期限(一般): …」 → its label); the sentence stays in
   `evidence`.
 
+#### Calendar events, places and travel (`schedule-events.ts`, `places.ts`, core `relative-date.ts`)
+
+What the student can actually do at a given time is more than the timetable: calendar events (Outlook)
+take time, a room change applies to one meeting, and getting from one building to the next takes
+minutes. Everything below is deterministic and read-only.
+
+- **A room change names its session.** `resolveSessionDate(text, postedAt, tz, sessionsOfCourse?)`
+  (core) reads 本日 / 今日 / 明日 / 明後日 / 次回 / 来週 / 来週の火曜 / `M/D` / `M月D日` / (曜日) against the
+  time of the post, in the post's timezone, and returns `{date, basis}` or undefined (a date whose
+  weekday does not match is refused; 次回 and a bare 来週 need the course's sessions and are undefined
+  without them). The Teams (`teams-web`) and Microsoft 365 normalizers' `extractRoomChange` also return
+  the date phrase near the matched sentence (this sentence or the one before) and whether the text says
+  以降 / 今後 / これから (`permanent`; 「今後とも」 is a greeting). `resolveRoomChangeScope` then decides:
+  - a day: the `room` fact (confidence 0.6, evidence = the sentence) gets `validFrom` / `validUntil` = that
+    local day, like LiveCampusU's 講義室変更 notice. The meeting of that day shows the new room
+    (`resolve(..., {at})`), every other day the regular one;
+  - 以降 / 今後 / これから, or a start day with から / より (「10/13から21教室で行います」「来週から」「次回から」)
+    without a resolvable day: course-wide, as before; with a day (「10/13以降」「10/13から」): course-wide
+    from that day (a permanent move is never a one-day change);
+  - no day and not permanent (「次回は21教室」, a post without a day): **no room fact**. The announcement
+    carries `extra.roomHint {room, unresolved: true, datePhrase?, postedAt?}`. The normalizer does not
+    know the course's sessions; the engine does: `classItem` resolves the hint with
+    `resolveRoomChangeScope(..., sessionsOfCourse)` (the day the phrase names, else the first class meeting
+    after the post, within 60 days) and shows the hinted room next to the timetable's as a `conflict`
+    (`room.candidates`, the post marked 未確認; `ClassItem.roomHint` says who said what). A hint that
+    names the room the meeting already has changes nothing. Attention adds a `room_change` alert
+    (【教室変更の可能性】, warning for today / tomorrow, info within the next 7 days) so a student who never
+    checks is still told.
+    The course-level `room` of `get_course` is resolved without any fact that has a `validUntil`: a
+    one-session change never becomes the course's room.
+    Normalizer versions went up (teams-web 4, microsoft365 3). **One-shot re-derive:** the stored posts are
+    normalized again on the next run. A fact id does not cover the validity window, so sync-engine
+    `assert()` re-puts an active fact whose `validFrom` / `validUntil` / confidence / evidence differ from
+    the newly derived one: the old course-wide copy of a 「本日は21教室」 gets its one-day window, and
+    posts that no longer yield a fact are retracted as stale.
+- **Busy time.** `busyIntervals(uc, from, to)` merges non-cancelled class sessions (not self-study), timed
+  calendar events and the trips below into `[{id, kind: class | event | travel, title, start, end,
+location?, citations}]`. Left out: all-day events, the holiday categories (`holiday` / 祝日 / 休日),
+  an event that overlaps a class of its own course (the calendar copy: same course, or the course's title
+  in the event's title) and an identical event from a second calendar. `busyConflicts` lists the overlaps
+  of an event with a class or another event `[{a, b, minutes, summary}]`; two classes never overlap here
+  (the timetable's own business) and a meeting whose attendance is `unknown` (group not told) is busy time
+  but never reported as an overlap.
+- **Where it shows.** `DayContext` / `WeekContext` get `events` (timed events of the day or week with
+  `location`, `place`, `travelFromPrevious`, citations) and `overlaps`; both are absent when empty.
+  `student_state.today` carries them. The next-action engine counts events and trips as busy time
+  (`nextActionBusy`, a union so a trip running into a class is not subtracted twice; a host without the
+  hook is classes only). The attention alerts add 【予定が重なっています】 (today warning, tomorrow info; kind
+  `class_soon`) and 【場所変更】 (an event whose `location` changed since the client's last call, from the
+  change events with `location` in `changedFields`; kind `room_change`).
+- **Places.** `normalizeRoom(raw)` → `{building?, room, campus?}` (NFKC; 「情１３」 → 情 / 情13, 「工５－２２」
+  → 工 / 工5-22 / 浜松, first of several rooms, 「他」 dropped). The building is the area travel hangs on
+  (every 工N号館 room is 工). Building and campus rules live in `places.ts` with a TODO: ProfileSchema has
+  no `places` section yet, so `profile.yaml` cannot carry them. `ClassItem.place` / `locationId` and the
+  event's `place` come from it in the view layer only: the Location id is derived from the place key
+  (`stableId('location', 'place', key)`), no connector writes Location entities and nothing is stored.
+  Online locations (Zoom, a Teams link, オンライン) are no place.
+- **Travel time.** The student's own word, never a maps lookup: MCP `set_travel_time {from: home | place
+text, to, minutes, mode?: walk | bike | train | bus | car, statement}` (write scope; addition kind
+  `place`, tool `set_travel_time`) stores a user-origin fact `travel:minutes` on subject `location:<from
+key>` with value `{to, minutes, mode?, fromLabel, toLabel}` at once, cited to the addition, retractable
+  with `retract_addition` until the owner confirms. The newest statement of a pair replaces the older one;
+  a trip counts both ways. Views put `travelFromPrevious {minutes, from, mode?, citations}` on each class
+  and event whose place differs from the previous meeting of the day (the first meeting: from 自宅);
+  the trip is busy time `[start − minutes, start)`.
+
 #### Whether the student takes a course (`condition:enrollment`, task-engine `enrollment-declaration.ts`)
 
 Registration outcomes at Shizuoka (履修の許可・不許可, 抽選の結果, 取消) reach the student **by

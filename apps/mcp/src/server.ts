@@ -96,6 +96,7 @@ import {
   runStudentState,
   STUDENT_STATE_TOOL,
 } from './next-action.js';
+import { registerPlaceTools } from './places.js';
 import { registerTaskProgressTools, TASK_PROGRESS_INSTRUCTION_JA } from './task-progress.js';
 import { trimCourseForAi } from './trim.js';
 import {
@@ -622,6 +623,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {},
     () => view('week'),
   );
+
+  registerPlaceTools({ uc, caller, writeTool });
 
   // ----- what to do now / decision material for scheduled tasks -----
 

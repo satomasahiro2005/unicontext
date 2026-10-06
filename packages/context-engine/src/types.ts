@@ -88,6 +88,31 @@ export interface ClassItem extends Cited {
   rawSchedule?: RawSchedule | undefined;
   /** The meeting for this student, after personal conditions (group …). */
   effectiveSchedule: EffectiveSchedule;
+  // stream D
+  /**
+   * An instructor's post says this meeting is in another room but names no fact-grade day (「次回は
+   * 21教室」, a post without a day). `room` shows both values as a conflict; this says who said what.
+   */
+  roomHint?: RoomHintInfo | undefined;
+  /** The room as a place (building, campus) and the Location id derived from it; absent without a room. */
+  place?: PlaceInfo | undefined;
+  locationId?: string | undefined;
+  /** The trip from the previous meeting of the day (or from home) when the student told its length. */
+  travelFromPrevious?: TravelInfo | undefined;
+}
+
+/** An unconfirmed room from an announcement (`extra.roomHint`), resolved to one meeting. */
+export interface RoomHintInfo {
+  /** The room the post names. */
+  room: string;
+  announcementId: string;
+  title: string;
+  postedAt: string | undefined;
+  /** How the meeting was chosen: the day the post names, or the next meeting after the post. */
+  basis: 'named-day' | 'next-session';
+  /** The room the timetable / facts give for the meeting (absent when none). */
+  otherRoom: string | undefined;
+  citations: Citation[];
 }
 
 export interface RawSchedule {
@@ -483,6 +508,11 @@ export interface DayContext<V extends 'today' | 'tomorrow'> extends BundleBase<V
    * a 休講 of the group schedule), with the reason: shown, never silently dropped.
    */
   notAttending?: ClassItem[] | undefined;
+  // stream D
+  /** The day's calendar events (Outlook …): busy time that is not a class, with location. */
+  events?: CalendarEventItem[] | undefined;
+  /** Events that overlap a class or each other. */
+  overlaps?: ScheduleOverlap[] | undefined;
 }
 /** The student's own weekly self-study slot of an offering (自習), as stored and as text. */
 export interface PaceSlotView {
@@ -556,6 +586,11 @@ export interface WeekContext extends BundleBase<'week'> {
   enrollmentNotes?: EnrollmentNote[] | undefined;
   /** What to do now (next-action engine), compact. */
   next?: NextActionSummary | undefined;
+  // stream D
+  /** The week's calendar events, with location (see DayContext.events). */
+  events?: CalendarEventItem[] | undefined;
+  /** Events that overlap a class or each other. */
+  overlaps?: ScheduleOverlap[] | undefined;
 }
 
 export interface CourseContext extends BundleBase<'course'> {
@@ -702,4 +737,59 @@ export interface AdminContext extends BundleBase<'admin'> {
   pendingLinks: IdentityLink[];
   /** Enrolled 時間割外 / 集中講義 courses of the current term without self-study slots. */
   unscheduledWithoutPace: { course: CourseRef; scheduleType: 'unscheduled' | 'intensive' }[];
+}
+
+// stream D: calendar events, places and travel
+
+/** A room or an event's location as a place (places.ts): building, campus, and its Location id. */
+export interface PlaceInfo {
+  building?: string | undefined;
+  room: string;
+  campus?: string | undefined;
+  locationId: string;
+}
+
+/** A trip the student told UniContext about (set_travel_time), shown on the meeting it leads to. */
+export interface TravelInfo {
+  minutes: number;
+  /** 自宅 or the place of the previous meeting. */
+  from: string;
+  mode?: string | undefined;
+  citations: Citation[];
+}
+
+/** One busy stretch: a class, a calendar event, or the trip before one of them. */
+export interface BusyItem {
+  id: string;
+  kind: 'class' | 'event' | 'travel';
+  title: string;
+  /** ISO instants. */
+  start: string;
+  end: string;
+  location?: string | undefined;
+  citations: Citation[];
+}
+
+/** Two busy stretches that overlap, and for how long. */
+export interface ScheduleOverlap {
+  a: BusyItem;
+  b: BusyItem;
+  minutes: number;
+  /** 「13:00-14:00 ゼミ（工5-22）が 2限 データベース と20分重なっています」 */
+  summary: string;
+  citations: Citation[];
+}
+
+/** A calendar event (not an all-day or holiday entry) as the views list it. */
+export interface CalendarEventItem extends Cited {
+  id: string;
+  title: string;
+  startsAt: string;
+  endsAt: string | undefined;
+  location?: string | undefined;
+  place?: PlaceInfo | undefined;
+  category?: string | undefined;
+  url?: string | undefined;
+  travelFromPrevious?: TravelInfo | undefined;
+  summary: string;
 }

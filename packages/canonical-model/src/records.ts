@@ -101,6 +101,7 @@ export const ADDITION_TOOLS = [
   'add_deadline',
   'add_note',
   'add_task',
+  'set_travel_time',
   'set_course_condition',
   'add_session_rule',
   'record_task_progress',
@@ -115,6 +116,8 @@ export const ADDITION_KINDS = [
   'prep',
   'note',
   'task',
+  /** A place the student told about: how long a trip takes (set_travel_time). */
+  'place',
   /** A personal condition in a course (group B). */
   'condition',
   /** Dated meetings per group (a group schedule). */

@@ -15,3 +15,4 @@ export * from './term-parts.js';
 export * from './importance.js';
 export * from './deadline-extractor.js';
 export * from './markup.js';
+export * from './relative-date.js';

@@ -116,6 +116,16 @@ describe('extractRoomChange', () => {
   it('教室を201に変更', () => {
     expect(extractRoomChange('教室を201に変更します')?.room).toBe('201');
   });
+  it('returns the words that name the day, and whether the change is permanent', () => {
+    expect(extractRoomChange('本日の授業は21教室で行います。')).toMatchObject({
+      datePhrase: '本日',
+      permanent: false,
+    });
+    // the sentence before counts: 「明日の授業について。21教室で行います。」
+    expect(extractRoomChange('明日の授業について。\n21教室で行います。')?.datePhrase).toBe('明日');
+    expect(extractRoomChange('今後は21教室で行います。')).toMatchObject({ permanent: true });
+    expect(extractRoomChange('教室を201に変更します')?.datePhrase).toBeUndefined();
+  });
   it('ignores unrelated text', () => {
     expect(
       extractRoomChange('教科書を持参してください。教室の場所は変わりません。'),
