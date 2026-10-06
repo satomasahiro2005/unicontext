@@ -5,12 +5,18 @@ import {
   type AuthResult,
   type ConnectorMetadata,
   defineMetadata,
+  type DetailFetchResult,
   type SourceAdapter,
   type SyncInput,
   type SyncResult,
 } from '@unicontext/connector-sdk';
 import { ConfigError } from '@unicontext/core';
-import { runMappedResources, type ResourceCaller, type RunOptions } from './runner.js';
+import {
+  runMappedDetails,
+  runMappedResources,
+  type ResourceCaller,
+  type RunOptions,
+} from './runner.js';
 import { loadMappingFile, type MappingSpec, parseMappingSpec } from './spec.js';
 
 /**
@@ -20,12 +26,60 @@ import { loadMappingFile, type MappingSpec, parseMappingSpec } from './spec.js';
 export abstract class MappedSourceAdapter implements SourceAdapter {
   readonly version = '1.0.0';
   private readonly parentCache = new Map<string, unknown[]>();
+  /** `forEach.refreshAfter` bookkeeping, kept for the adapter's lifetime (see RunOptions). */
+  private readonly fetchLog = new Map<string, number>();
+  /**
+   * On-request detail fetch (DetailFetchAdapter), present only when the mapping declares
+   * `details`: runs the rule's resources for each requested item, one item at a time.
+   */
+  readonly fetchDetails?: (
+    requests: readonly { externalId: string; sourceType?: string; previousPayload?: unknown }[],
+    options?: { signal?: AbortSignal },
+  ) => Promise<DetailFetchResult>;
 
   constructor(
     readonly id: string,
     readonly spec: MappingSpec,
     protected readonly runOptions: RunOptions = {},
-  ) {}
+  ) {
+    if (spec.details.length > 0)
+      this.fetchDetails = (requests, options = {}) => this.runDetails(requests, options);
+  }
+
+  private async runDetails(
+    requests: readonly { externalId: string; sourceType?: string; previousPayload?: unknown }[],
+    options: { signal?: AbortSignal },
+  ): Promise<DetailFetchResult> {
+    const caller = await this.caller();
+    const out: DetailFetchResult = { items: [], results: [], warnings: [] };
+    for (const r of requests) {
+      if (r.previousPayload === undefined) {
+        out.results.push({ externalId: r.externalId, status: 'notFound' });
+        continue;
+      }
+      const res = await runMappedDetails(
+        this.spec,
+        caller,
+        { externalId: r.externalId, sourceType: r.sourceType, payload: r.previousPayload },
+        {
+          ...this.runOptions,
+          fetchLog: this.fetchLog,
+          ...(options.signal ? { signal: options.signal } : {}),
+        },
+      );
+      out.items.push(...res.items);
+      for (const w of res.warnings) if (!out.warnings.includes(w)) out.warnings.push(w);
+      // A failed call of the run (a warning for fan-outs) makes the item failed; what was read is
+      // still returned and ingested.
+      const error = res.error ?? res.warnings[0];
+      out.results.push(
+        error
+          ? { externalId: r.externalId, status: 'failed', error }
+          : { externalId: r.externalId, status: 'fetched' },
+      );
+    }
+    return out;
+  }
 
   protected abstract caller(): Promise<ResourceCaller>;
   abstract authenticate(): Promise<AuthResult>;
@@ -41,6 +95,7 @@ export abstract class MappedSourceAdapter implements SourceAdapter {
     return runMappedResources(this.spec, caller, input, {
       ...this.runOptions,
       parentCache: this.parentCache,
+      fetchLog: this.fetchLog,
     });
   }
 }

@@ -22,14 +22,34 @@
 #                                       ISO timestamps from Ed's API (never local strings)
 #   get_lesson({lessonId})           -> the summary plus {outline?, lockedAt?, createdAt?,
 #                                         updatedAt?, slides?: [{id, index, title?, type?, status?,
-#                                         content? (Ed document XML)}]}
-# The server also offers write tools (create_thread, reply_thread, submit_slide, mark_lessons_read,
-# ...). They are never mapped here (§50); posting stays off unless EDSTEM_ALLOW_POSTING=1, which the
-# UniContext source config must not set.
+#                                         content? (Ed document XML), fileUrl? (pdf slides)}]}
+#                                       slide types seen: document, quiz, pdf, postgres (SQL
+#                                       challenge, prompt in content), code, ...
+#   list_slide_questions({slideId})  -> [{id, slideId, index, type, content (Ed XML), answers:
+#                                         [choice], multipleSelection?, explanation?, solution?}]
+#                                       the questions of a quiz slide (質問1, 質問2, ... in Ed's
+#                                       order; `index` is 0- or 1-based depending on the course)
+#   list_slide_responses({slideId})  -> [{questionId, userId, createdAt?, correct?, data: {content?
+#                                         | choices?}}] the student's own saved answers (on request)
+#   list_lesson_files({lessonId})    -> [{filename, url, mediaType?, slideId?, slideTitle?, source}]
+#                                       Ed-hosted files of a lesson (on request)
+# The server also offers write tools (create_thread, reply_thread, submit_slide, submit_slide_answer,
+# mark_lessons_read, ...). They are never mapped here (§50); posting stays off unless
+# EDSTEM_ALLOW_POSTING=1, which the UniContext source config must not set. Reading a quiz's
+# questions or saved answers never views, saves or submits anything.
 #
 # Call budget: list_threads returns no body, so the opening post needs get_thread. To stay gentle
 # with Ed, details are fetched only for announcements and for threads created or updated in the last
 # 30 days; older details already stored stay as they were (the detail resource is not `complete`).
+# Lessons: get_lesson for unfinished assignment lessons on every sync (their deadline is often only
+# in the text); every other lesson, and the questions of each quiz slide, at most once a day per
+# daemon process (forEach.refreshAfter). The student's saved answers and the lesson file list are
+# read only on request (get_assignment -> `details`), never by a sync.
+#
+# Lesson text for search: each lesson becomes a document (its slides' text in order), each quiz
+# question a document titled 「<lesson> 質問<n>」 (with its choices), each Ed-hosted slide file
+# (pdf slide) a document with its link — all tied to the course and cited with the Ed lesson URL.
+# Answer keys (solution / explanation) are never mapped.
 #
 # Region: Ed accounts live in one region. The API host is the source env EDSTEM_BASE_URL (the
 # server's default https://edstem.org/api/ is the AU region; US is https://us.edstem.org/api/) and
@@ -62,7 +82,7 @@ id: edstem
 product: edstem
 sourceLabel: Ed Discussion
 description: EdStem discussion boards via the edstem-mcp server (courses, threads, answers, comments)
-version: '3'
+version: '4'
 testedVersion: 0.7.2
 defaultAuthority: discussion
 capabilities: [courses, announcements, messages, assignments]
@@ -120,12 +140,14 @@ resources:
     optional: true
     capability: assignments
 
-  # Lesson text for unfinished assignment lessons (the deadline is often only written there).
+  # Every lesson's slides (text, quiz slide ids, slide files). Unfinished assignment lessons on
+  # every sync (the deadline is often only written there), every other lesson at most once a day.
   - name: lesson_details
     forEach:
       resource: lessons
       as: lesson
-      where: >-
+      refreshAfter: 24h
+      always: >-
         $not(status = "completed") and
         ($exists(dueAt) or
         $contains(title, /課題|レポート|宿題|提出|テスト|クイズ|quiz|assignment|homework|report/i))
@@ -135,8 +157,78 @@ resources:
     select: '$'
     sourceType: edstem.lesson_detail
     externalId: '$string(id)'
+    attach: { moduleName: 'lesson.moduleName' }
     optional: true
     capability: assignments
+
+  # The questions of each quiz slide (質問1, 質問2, ...), numbered in Ed's order. At most once a day
+  # per slide; new lessons are read on first sight.
+  - name: slide_questions
+    forEach:
+      resource: lesson_details
+      as: slide
+      expand: &quizSlides >-
+        ($l := $; $n := $count($l.slides[type = "quiz"]);
+        $l.slides[type = "quiz"].{"slideId": id, "slideTitle": title, "lessonId": $l.id,
+        "courseId": $l.courseId, "lessonTitle": $l.title, "moduleName": $l._parent.moduleName,
+        "quizSlides": $n})
+      refreshAfter: 24h
+    call:
+      tool: list_slide_questions
+      args: { slideId: '{{slide.slideId}}' }
+    select: >-
+      $map($sort($, function($a, $b) { $a.index > $b.index }),
+      function($q, $i) { $merge([$q, {"number": $i + 1}]) })
+    sourceType: edstem.slide_question
+    externalId: '$string(id)'
+    attach: &quizSlideContext
+      lessonId: slide.lessonId
+      slideId: slide.slideId
+      courseId: slide.courseId
+      lessonTitle: slide.lessonTitle
+      slideTitle: slide.slideTitle
+      moduleName: slide.moduleName
+      quizSlides: slide.quizSlides
+    optional: true
+    capability: assignments
+
+  # On request only (get_assignment): the student's own saved answers of each quiz slide.
+  - name: slide_responses
+    onRequest: true
+    forEach:
+      resource: lesson_details
+      as: slide
+      expand: *quizSlides
+    call:
+      tool: list_slide_responses
+      args: { slideId: '{{slide.slideId}}' }
+    select: '$'
+    sourceType: edstem.slide_response
+    externalId: '$string(questionId)'
+    attach: *quizSlideContext
+    optional: true
+    capability: assignments
+
+  # On request only (get_assignment): Ed-hosted files of the lesson (slide files and links in text).
+  - name: lesson_files
+    onRequest: true
+    forEach: { resource: lessons, as: lesson }
+    call:
+      tool: list_lesson_files
+      args: { lessonId: '{{lesson.id}}' }
+    select: '$'
+    sourceType: edstem.lesson_file
+    externalId: url
+    attach: { courseId: lesson.courseId, lessonId: lesson.id }
+    optional: true
+    capability: assignments
+
+# get_assignment on an Ed lesson assignment: read that lesson now, with its quiz questions, the
+# student's saved answers and its files (read-only calls, only when asked).
+details:
+  - sourceType: edstem.lesson
+    resource: lessons
+    run: [lesson_details, slide_questions, slide_responses, lesson_files]
 
 entities:
   edstem.course:
@@ -264,6 +356,86 @@ entities:
         url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
         authority: submission-system
 
+  # The lesson's text (every slide in order) for search and get_course.
+  edstem.lesson_detail:
+    - kind: document
+      key: '"lesson:" & $string(id)'
+      fields:
+        title: title
+        text: >-
+          $join(slides.(
+          ($t := $plainText(content);
+          "[" & (title ? title : type) & "]" & ($t ? "\n" & $t : "") &
+          (type = "quiz" ? "\n(クイズ: 設問は「" & $root.title & " 質問…」)" : "") &
+          (fileUrl ? "\n(ファイル: " & fileUrl & ")" : ""))), "\n\n")
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+        path: >-
+          "/Ed Lessons/" & (_parent.moduleName ? $replace(_parent.moduleName, "/", "／") & "/" : "") &
+          $replace(title, "/", "／")
+        courseOfferingId: { ref: courseOffering, key: '$string(courseId)' }
+      extra:
+        platform: '"edstem"'
+        edKind: '"lesson"'
+        lessonId: id
+        module: _parent.moduleName
+        slideCount: '$count(slides)'
+      ref:
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+        authority: lms
+    # Ed-hosted slide files (pdf slides): name and link; Ed's file links open without signing in.
+    - kind: document
+      forEach: 'slides[$exists(fileUrl)]'
+      key: '"file:" & $string(id)'
+      fields:
+        title: '(type = "pdf" and $not($contains(title, /\.pdf$/i))) ? title & ".pdf" : title'
+        url: fileUrl
+        mimeType: 'type = "pdf" ? "application/pdf"'
+        path: >-
+          "/Ed Lessons/" & ($root._parent.moduleName ? $replace($root._parent.moduleName, "/", "／") &
+          "/" : "") & $replace($root.title, "/", "／") & "/" & $replace(title, "/", "／")
+        courseOfferingId: { ref: courseOffering, key: '$string($root.courseId)' }
+      extra:
+        platform: '"edstem"'
+        edKind: '"file"'
+        lessonId: $root.id
+        slideId: id
+      ref:
+        url: >-
+          "https://edstem.org/" & $vars.region & "/courses/" & $root.courseId & "/lessons/" &
+          $root.id & "/slides/" & id
+        authority: lms
+
+  # One quiz question: 「<lesson> 質問<n>」 with its prompt and choices (never the answer key).
+  edstem.slide_question:
+    - kind: document
+      key: '"question:" & $string(id)'
+      fields:
+        title: >-
+          _parent.lessonTitle & (_parent.quizSlides > 1 ? " " & _parent.slideTitle : "") & " 質問" &
+          $string(number)
+        text: >-
+          $plainText(content) & ($count(answers) > 0 ? "\n選択肢:\n" &
+          $join($map(answers, function($a, $i) { $string($i + 1) & ". " & $plainText($a) }), "\n") : "")
+        url: >-
+          "https://edstem.org/" & $vars.region & "/courses/" & _parent.courseId & "/lessons/" &
+          _parent.lessonId & "/slides/" & slideId
+        path: >-
+          "/Ed Lessons/" & (_parent.moduleName ? $replace(_parent.moduleName, "/", "／") & "/" : "") &
+          $replace(_parent.lessonTitle, "/", "／") & "/質問" & $string(number)
+        courseOfferingId: { ref: courseOffering, key: '$string(_parent.courseId)' }
+      extra:
+        platform: '"edstem"'
+        edKind: '"question"'
+        lessonId: _parent.lessonId
+        slideId: slideId
+        questionNumber: number
+        questionType: type
+      ref:
+        url: >-
+          "https://edstem.org/" & $vars.region & "/courses/" & _parent.courseId & "/lessons/" &
+          _parent.lessonId & "/slides/" & slideId
+        authority: lms
+
 facts:
   # 「提出期限: 10月6日 17:00PM」 in the lesson text, when Ed itself has no due date.
   - sourceType: edstem.lesson_detail
@@ -305,3 +477,6 @@ drift:
   edstem.lesson:
     { id: number, courseId: number, title: string, 'status?': string, 'dueAt?': string }
   edstem.lesson_detail: { id: number, courseId: number, title: string }
+  edstem.slide_question: { id: number, slideId: number, content: string, 'answers?': [string] }
+  edstem.slide_response: { questionId: number }
+  edstem.lesson_file: { url: string, filename: string }

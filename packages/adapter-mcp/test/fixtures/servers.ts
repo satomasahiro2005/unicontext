@@ -227,6 +227,7 @@ function build(name: string, handlers: Record<string, Handler>, options: ServerO
           courseId: anyId.optional(),
           threadId: z.number().optional(),
           lessonId: z.number().optional(),
+          slideId: z.number().optional(),
           includeArchived: z.boolean().optional(),
           limit: z.number().optional(),
           sort: z.string().optional(),
@@ -328,6 +329,36 @@ export const ED_LESSONS = [
 ];
 
 export const ED_LESSON_DETAILS: Record<number, unknown> = {
+  2001: {
+    ...ED_LESSONS[0],
+    createdAt: '2026-09-24T13:21:00+10:00',
+    slides: [
+      {
+        id: 821138,
+        index: 3,
+        title: '講義資料',
+        type: 'pdf',
+        status: 'completed',
+        fileUrl: 'https://static.edusercontent.com/files/AAAA',
+      },
+      {
+        id: 821139,
+        index: 5,
+        title: 'まとめ',
+        type: 'document',
+        status: 'completed',
+        content: '<document version="2.0"><paragraph>正規化は第3回で扱う</paragraph></document>',
+      },
+    ],
+  },
+  2003: {
+    ...ED_LESSONS[2],
+    createdAt: '2026-10-01T10:00:00+11:00',
+    slides: [
+      { id: 7001, index: 0, title: '前半', type: 'quiz', status: 'completed' },
+      { id: 7002, index: 1, title: '後半', type: 'quiz', status: 'completed' },
+    ],
+  },
   2002: {
     ...ED_LESSONS[1],
     createdAt: '2026-09-24T13:21:00+10:00',
@@ -348,6 +379,72 @@ export const ED_LESSON_DETAILS: Record<number, unknown> = {
     createdAt: '2026-10-01T10:00:00+10:00',
     slides: [{ id: 9, index: 1, type: 'document', content: '<document><paragraph>ER図を描く</paragraph></document>' }],
   },
+};
+
+/**
+ * Quiz questions per slide, shaped like list_slide_questions (a Shizuoka 小レポート: free-text
+ * questions with 1-based `index`; another course: multiple choice with 0-based `index`, listed out
+ * of order). `solution` / `explanation` are the answer key and must never be mapped.
+ */
+export const ED_SLIDE_QUESTIONS: Record<number, unknown[]> = {
+  821141: [
+    {
+      id: 423710,
+      slideId: 821141,
+      index: 2,
+      type: 'general',
+      content:
+        '<document version="2.0"><paragraph>授業の感想をDiscussionのスレッドに投稿し、そのスレッド番号を記載してください</paragraph></document>',
+      answers: [],
+      explanation: '<document version="2.0"><paragraph/></document>',
+      formatted: true,
+    },
+    {
+      id: 404981,
+      slideId: 821141,
+      index: 1,
+      type: 'general',
+      content:
+        '<document version="2.0"><paragraph>画像形式のファイルを貼り付けて提出すること</paragraph><heading level="3">ビデオレンタル店のデータベースの概念モデルを設計し、ER図を提出しなさい。</heading></document>',
+      answers: [],
+      formatted: true,
+    },
+  ],
+  7001: [
+    {
+      id: 5001,
+      slideId: 7001,
+      index: 0,
+      type: 'multiple-choice',
+      content: '<document version="2.0"><paragraph>主キーの性質はどれか</paragraph></document>',
+      answers: ['一意である', 'NULL を許す'],
+      solution: [0],
+      explanation: '<document version="2.0"><paragraph>SECRET-ANSWER-KEY</paragraph></document>',
+    },
+  ],
+  7002: [
+    {
+      id: 5002,
+      slideId: 7002,
+      index: 0,
+      type: 'general',
+      content: '<document version="2.0"><paragraph>第2正規形を説明せよ</paragraph></document>',
+      answers: [],
+    },
+  ],
+};
+
+/** The student's own saved answers per slide (list_slide_responses). */
+export const ED_SLIDE_RESPONSES: Record<number, unknown[]> = {
+  821141: [
+    {
+      questionId: 404981,
+      userId: 7,
+      createdAt: '2026-10-05T20:00:00+11:00',
+      data: { content: '<document version="2.0"><paragraph>下書き: 会員・DVD・貸出</paragraph></document>' },
+    },
+  ],
+  7001: [{ questionId: 5001, userId: 7, correct: true, data: { choices: [0] } }],
 };
 
 export function createEdServer(options: ServerOptions = {}): McpServer {
@@ -377,10 +474,32 @@ export function createEdServer(options: ServerOptions = {}): McpServer {
       },
       list_lessons: (args) => text(ED_LESSONS.filter((l) => l.courseId === Number(args.courseId))),
       get_lesson: (args) => text(ED_LESSON_DETAILS[Number(args.lessonId)] ?? {}),
+      list_slide_questions: (args) => text(ED_SLIDE_QUESTIONS[Number(args.slideId)] ?? []),
+      list_slide_responses: (args) => text(ED_SLIDE_RESPONSES[Number(args.slideId)] ?? []),
+      list_lesson_files: (args) =>
+        text(
+          Object.values(ED_LESSON_DETAILS)
+            .filter((l) => (l as { id: number }).id === Number(args.lessonId))
+            .flatMap((l) =>
+              (l as { slides: { id: number; title?: string; fileUrl?: string }[] }).slides
+                .filter((sl) => sl.fileUrl)
+                .map((sl) => ({
+                  filename: `${sl.title ?? ''}.pdf`,
+                  lessonId: Number(args.lessonId),
+                  mediaType: 'application/pdf',
+                  slideId: sl.id,
+                  slideTitle: sl.title,
+                  source: 'slide',
+                  url: sl.fileUrl,
+                })),
+            ),
+        ),
       // write tools the real server also offers: the mapping must never call them
       create_thread: refuse,
       reply_thread: refuse,
       mark_lessons_read: refuse,
+      submit_slide_answer: refuse,
+      submit_slide: refuse,
     },
     options,
   );

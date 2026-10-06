@@ -14,3 +14,4 @@ export * from './academic-calendar.js';
 export * from './term-parts.js';
 export * from './importance.js';
 export * from './deadline-extractor.js';
+export * from './markup.js';

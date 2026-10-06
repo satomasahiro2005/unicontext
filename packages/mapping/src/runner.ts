@@ -3,6 +3,7 @@ import {
   AuthRequiredError,
   ConnectorError,
   OfflineError,
+  parseDuration,
   RateLimitedError,
   ValidationError,
 } from '@unicontext/core';
@@ -44,6 +45,20 @@ export interface RunOptions {
    * per adapter object; when it is empty (new process) parents are fetched again.
    */
   parentCache?: Map<string, unknown[]>;
+  /**
+   * When each fan-out call of a resource with `forEach.refreshAfter` last succeeded (epoch ms),
+   * keyed by resource and rendered call. Adapters keep one per adapter object, so the politeness
+   * window lasts as long as the process (a restart calls everything once).
+   */
+  fetchLog?: Map<string, number>;
+  /** Clock for `refreshAfter` (default Date.now). */
+  now?: () => number;
+  /**
+   * On-request detail run (runMappedDetails): payloads of resources taken as given (the requested
+   * items), only the `only` resources are called, `onRequest` resources included, and
+   * `refreshAfter` never skips a call.
+   */
+  detail?: { seed: Record<string, unknown[]>; only: readonly string[] };
   onWarning?: (message: string) => void;
 }
 
@@ -109,6 +124,10 @@ export async function runMappedResources(
   const cache = options.parentCache ?? new Map<string, unknown[]>();
   const state = decodeState(input.pageToken);
   if (!input.pageToken) cache.clear();
+  const detail = options.detail;
+  if (detail) for (const [name, items] of Object.entries(detail.seed)) cache.set(name, items);
+  const fetchLog = options.fetchLog;
+  const now = options.now ?? Date.now;
 
   const warnings: string[] = [];
   const warn = (m: string): void => {
@@ -125,7 +144,8 @@ export async function runMappedResources(
     spec.resources.flatMap((r) => (r.forEach ? [r.forEach.resource] : [])),
   );
   const skipped = (r: ResourceSpec): boolean =>
-    !!input.capabilities && !!r.capability && !input.capabilities.includes(r.capability);
+    (!!input.capabilities && !!r.capability && !input.capabilities.includes(r.capability)) ||
+    (detail ? !detail.only.includes(r.name) : r.onRequest);
 
   /**
    * Convert the selected items of one response into payloads (credentials stripped, `_parent`
@@ -248,8 +268,28 @@ export async function runMappedResources(
     return undefined;
   };
 
-  /** Parents a fan-out resource runs for: the parent's payloads, filtered by `forEach.where`. */
+  /**
+   * Fan-out elements of a resource: the parent's payloads, filtered by `forEach.where`, expanded by
+   * `forEach.expand`.
+   */
   const parentsFor = async (res: ResourceSpec): Promise<unknown[]> => {
+    if (!res.forEach) return [];
+    const kept = await keptParents(res);
+    const expand = res.forEach.expand;
+    if (!expand) return kept;
+    const out: unknown[] = [];
+    for (const p of kept) {
+      try {
+        out.push(...toArray(await evalExpr(expand, p)));
+      } catch (e) {
+        warn(`${res.name}: forEach.expand failed: ${errText(e)}`);
+        incomplete.add(res.sourceType);
+      }
+    }
+    return out;
+  };
+
+  const keptParents = async (res: ResourceSpec): Promise<unknown[]> => {
     if (!res.forEach) return [];
     const all = await parentsOf(res.forEach.resource);
     const where = res.forEach.where;
@@ -275,6 +315,36 @@ export async function runMappedResources(
     return kept;
   };
 
+  /**
+   * The rendered first call of a fan-out element, and whether `refreshAfter` skips it this run
+   * (made within the window and not `always`). `logKey` records a successful call.
+   */
+  const planCall = async (
+    res: ResourceSpec,
+    scope: Record<string, unknown>,
+    element: unknown,
+  ): Promise<{ call: Record<string, unknown>; skip: boolean; logKey: string | undefined }> => {
+    const call = (await renderTemplate(res.call, scope)) as Record<string, unknown>;
+    const after = res.forEach?.refreshAfter;
+    if (!after || !fetchLog) return { call, skip: false, logKey: undefined };
+    const logKey = `${res.name}|${JSON.stringify(call)}`;
+    if (detail) return { call, skip: false, logKey };
+    const last = fetchLog.get(logKey);
+    if (last === undefined || now() - last >= parseDuration(after))
+      return { call, skip: false, logKey };
+    if (res.forEach?.always) {
+      try {
+        const v = await evalExpr(res.forEach.always, element);
+        if (v !== undefined && v !== null && v !== false && v !== 0 && v !== '')
+          if (!(Array.isArray(v) && v.length === 0)) return { call, skip: false, logKey };
+      } catch (e) {
+        warn(`${res.name}: forEach.always failed: ${errText(e)}`);
+        return { call, skip: false, logKey };
+      }
+    }
+    return { call, skip: true, logKey };
+  };
+
   /** Parent items of a fan-out resource (cached, or fetched again after a restart). */
   const parentsOf = async (name: string): Promise<unknown[]> => {
     const hit = cache.get(name);
@@ -284,8 +354,11 @@ export async function runMappedResources(
     if (!res) throw new ValidationError(`Unknown resource ${name}`);
     const all: unknown[] = [];
     if (res.forEach) {
-      for (const p of await parentsFor(res))
-        await runChain(res, { [res.forEach.as]: p }, undefined, undefined, false, all);
+      for (const p of await parentsFor(res)) {
+        const scope = { [res.forEach.as]: p };
+        const plan = await planCall(res, scope, p);
+        if (!plan.skip) await runChain(res, scope, plan.call, undefined, false, all);
+      }
     } else await runChain(res, {}, undefined, undefined, false, all);
     cache.set(name, all);
     return all;
@@ -314,10 +387,18 @@ export async function runMappedResources(
     for (let fi = startF; fi < parents.length; fi++) {
       const parent = parents[fi];
       const scope = res.forEach ? { [res.forEach.as]: parent } : {};
-      const start = ri === state.r && fi === state.f ? resumeN : undefined;
+      let start = ri === state.r && fi === state.f ? resumeN : undefined;
       resumeN = undefined;
       try {
+        let logKey: string | undefined;
+        if (res.forEach && start === undefined) {
+          const plan = await planCall(res, scope, parent);
+          if (plan.skip) continue;
+          start = plan.call;
+          logKey = plan.logKey;
+        }
         const interrupted = await runChain(res, scope, start, budget, true, collected);
+        if (!interrupted && logKey) fetchLog?.set(logKey, now());
         if (interrupted) {
           nextState = {
             r: ri,
@@ -367,11 +448,72 @@ export async function runMappedResources(
           .map((r) => r.sourceType),
       ),
     ];
-    if (completeTypes.length > 0) result.complete = { sourceTypes: completeTypes };
-    if (maxUpdated) result.cursor = { lastModified: maxUpdated };
+    // A detail run reads single items: it never completes a listing nor moves the sync cursor.
+    if (completeTypes.length > 0 && !detail) result.complete = { sourceTypes: completeTypes };
+    if (maxUpdated && !detail) result.cursor = { lastModified: maxUpdated };
     cache.clear();
   }
   if (productVersion) result.productVersion = productVersion;
   if (warnings.length > 0) result.warnings = warnings;
   return result;
+}
+
+export interface DetailRequest {
+  externalId: string;
+  /** Raw source type of the stored item (picks the `details` rule; default: the first rule). */
+  sourceType?: string | undefined;
+  /** The stored payload: the fan-out parent the rule's resources run for. */
+  payload: unknown;
+}
+
+/**
+ * On-request detail fetch for one stored item: runs the `details` rule's resources for it alone
+ * (`onRequest` resources included, `refreshAfter` ignored) and returns the raw items. A failing
+ * call is reported in `error` (warnings for optional / fan-out failures).
+ */
+export async function runMappedDetails(
+  spec: MappingSpec,
+  caller: ResourceCaller,
+  request: DetailRequest,
+  options: Omit<RunOptions, 'detail' | 'parentCache'> & { signal?: AbortSignal } = {},
+): Promise<{ items: RawItem[]; warnings: string[]; error?: string }> {
+  const rule =
+    spec.details.find((d) => d.sourceType === request.sourceType) ??
+    (request.sourceType === undefined ? spec.details[0] : undefined);
+  if (!rule)
+    return {
+      items: [],
+      warnings: [],
+      error: `no on-request details for ${request.sourceType ?? 'this item'}`,
+    };
+  const { signal, ...runOptions } = options;
+  const items: RawItem[] = [];
+  const warnings: string[] = [];
+  const parentCache = new Map<string, unknown[]>();
+  let pageToken: string | undefined;
+  try {
+    for (let page = 0; page < 50; page++) {
+      const res = await runMappedResources(
+        spec,
+        caller,
+        {
+          mode: 'incremental',
+          ...(pageToken ? { pageToken } : {}),
+          ...(signal ? { signal } : {}),
+        },
+        {
+          ...runOptions,
+          parentCache,
+          detail: { seed: { [rule.resource]: [request.payload] }, only: rule.run },
+        },
+      );
+      items.push(...res.items);
+      for (const w of res.warnings ?? []) if (!warnings.includes(w)) warnings.push(w);
+      if (!res.hasMore || !res.nextPageToken) break;
+      pageToken = res.nextPageToken;
+    }
+  } catch (e) {
+    return { items, warnings, error: errText(e) };
+  }
+  return { items, warnings };
 }

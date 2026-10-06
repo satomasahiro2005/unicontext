@@ -131,6 +131,24 @@ const ResourceSchema = z
         as: z.string().regex(/^[A-Za-z_]\w*$/),
         /** JSONata filter on the parent payload: only matching parents are fanned out. */
         where: Expr.optional(),
+        /**
+         * JSONata on each (kept) parent payload → the array of fan-out elements, e.g. the quiz
+         * slides of a lesson: `($l := $; slides[type = "quiz"].{"id": id, "lesson": $l})`. Each
+         * element becomes `<as>`. Default: the parent itself.
+         */
+        expand: Expr.optional(),
+        /**
+         * Politeness for detail fan-outs: a call already made for the same element within this
+         * long (same adapter process) is skipped; its stored raw items stay as they are (the
+         * resource must not be `complete`). Durations like "24h". Requests on demand
+         * (`details`) always call.
+         */
+        refreshAfter: z
+          .string()
+          .regex(/^\s*\d+(?:\.\d+)?\s*(ms|s|m|h|d)\s*$/, 'a duration such as "24h"')
+          .optional(),
+        /** JSONata on the fan-out element: truthy = call on every run despite `refreshAfter`. */
+        always: Expr.optional(),
       })
       .strict()
       .optional(),
@@ -140,9 +158,25 @@ const ResourceSchema = z
     capability: CapabilitySchema.optional(),
     /** A failing call is a warning instead of an error (and the type is not "complete"). */
     optional: z.boolean().default(false),
+    /** Never part of a sync: only run when a `details` request names it (on the user's request). */
+    onRequest: z.boolean().default(false),
   })
   .strict();
 export type ResourceSpec = z.infer<typeof ResourceSchema>;
+
+/**
+ * On-request detail fetch (DetailFetchAdapter): for a stored raw item of `sourceType` (a payload of
+ * resource `resource`), run the resources in `run` for that one item — read-only calls, made only
+ * when the user asks (e.g. one Ed lesson with its quiz questions and the student's saved answers).
+ */
+const DetailRuleSchema = z
+  .object({
+    sourceType: z.string().min(1),
+    resource: z.string().min(1),
+    run: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+export type DetailRule = z.infer<typeof DetailRuleSchema>;
 
 /** Mini drift schema: `{field: "string" | "number?" | "string|null" | {nested} | [elem]}`. */
 export type DriftTypeSpec = string | DriftTypeSpec[] | { [key: string]: DriftTypeSpec };
@@ -170,6 +204,8 @@ export const MappingSpecSchema = z
     resources: z.array(ResourceSchema).min(1),
     entities: z.record(z.string(), z.array(EntityRuleSchema)).default({}),
     facts: z.array(FactRuleSchema).default([]),
+    /** On-request detail fetches (see DetailRuleSchema). */
+    details: z.array(DetailRuleSchema).default([]),
     drift: z.record(z.string(), z.record(z.string(), DriftTypeSchema)).optional(),
     /** Also report fields the mini drift schema does not list (default: only missing / changed). */
     strictDrift: z.boolean().default(false),
@@ -201,6 +237,33 @@ export const MappingSpecSchema = z
     });
     for (const t of Object.keys(spec.drift ?? {}))
       if (!types.has(t)) issue(['drift', t], `no resource produces sourceType ${t}`);
+    const byName = new Map(spec.resources.map((r) => [r.name, r] as const));
+    spec.details.forEach((d, i) => {
+      const root = byName.get(d.resource);
+      if (!root) issue(['details', i, 'resource'], `unknown resource ${d.resource}`);
+      else if (root.sourceType !== d.sourceType)
+        issue(['details', i, 'sourceType'], `resource ${d.resource} produces ${root.sourceType}`);
+      // Every resource run on request must fan out from the requested items or an earlier run.
+      const available = new Set([d.resource]);
+      d.run.forEach((name, j) => {
+        const r = byName.get(name);
+        if (!r) issue(['details', i, 'run', j], `unknown resource ${name}`);
+        else if (!r.forEach || !available.has(r.forEach.resource))
+          issue(
+            ['details', i, 'run', j],
+            `${name} must fan out from ${[...available].join(' or ')}`,
+          );
+        available.add(name);
+      });
+    });
+    spec.resources.forEach((r, i) => {
+      if (r.forEach?.always && !r.forEach.refreshAfter)
+        issue(['resources', i, 'forEach', 'always'], '"always" needs "refreshAfter"');
+      if (r.forEach?.refreshAfter && r.complete)
+        issue(['resources', i, 'forEach', 'refreshAfter'], 'a skipped call cannot be "complete"');
+      if (r.onRequest && !spec.details.some((d) => d.run.includes(r.name)))
+        issue(['resources', i, 'onRequest'], `no details rule runs ${r.name}`);
+    });
     for (const [type, rules] of Object.entries(spec.entities)) {
       rules.forEach((rule, i) => {
         for (const field of Object.keys(rule.fields)) {
@@ -261,6 +324,8 @@ export function collectExpressions(spec: MappingSpec): [(string | number)[], str
     if (r.updatedAt) out.push([[...p, 'updatedAt'], r.updatedAt]);
     for (const [k, e] of Object.entries(r.attach ?? {})) out.push([[...p, 'attach', k], e]);
     if (r.forEach?.where) out.push([[...p, 'forEach', 'where'], r.forEach.where]);
+    if (r.forEach?.expand) out.push([[...p, 'forEach', 'expand'], r.forEach.expand]);
+    if (r.forEach?.always) out.push([[...p, 'forEach', 'always'], r.forEach.always]);
     const walk = (v: unknown, path: (string | number)[]): void => {
       if (typeof v === 'string') {
         for (const m of v.matchAll(new RegExp(TEMPLATE_RE.source, 'g')))

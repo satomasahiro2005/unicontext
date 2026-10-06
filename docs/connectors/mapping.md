@@ -77,16 +77,35 @@ resources:
     optional: true # a failing call is a warning, not an error
 ```
 
-| Key          | Notes                                                                                                                                                                                                                                                                                                              |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `call`       | Adapter specific, templated (see below). MCP `{tool, args, paginate?}`, CLI `{args, stdin?, format?, ...}`, REST `{operation \| path, params, paginate?}`.                                                                                                                                                         |
-| `select`     | The result of `call` may be an array, an object holding the array (`select: items`), or a single object (becomes one item). `undefined` means no items.                                                                                                                                                            |
-| `externalId` | Must produce a string or number; items without one are skipped with a warning. Duplicate `(sourceType, externalId)` within a page are dropped.                                                                                                                                                                     |
-| `complete`   | Sets `SyncResult.complete.sourceTypes` on the last page, **only** if every call of the resource succeeded (a failed fan-out child, a skipped capability or a truncated pagination withholds it, so a partial listing never deletes data). Every sync is a full relist; there is no incremental cursor.             |
-| `forEach`    | Fan out: one call chain per item of an _earlier_ resource. `as` names the variable in templates and `attach`; `where` is a JSONata filter on the parent payload (e.g. only threads with replies). Nesting works to any depth; a parent's `_parent` is visible to its children (`{{assignment._parent.courseId}}`). |
-| `attach`     | JSONata evaluated in the fan-out scope; results are stored in the raw payload as `_parent` so normalization stays a pure function of the stored raw item. Only for object items.                                                                                                                                   |
-| `capability` | The resource is skipped when `SyncInput.capabilities` is set and does not include it.                                                                                                                                                                                                                              |
-| `optional`   | Failure of a top-level resource becomes a warning (and withholds `complete`) instead of failing the sync. Failures of fan-out children are always warnings. `AuthRequiredError`, `RateLimitedError`, `OfflineError` and aborts always fail the run.                                                                |
+| Key                                       | Notes                                                                                                                                                                                                                                                                                                              |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `call`                                    | Adapter specific, templated (see below). MCP `{tool, args, paginate?}`, CLI `{args, stdin?, format?, ...}`, REST `{operation \| path, params, paginate?}`.                                                                                                                                                         |
+| `select`                                  | The result of `call` may be an array, an object holding the array (`select: items`), or a single object (becomes one item). `undefined` means no items.                                                                                                                                                            |
+| `externalId`                              | Must produce a string or number; items without one are skipped with a warning. Duplicate `(sourceType, externalId)` within a page are dropped.                                                                                                                                                                     |
+| `complete`                                | Sets `SyncResult.complete.sourceTypes` on the last page, **only** if every call of the resource succeeded (a failed fan-out child, a skipped capability or a truncated pagination withholds it, so a partial listing never deletes data). Every sync is a full relist; there is no incremental cursor.             |
+| `forEach`                                 | Fan out: one call chain per item of an _earlier_ resource. `as` names the variable in templates and `attach`; `where` is a JSONata filter on the parent payload (e.g. only threads with replies). Nesting works to any depth; a parent's `_parent` is visible to its children (`{{assignment._parent.courseId}}`). |
+| `attach`                                  | JSONata evaluated in the fan-out scope; results are stored in the raw payload as `_parent` so normalization stays a pure function of the stored raw item. Only for object items.                                                                                                                                   |
+| `capability`                              | The resource is skipped when `SyncInput.capabilities` is set and does not include it.                                                                                                                                                                                                                              |
+| `optional`                                | Failure of a top-level resource becomes a warning (and withholds `complete`) instead of failing the sync. Failures of fan-out children are always warnings. `AuthRequiredError`, `RateLimitedError`, `OfflineError` and aborts always fail the run.                                                                |
+| `forEach.expand`                          | JSONata on each kept parent payload → the fan-out elements (e.g. the quiz slides of a lesson: `($l := $; slides[type = "quiz"].{"id": id, "lesson": $l.id})`). Each element becomes `<as>`.                                                                                                                        |
+| `forEach.refreshAfter` / `forEach.always` | Politeness for detail fan-outs: a call already made for the same element within the duration (`24h`) in this adapter process is skipped and its stored raw items stay (not allowed on a `complete` resource). Elements matching `always` (JSONata) are called on every run. A restart calls everything once.       |
+| `onRequest`                               | Never part of a sync; only run by a `details` rule (the student asked for that item).                                                                                                                                                                                                                              |
+
+### On-request details (`details`)
+
+```yaml
+details:
+  - sourceType: edstem.lesson # the stored raw item the user asked about (via its entity)
+    resource: lessons # the resource that produced it: its payload is the fan-out parent
+    run: [lesson_details, slide_questions, slide_responses, lesson_files]
+```
+
+A mapping with `details` makes the adapter a `DetailFetchAdapter`: `fetchDetailsOnRequest` (MCP
+`get_assignment`, `get_syllabus`, REST `POST /api/v1/details/fetch`) runs the listed resources for
+that one item (each must fan out from `resource` or an earlier step), `onRequest` resources
+included and `refreshAfter` ignored, and ingests the result. A detail run never completes a
+listing or moves the sync cursor. A failed call makes the item `failed` (what was read is still
+ingested).
 
 ### Templates
 

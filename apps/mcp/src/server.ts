@@ -74,6 +74,11 @@ import {
   PAST_TERM_STATUS,
   type AssignmentFilter,
 } from './assignments.js';
+import {
+  buildAssignmentDetail,
+  buildLessonOnly,
+  resolveAssignmentRef,
+} from './assignment-detail.js';
 import { listCourses, resolveCourse } from './courses.js';
 import {
   attentionShape,
@@ -184,6 +189,8 @@ export const MCP_SERVER_NAME = 'unicontext';
 export const DEFAULT_MCP_VERSION = '1.0.0';
 export const RAW_PAYLOAD_LIMIT = 4000;
 export const DOCUMENT_EXCERPT_LIMIT = 8000;
+/** get_assignment waits this long for the live read (then answers from what is stored). */
+export const ASSIGNMENT_FETCH_WAIT_MS = 25_000;
 export const HOW_TO_CONFIRM =
   'unicontext confirm <id> を実行するか Web UI の確認待ちで承認してください';
 
@@ -225,6 +232,12 @@ export const RECORDING_INSTRUCTION_JA =
 export const RECORDING_INSTRUCTION_EN =
   'When a lecture recording or transcript is given as input and the course and date can reasonably be determined, call ingest_lecture even without a request to save, in addition to answering. Do not ask the user to confirm, or to restate a course, date or period that the conversation, the recording or the timetable tells; it is stored as unconfirmed and never overrides university data.';
 
+/** Working on an assignment needs its content, not just its existence (get_assignment). */
+export const ASSIGNMENT_CONTENT_INSTRUCTION_JA =
+  '課題を実際に解く・設問の中身を確かめるときは、get_assignments・get_course・search の課題の id（assignmentId または taskId）で get_assignment を呼び、設問の本文（質問1・質問2…）・選択肢・添付ファイル・本人が保存済みの回答・締切を取ってから答えてください。get_assignments だけでは課題があることしか分かりません。提出・回答の保存は本人が Ed など提出先で行います（UniContext からはできません）。';
+export const ASSIGNMENT_CONTENT_INSTRUCTION_EN =
+  'To work on an assignment, call get_assignment with its assignmentId or taskId (from get_assignments, get_course or search) for the full prompts (質問1, 質問2, ...), choices, files, the student’s saved answers and the deadline; get_assignments alone only says it exists. Saving or submitting answers is done by the student at the source (never through UniContext).';
+
 export const SERVER_INSTRUCTIONS = [
   'UniContext は学生本人の大学情報（時間割・課題・お知らせ・講義録など）を、情報源つきで返します。',
   '回答するときは、各結果の citations / answerHint に従い「根拠: 学務情報システム 10/1 09:42取得」のように必ず出典を添えてください。',
@@ -238,12 +251,14 @@ export const SERVER_INSTRUCTIONS = [
   'UniContextが取り込んでいない情報（例: EdのLessonsにある課題の設問）が答えに要るときは、本人に貼り付け・スクリーンショット・自分で確認を求めないでください。UniContextの何が取り込めていないか、何を追加すれば答えられるかをそのまま伝え、分かる範囲で答えます。',
   EXISTING_ITEM_RULE_JA,
   RECORDING_INSTRUCTION_JA,
+  ASSIGNMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   UNKNOWN_DEADLINE_POLICY_EN,
   'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only. Deadlines, to-dos and notes the student mentions in any chat can be registered with add_deadline / add_task / add_note so every other session sees them; they never override a university system.',
   EXISTING_ITEM_RULE_EN,
   RECORDING_INSTRUCTION_EN,
+  ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
 
@@ -256,10 +271,12 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   '締切について: UniContextに締切が載っていないことは、締切が無いことを意味しません。get_deadlines・get_today・get_week・get_course の coverage に、締切をどの情報源から取ったか、各情報源の状態（ok / auth_required / stale / failing / never_synced）、欠け（gaps: 止まっている情報源・課題を同期していない場所にもある科目・期限不明の課題）が入っています。coverage.complete が false なら必ずそのことを伝え、gaps の確認先（例: Ed Discussionを直接見る）を伝えてください。coverage を確かめずに「期限はない」「余裕がある」と言ってはいけません。',
   UNKNOWN_DEADLINE_POLICY_JA,
   'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
+  ASSIGNMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Read-only: answers must cite sources and report conflicting sources instead of picking one.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   UNKNOWN_DEADLINE_POLICY_EN,
+  ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
 
@@ -277,12 +294,14 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   EXISTING_ITEM_RULE_JA,
   RECORDING_INSTRUCTION_JA,
   '保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
+  ASSIGNMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Register deadlines, to-dos and notes the student mentions or plans in any chat (add_deadline / add_task / add_note) so every other session and client sees them. Writes go to UniContext only (never to a university system) and cannot change authoritative data, task status or grades.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   UNKNOWN_DEADLINE_POLICY_EN,
   EXISTING_ITEM_RULE_EN,
   RECORDING_INSTRUCTION_EN,
+  ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
 
@@ -806,7 +825,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '課題一覧',
       description:
-        '課題・レポート・提出物の一覧（締切順）。既定は未完了のみで、includeCompleted=true で提出済み・完了も含める。status "submitted" は提出システムが確認した場合にのみ付く（AI は提出済みにできない）。終了した学期の未提出課題（expired_past_term）は既定で出さず、includePast=true で含める。 / Assignments sorted by due date. Default: open only, without unfinished work of ended terms (includePast=true adds it). Task status `submitted` can only come from the submission system.',
+        '課題・レポート・提出物の一覧（締切順）。既定は未完了のみで、includeCompleted=true で提出済み・完了も含める。status "submitted" は提出システムが確認した場合にのみ付く（AI は提出済みにできない）。課題を解く・設問を見るときは assignmentId（または taskId）で get_assignment を呼ぶ。終了した学期の未提出課題（expired_past_term）は既定で出さず、includePast=true で含める。 / Assignments sorted by due date. Default: open only, without unfinished work of ended terms (includePast=true adds it). Task status `submitted` can only come from the submission system. To work on one, call get_assignment with its assignmentId / taskId (full prompts, choices, files, saved answers).',
     },
     {
       courseOfferingId: courseIdField.optional(),
@@ -822,6 +841,99 @@ export function createMcpServer(deps: McpDeps): McpServer {
         includePast: a.includePast,
       });
       return { data: { assignments: buildAssignments(uc, filter) } };
+    },
+  );
+
+  tool(
+    'get_assignment',
+    {
+      title: '課題の中身',
+      description:
+        "課題1件の中身を、解くのに要るところまで返す: 締切・状態・出典に加え、Ed Lessons の課題なら全スライドを順に（本文、クイズの各設問=質問1・質問2…の本文と選択肢、添付ファイルの名前とリンク、本人が Ed に保存済みの回答）。id は get_assignments の assignmentId / taskId、get_course の assignment:… の id、または search で見つけた Ed の設問・スライドの document:… の id。既定で Ed から読み直す（読み取りのみ。回答の保存・提出・既読化はしない）。正解・解説は返さない。 / One assignment with what it takes to work on it: deadline, status, sources and, for an Ed lesson, every slide in order with its text, each quiz question (質問1, 質問2, ...) with prompt and choices, file names and links, and the student's own saved answers. Read live from Ed by default (read-only: never saves, submits or marks anything). Never returns answer keys.",
+    },
+    {
+      id: z
+        .string()
+        .min(1)
+        .max(200)
+        .describe('assignment:… または task:… の id / An assignment or task id'),
+      refresh: z
+        .boolean()
+        .optional()
+        .describe(
+          '提出先から読み直す（既定true。falseなら保存済みの内容だけ） / Re-read from the source (default true)',
+        ),
+    },
+    async (a) => {
+      const { assignmentId, taskId, lessonRaw } = resolveAssignmentRef(uc, a.id);
+      if (!assignmentId && lessonRaw)
+        return {
+          data: {
+            lesson: buildLessonOnly(uc, lessonRaw),
+            notes: [
+              'このレッスンは課題ではありません（講義資料など）。前回の同期で保存した内容です。',
+            ],
+            citations: uc.context.citationsFor([a.id.trim()]),
+          },
+        };
+      if (!assignmentId) {
+        const task = buildAssignments(uc, { statuses: ALL_TASK_STATUSES }).find(
+          (t) => t.taskId === taskId,
+        );
+        return { data: { task, note: 'この項目は課題に結びついていません（中身はありません）。' } };
+      }
+      let fetch: { status: string; error?: string } | undefined;
+      if (a.refresh !== false) {
+        const run = deps.fetchDetails ?? ((ids: string[]) => fetchDetailsOnRequest(uc, ids));
+        const running = run([assignmentId]);
+        running.catch(() => undefined);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const outcome = await Promise.race([
+            running,
+            new Promise<'timeout'>((resolve) => {
+              timer = setTimeout(() => resolve('timeout'), ASSIGNMENT_FETCH_WAIT_MS);
+            }),
+          ]);
+          if (outcome === 'timeout') fetch = { status: 'timeout' };
+          else {
+            const r = outcome.results.find((x) => x.id === assignmentId);
+            fetch = { status: r?.status ?? 'failed', ...(r?.error ? { error: r.error } : {}) };
+          }
+        } catch (e) {
+          fetch = { status: 'failed', error: errorMessage(e) };
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
+      const detail = buildAssignmentDetail(uc, assignmentId);
+      const live = fetch?.status === 'fetched' || fetch?.status === 'alreadyFetched';
+      const notes: string[] = [];
+      if (fetch && !live && fetch.status !== 'unsupported')
+        notes.push(
+          `提出先からの読み直しができなかったので、保存済みの内容です（${fetch.status}${fetch.error ? `: ${fetch.error}` : ''}）。`,
+        );
+      if (detail.lesson) {
+        const saved = detail.lesson.slides.some((s) => s.questions?.some((q) => q.myAnswer));
+        // A live read that found no saved answer: the student has saved none yet.
+        if (live) detail.lesson.answersFetchedAt ??= uc.clock.now().toISOString();
+        if (live && !saved && detail.lesson.slides.some((s) => s.questions?.length))
+          notes.push('Ed に保存された回答はまだありません（いま確認しました）。');
+        else if (detail.lesson.answersFetchedAt === undefined)
+          notes.push('保存済みの回答はまだ読めていません（Ed で確認してください）。');
+      }
+      const hint = detail.lesson
+        ? '設問は lesson.slides[].questions（質問1・質問2…）にあります。回答の保存・提出は本人が Ed で行います（UniContext からはしません）。myAnswer は本人が Ed に保存した回答です。出典として Ed のレッスンの URL を添えてください。'
+        : undefined;
+      return {
+        data: {
+          ...detail,
+          ...(fetch ? { fetch } : {}),
+          ...(notes.length ? { notes } : {}),
+          citations: detail.assignment.citations,
+        },
+        ...(hint ? { options: { hint } } : {}),
+      };
     },
   );
 
@@ -1055,7 +1167,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '検索',
       description:
-        '授業資料・お知らせ・メッセージ・講義の文字起こし・課題などを横断検索する（「ERモデルの説明どこ？」「先生は試験について何て言った？」）。各ヒットに出典がつく。お知らせ（kind が announcement）のヒットは id で get_announcement に渡すと全文が読める。 / Search materials, announcements, messages, transcripts and deadlines. Hits carry citations. For an announcement hit, pass its id to get_announcement for the full text.',
+        '授業資料・お知らせ・メッセージ・講義の文字起こし・課題などを横断検索する（「ERモデルの説明どこ？」「先生は試験について何て言った？」）。各ヒットに出典がつく。お知らせ（kind が announcement）のヒットは id で get_announcement に渡すと全文が読める。Ed Lessons の課題の設問（「… 質問2」など）やスライドのヒット（document:…）は id を get_assignment に渡すと、その課題の全設問・選択肢・添付・保存済みの回答が読める。 / Search materials, announcements, messages, transcripts and deadlines. Hits carry citations. For an announcement hit, pass its id to get_announcement for the full text; for an Ed lesson question or slide hit (document:…), pass its id to get_assignment for the whole assignment.',
     },
     {
       query: z.string().min(1).max(500).describe('検索語または質問文 / Query'),
