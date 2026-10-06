@@ -36,6 +36,14 @@ export const ShizuokaVpnFilesConfigSchema = z.looseObject({
       refreshFolderAfterHours: z.number().int().positive().default(24),
       /** Re-seed the whole tree from the roots this many hours after the last full sweep. */
       rewalkAfterHours: z.number().int().positive().default(72),
+      /**
+       * Folders listed in one sync while a fresh sign-in's window lasts (pages of
+       * `maxFoldersPerRun`, same pacing). Right after a sign-in the walk keeps going until the tree
+       * is indexed, this cap, or the session window ends.
+       */
+      maxFoldersPerSession: z.number().int().positive().max(20_000).default(2000),
+      /** Stop walking this many minutes before the session's hard cap (`browser.sessionMaxMinutes`). */
+      sessionMarginMinutes: z.number().int().nonnegative().max(59).default(5),
     })
     .prefault({}),
   /**
@@ -55,6 +63,35 @@ export const ShizuokaVpnFilesConfigSchema = z.looseObject({
     .default([]),
   /** Path prefixes (within a root) whose small files are prefetched into the mirror. */
   prefetch: z.array(z.string()).default([]),
+  /**
+   * Also prefetch the course folders of the current academic year (a folder segment such as
+   * `2026コンピュータ入門` with the year the term starts in April). Needs `mirror.enabled`; the
+   * mirror's size cap (`mirror.maxFileMB`) decides what is "small".
+   */
+  prefetchCurrentYear: z.boolean().default(false),
+  /**
+   * Automatic sign-in with the user name and password the student saved in the OS keychain
+   * (`unicontext login shizuoka-vpn-files` offers it; `unicontext secrets set shizuoka-vpn-files
+   * password`). Without saved credentials nothing happens. Never types into OTP/MFA/CAPTCHA
+   * fields and never presses the portal's Continue button.
+   */
+  autoLogin: z
+    .object({
+      /** Turn it off even with saved credentials. */
+      enabled: z.boolean().default(true),
+      /** At most one attempt per this many minutes. */
+      minIntervalMinutes: z
+        .number()
+        .int()
+        .positive()
+        .max(24 * 60)
+        .default(10),
+      /** Stop after this many failed attempts in a row (a wrong password stops at once). */
+      maxConsecutiveFailures: z.number().int().positive().max(10).default(3),
+      /** How long to wait for the portal after submitting the form. */
+      submitTimeoutMs: z.number().int().positive().max(120_000).default(30_000),
+    })
+    .prefault({}),
   files: z
     .object({
       extractText: z.boolean().default(false),
@@ -94,7 +131,12 @@ export const ShizuokaVpnFilesConfigSchema = z.looseObject({
        * browser (the portal ends a session after at most 60 min, research §2.3). Within it,
        * authenticate() re-checks against the portal before saying "signed in".
        */
-      sessionMaxMinutes: z.number().int().positive().max(24 * 60).default(60),
+      sessionMaxMinutes: z
+        .number()
+        .int()
+        .positive()
+        .max(24 * 60)
+        .default(60),
     })
     .prefault({}),
 });

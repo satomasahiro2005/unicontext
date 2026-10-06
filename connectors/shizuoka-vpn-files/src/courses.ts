@@ -77,10 +77,34 @@ export function courseHintForPath(
   return { coursePath, title, year, teacher, explicitCourse: undefined };
 }
 
-/** Does this path sit under any configured prefetch prefix (within the root)? */
-export function isPrefetchPath(cfg: ShizuokaVpnFilesConfig, path: string): boolean {
-  return cfg.prefetch.some((p) => {
+/**
+ * Does this path sit under any configured prefetch prefix (within the root), or, with
+ * `prefetchCurrentYear`, under a course folder of `currentYear` (a year-prefixed segment)?
+ */
+export function isPrefetchPath(
+  cfg: ShizuokaVpnFilesConfig,
+  path: string,
+  currentYear?: number,
+): boolean {
+  const byPrefix = cfg.prefetch.some((p) => {
     const prefix = p.replace(/^\/+|\/+$/g, '');
     return prefix === '' || path === prefix || path.startsWith(`${prefix}/`);
   });
+  if (byPrefix) return true;
+  if (!cfg.prefetchCurrentYear || currentYear === undefined) return false;
+  const segments = path.split('/').filter(Boolean);
+  // The folder itself does not count: only what sits inside a course folder of this year.
+  return segments.slice(0, -1).some((seg) => splitYearPrefix(seg).year === currentYear);
+}
+
+/** The Japanese academic year (April to March) of `now` in `timezone`. */
+export function academicYear(now: Date, timezone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: 'numeric',
+  }).formatToParts(now);
+  const year = Number(parts.find((p) => p.type === 'year')?.value);
+  const month = Number(parts.find((p) => p.type === 'month')?.value);
+  return month >= 4 ? year : year - 1;
 }

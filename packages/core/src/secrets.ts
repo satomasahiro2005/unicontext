@@ -20,9 +20,10 @@ export function secretKey(sourceId: string, name: string): string {
 export interface NamedSecret {
   /** Secret name; the SecretStore key is `secretKey(sourceId, secret)`. */
   secret: string;
-  /** Environment variable or header the value is injected as. */
+  /** Environment variable or header the value is injected as (or, for `login`, what it is). */
   target: string;
-  via: 'envSecrets' | 'headerSecrets';
+  /** `login`: a credential the adapter itself types into the sign-in form (SavedCredentialsAdapter). */
+  via: 'envSecrets' | 'headerSecrets' | 'login';
 }
 
 /**

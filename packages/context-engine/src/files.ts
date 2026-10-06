@@ -22,7 +22,7 @@ import {
   type RawItem,
   supportsFileDownloads,
 } from '@unicontext/connector-sdk';
-import { errorMessage, NotFoundError, ValidationError } from '@unicontext/core';
+import { AuthRequiredError, errorMessage, NotFoundError, ValidationError } from '@unicontext/core';
 import { chunkText, extractContent } from '@unicontext/local-files';
 import { rawItemId, type RawItemRecord } from '@unicontext/database';
 import type { UniContext } from './runtime.js';
@@ -70,6 +70,11 @@ export interface DownloadedFileResult {
   /** The file is in the mirror (path points there). */
   mirrored?: boolean;
   error?: string;
+  /**
+   * Not cached yet and the source needs a sign-in to fetch it (the index and cached files still
+   * work). `error` says how to sign in.
+   */
+  authRequired?: true;
 }
 
 export interface DownloadFilesReport {
@@ -449,8 +454,13 @@ export async function downloadCourseFiles(
       if (adapter.hostExtractsFileText)
         await extractFileTexts(uc, sourceId, list, outcomes, warnings);
     } catch (e) {
+      const auth = e instanceof AuthRequiredError;
       for (const x of list)
-        results.push({ ...resultFor(uc, x.target, 'failed'), error: errorMessage(e) });
+        results.push({
+          ...resultFor(uc, x.target, 'failed'),
+          error: errorMessage(e),
+          ...(auth ? { authRequired: true as const } : {}),
+        });
       continue;
     }
     const idx = loadCacheIndex(options.filesDir, sourceId);

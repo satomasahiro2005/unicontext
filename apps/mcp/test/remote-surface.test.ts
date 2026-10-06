@@ -45,6 +45,36 @@ afterAll(async () => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+describe('the VPN file-share tools on the remote surface (what https://uc.nemut.ai serves)', () => {
+  it('browse/search/list_recent_vpn_files are listed, read-only, with and without unicontext.write', async () => {
+    const vpn = ['browse_vpn_files', 'search_vpn_files', 'list_recent_vpn_files'];
+    for (const allowWrite of [false, true]) {
+      // Built the way apps/daemon/src/remote/server.ts builds it for an OAuth client.
+      const server = createMcpServer({
+        uc,
+        proposals,
+        surface: 'remote',
+        allowWrite,
+        client: { id: 'https://chatgpt.com/oauth/client.json', name: 'ChatGPT' },
+      });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      const client = new Client({ name: 'chatgpt-like', version: '0.0.0' });
+      await client.connect(b);
+      const tools = (await client.listTools()).tools;
+      for (const name of vpn) {
+        const t = tools.find((x) => x.name === name);
+        expect(t, `${name} (allowWrite=${allowWrite})`).toBeDefined();
+        expect(t?.annotations?.readOnlyHint).toBe(true);
+      }
+      // An empty index answers with why, not with "nothing there".
+      const res = await client.callTool({ name: 'browse_vpn_files', arguments: {} });
+      expect(res.isError).toBeFalsy();
+      await client.close();
+    }
+  });
+});
+
 describe('remote (read-only) MCP surface', () => {
   it('registers no write tools and marks every tool read-only with an output schema', async () => {
     const local = await connect('local');

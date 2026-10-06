@@ -1,3 +1,9 @@
+import {
+  type CredentialSecret,
+  type SavedCredentialsAdapter,
+  type SourceAdapter,
+  supportsSavedCredentials,
+} from '@unicontext/connector-sdk';
 import { type NamedSecret, namedSecrets, type SecretStore, secretKey } from '@unicontext/core';
 import type { Command } from 'commander';
 import type { CliContext } from '../context.js';
@@ -12,7 +18,31 @@ export interface SecretStatus extends NamedSecret {
   set: boolean;
 }
 
-/** The secrets `sources.<id>.envSecrets / headerSecrets` name (effective config, profile merged). */
+/** The source's adapter when it signs in by itself with saved credentials (SavedCredentialsAdapter). */
+async function credentialAdapter(
+  ctx: CliContext,
+  sourceId: string,
+): Promise<SavedCredentialsAdapter | undefined> {
+  const rt = await ctx.runtime();
+  let adapter: SourceAdapter;
+  try {
+    adapter = rt.uc.sync.getSource(sourceId).adapter;
+  } catch {
+    return undefined; // disabled or not loaded: only the config's secrets apply
+  }
+  return supportsSavedCredentials(adapter) ? adapter : undefined;
+}
+
+const asNamed = (c: CredentialSecret): NamedSecret => ({
+  secret: c.secret,
+  target: c.label,
+  via: 'login',
+});
+
+/**
+ * The secrets `sources.<id>.envSecrets / headerSecrets` name (effective config, profile merged),
+ * plus the sign-in credentials an adapter may store (opt-in, SavedCredentialsAdapter).
+ */
 async function secretsOfSource(ctx: CliContext, sourceId: string): Promise<NamedSecret[]> {
   const rt = await ctx.runtime();
   const config = rt.config.sources[sourceId];
@@ -22,7 +52,11 @@ async function secretsOfSource(ctx: CliContext, sourceId: string): Promise<Named
       1,
       `config.yamlのsourcesにsources.${sourceId}を追加してください（「unicontext sources」で一覧できます）`,
     );
-  return namedSecrets(config as Record<string, unknown>);
+  const named = namedSecrets(config as Record<string, unknown>);
+  const adapter = await credentialAdapter(ctx, sourceId);
+  for (const c of adapter?.credentialSecrets() ?? [])
+    if (!named.some((n) => n.secret === c.secret)) named.push(asNamed(c));
+  return named;
 }
 
 async function statusOf(
@@ -53,14 +87,18 @@ async function persistentStore(ctx: CliContext): Promise<SecretStore> {
   return store;
 }
 
-function promptLabel(s: NamedSecret): string {
+function promptLabel(s: NamedSecret, echo = false): string {
+  if (s.via === 'login')
+    return echo
+      ? `${s.target}を入力してEnter: `
+      : `${s.target}を入力してEnter（入力は表示されません）: `;
   return `${s.target}（${s.secret}）を貼り付けてEnter（入力は表示されません）: `;
 }
 
-/** Ask for one secret without echo. Empty input is an error (nothing is stored). */
-async function askSecret(ctx: CliContext, s: NamedSecret): Promise<string> {
-  const ask = ctx.deps.promptSecret ?? ctx.deps.prompt;
-  const value = (await ask(promptLabel(s))).trim();
+/** Ask for one secret (without echo unless `echo`). Empty input is an error (nothing is stored). */
+async function askSecret(ctx: CliContext, s: NamedSecret, echo = false): Promise<string> {
+  const ask = echo ? ctx.deps.prompt : (ctx.deps.promptSecret ?? ctx.deps.prompt);
+  const value = (await ask(promptLabel(s, echo))).trim();
   if (value === '')
     throw new CliError(
       '入力を読み取れませんでした（何も保存していません）',
@@ -68,6 +106,55 @@ async function askSecret(ctx: CliContext, s: NamedSecret): Promise<string> {
       'PowerShellなどのターミナルで直接実行してください',
     );
   return value;
+}
+
+/**
+ * Used by `unicontext login <source>` for a source that can sign in again by itself
+ * (SavedCredentialsAdapter): offer to store the sign-in credentials in the OS keychain, ask for
+ * the missing ones (the password without echo), and reset the adapter's attempt limits. `choice`
+ * is `--save-password` (true: no question) / `--no-save-password` (false: never). Returns the
+ * secret names that were stored. Never asks without a terminal or in `--json`.
+ */
+export async function offerSavedCredentials(
+  ctx: CliContext,
+  sourceId: string,
+  adapter: SourceAdapter,
+  choice: boolean | undefined,
+): Promise<string[]> {
+  if (choice === false || !supportsSavedCredentials(adapter)) return [];
+  if (ctx.json || !ctx.canPrompt()) return [];
+  const creds = adapter.credentialSecrets();
+  if (creds.length === 0) return [];
+  const store = await ctx.secrets();
+  const missing: CredentialSecret[] = [];
+  for (const c of creds) {
+    const v = await store.get(secretKey(sourceId, c.secret));
+    if (v === undefined || v === '') missing.push(c);
+  }
+  if (missing.length === 0) return [];
+  if (choice !== true) {
+    const answer = (
+      await ctx.deps.prompt(
+        'パスワードをOSキーチェーンに保存して、セッションが切れたらUniContextが自動でサインインし直すようにしますか？（二段階認証などが出たときは止まります） [y/N] ',
+      )
+    )
+      .trim()
+      .toLowerCase();
+    if (answer !== 'y' && answer !== 'yes') return [];
+  }
+  if (store.backend === 'memory') {
+    ctx.err(
+      'OSキーチェーンを使えないため、パスワードは保存しません（このままサインインに進みます）',
+    );
+    return [];
+  }
+  const stored: string[] = [];
+  for (const c of missing) {
+    await store.set(secretKey(sourceId, c.secret), await askSecret(ctx, asNamed(c), c.echo));
+    stored.push(c.secret);
+  }
+  await adapter.credentialsChanged();
+  return stored;
 }
 
 /**
@@ -218,10 +305,16 @@ export function registerSecrets(program: Command, h: Harness): void {
               '対話できない環境では入力できません',
               '端末から実行するか --from-env <環境変数名> を使ってください',
             );
-          value = await askSecret(ctx, target);
+          const login = (await credentialAdapter(ctx, sourceId))
+            ?.credentialSecrets()
+            .find((c) => c.secret === target.secret);
+          value = await askSecret(ctx, target, login?.echo === true);
         }
         const key = secretKey(sourceId, target.secret);
         await store.set(key, value);
+        // New credentials: an automatic sign-in that stopped (e.g. a wrong password) may try again.
+        if (target.via === 'login')
+          await (await credentialAdapter(ctx, sourceId))?.credentialsChanged();
         if (ctx.json) {
           ctx.printJson({ ok: true, key, backend: store.backend }, { local: true });
           return 0;
@@ -245,6 +338,8 @@ export function registerSecrets(program: Command, h: Harness): void {
         const store = await ctx.secrets();
         const key = secretKey(sourceId, target.secret);
         const removed = await store.delete(key);
+        if (target.via === 'login')
+          await (await credentialAdapter(ctx, sourceId))?.credentialsChanged();
         if (ctx.json) ctx.printJson({ key, removed }, { local: true });
         else ctx.out(removed ? `${key} を消しました` : `${key} は保存されていません`);
         return 0;

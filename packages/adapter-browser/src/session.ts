@@ -264,8 +264,7 @@ export class BrowserSession {
       ...(this.options.keepSessionCookies ? { args: ['--restore-last-session'] } : {}),
     });
     this.contextHeadless = headless;
-    if (this.options.prepareContext)
-      await this.options.prepareContext(this.context, { headless });
+    if (this.options.prepareContext) await this.options.prepareContext(this.context, { headless });
     return this.context;
   }
 
@@ -578,6 +577,28 @@ export class BrowserSession {
     } finally {
       await this.closeContext();
     }
+  }
+
+  /**
+   * Run `fn` on a headless page opened at `url`, with no sign-in check and no login polling: for a
+   * connector that signs in by itself with credentials the student stored (it classifies the pages
+   * on its own and never touches OTP/MFA fields). Queued like every other use of the profile; a
+   * profile held by another process fails at once (BrowserProfileInUseError).
+   */
+  withHeadlessPage<T>(
+    fn: (page: PageLike, context: BrowserContextLike) => Promise<T>,
+    options: { url: string; waitUntil?: LoadState | 'commit' },
+  ): Promise<T> {
+    return this.serial(async () => {
+      try {
+        const context = await this.openContext(true);
+        const page = context.pages()[0] ?? (await context.newPage());
+        await page.goto(options.url, { waitUntil: options.waitUntil ?? 'load' });
+        return await fn(page, context);
+      } finally {
+        await this.closeContext();
+      }
+    });
   }
 
   async close(): Promise<void> {

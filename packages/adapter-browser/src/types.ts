@@ -23,6 +23,11 @@ export interface LocatorLike {
   first(): LocatorLike;
   click(options?: { timeout?: number }): Promise<void>;
   check(options?: { timeout?: number }): Promise<void>;
+  /**
+   * Type into a field (Playwright `locator.fill`). Optional: only a connector whose student chose
+   * to store a password (SavedCredentialsAdapter) uses it, and never on OTP/MFA fields.
+   */
+  fill?(value: string, options?: { timeout?: number }): Promise<void>;
 }
 
 export interface PageLike {

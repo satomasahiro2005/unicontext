@@ -9,11 +9,7 @@ import {
 } from '@unicontext/adapter-browser';
 import { type ConnectorModule, defineConnector } from '@unicontext/connector-sdk';
 import { DEFAULT_TIMEZONE } from '@unicontext/core';
-import {
-  type SessionMarker,
-  ShizuokaVpnFilesAdapter,
-  type WithClient,
-} from './adapter.js';
+import { type SessionMarker, ShizuokaVpnFilesAdapter, type WithClient } from './adapter.js';
 import {
   describeChecks,
   installReadOnlyRoute,
@@ -23,6 +19,7 @@ import {
 } from './client.js';
 import { type ShizuokaVpnFilesConfig, ShizuokaVpnFilesConfigSchema } from './config.js';
 import { resolveDeployment, signInUrl, type VpnDeployment } from './deployment.js';
+import { AUTO_LOGIN_STATE_FILE, createAutoLogin } from './auto-login.js';
 import { createLoginTrace, LOGIN_TRACE_FILE } from './login-trace.js';
 import { metadata, PRODUCT } from './metadata.js';
 import { createShizuokaVpnFilesNormalizer } from './normalizer.js';
@@ -64,7 +61,10 @@ export function onPortal(deployment: VpnDeployment, url: string): boolean {
 }
 
 /** True when the portal confirms the session (see {@link probePortalSession}). */
-export async function portalSessionLive(page: PageLike, deployment: VpnDeployment): Promise<boolean> {
+export async function portalSessionLive(
+  page: PageLike,
+  deployment: VpnDeployment,
+): Promise<boolean> {
   return (await probePortalSession(page, deployment)).live;
 }
 
@@ -82,27 +82,49 @@ export async function hasContinuePrompt(page: PageLike): Promise<boolean> {
   return false;
 }
 
-/** `<cacheDir>/portal-session.json`: when a live portal session was last verified (no secrets). */
+/**
+ * `<cacheDir>/portal-session.json`: when a live portal session was last verified and, when this
+ * UniContext signed it in, when that was (timestamps only, no secrets).
+ */
 export function fileSessionMarker(file: string): SessionMarker {
+  const load = (): { verifiedAt?: string; signedInAt?: string } => {
+    try {
+      const v = JSON.parse(readFileSync(file, 'utf8')) as {
+        verifiedAt?: unknown;
+        signedInAt?: unknown;
+      };
+      return {
+        ...(typeof v.verifiedAt === 'string' ? { verifiedAt: v.verifiedAt } : {}),
+        ...(typeof v.signedInAt === 'string' ? { signedInAt: v.signedInAt } : {}),
+      };
+    } catch {
+      return {};
+    }
+  };
+  const save = (v: { verifiedAt?: string; signedInAt?: string } | undefined): void => {
+    try {
+      if (v === undefined) rmSync(file, { force: true });
+      else {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(
+          file,
+          `${JSON.stringify(v)}
+`,
+        );
+      }
+    } catch {
+      // best effort: a lost marker only means one more check
+    }
+  };
   return {
-    read() {
-      try {
-        const v = JSON.parse(readFileSync(file, 'utf8')) as { verifiedAt?: unknown };
-        return typeof v.verifiedAt === 'string' ? v.verifiedAt : undefined;
-      } catch {
-        return undefined;
-      }
-    },
+    read: () => load().verifiedAt,
+    readSignedInAt: () => load().signedInAt,
     write(at) {
-      try {
-        if (at === undefined) rmSync(file, { force: true });
-        else {
-          mkdirSync(dirname(file), { recursive: true });
-          writeFileSync(file, `${JSON.stringify({ verifiedAt: at })}\n`);
-        }
-      } catch {
-        // best effort: a lost marker only means one more check
-      }
+      if (at === undefined) save(undefined);
+      else save({ ...load(), verifiedAt: at });
+    },
+    writeSignedInAt(at) {
+      save({ verifiedAt: at, signedInAt: at });
     },
   };
 }
@@ -211,11 +233,21 @@ export function createShizuokaVpnFilesConnector(
         ...(cfg.browser.channel ? { channel: cfg.browser.channel } : {}),
         ...(cfg.browser.executablePath ? { executablePath: cfg.browser.executablePath } : {}),
       });
+      const autoLogin = createAutoLogin({
+        sourceId: ctx.sourceId,
+        secrets: ctx.secrets,
+        config: cfg.autoLogin,
+        deployment,
+        clock: ctx.clock,
+        logger: ctx.logger,
+        stateFile: join(cacheBase, AUTO_LOGIN_STATE_FILE),
+        run: (fn) => session.withHeadlessPage(fn, { url: signInUrl(deployment) }),
+      });
       const withClient: WithClient = (fn, o) =>
-        session.withPage(
-          (page) => fn(new PlaywrightVpnClient(page, deployment, ctx.logger)),
-          { headless: true, ...(o?.startUrl ? { url: o.startUrl } : {}) },
-        );
+        session.withPage((page) => fn(new PlaywrightVpnClient(page, deployment, ctx.logger)), {
+          headless: true,
+          ...(o?.startUrl ? { url: o.startUrl } : {}),
+        });
       return new ShizuokaVpnFilesAdapter({
         sourceId: ctx.sourceId,
         config: cfg,
@@ -226,10 +258,10 @@ export function createShizuokaVpnFilesConnector(
         profileExists: () => existsSync(profileDir),
         profileInUse: () => session.profileInUse(),
         verifySession: () => session.refresh(),
-        sessionMarker: fileSessionMarker(
-          join(cacheBase, 'portal-session.json'),
-        ),
+        sessionMarker: fileSessionMarker(join(cacheBase, 'portal-session.json')),
         withClient,
+        autoSignIn: () => autoLogin.attempt(),
+        resetAutoSignIn: () => autoLogin.reset(),
         login: (o) => session.login(o),
         logout: () => session.close(),
         close: () => session.close(),

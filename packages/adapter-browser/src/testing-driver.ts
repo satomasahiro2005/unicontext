@@ -64,13 +64,20 @@ export class FakePage implements PageLike {
       first: () => locator,
       click: () => {
         this.driver.clicked.push(selector);
-        const next = this.screen().clicks?.[selector];
+        const next = this.driver.onClick?.(this, selector) ?? this.screen().clicks?.[selector];
         if (!next) return Promise.reject(new Error(`nothing to click: ${selector}`));
         this.navigate(next);
         return Promise.resolve();
       },
       check: () => {
         this.driver.checked.push(selector);
+        return Promise.resolve();
+      },
+      fill: (value: string) => {
+        const s = this.screen();
+        if (!s.selectors?.some((x) => x === selector || x === `${selector}:visible`))
+          return Promise.reject(new Error(`nothing to fill: ${selector}`));
+        this.driver.filled.push({ selector, value });
         return Promise.resolve();
       },
     };
@@ -153,11 +160,17 @@ export class FakeBrowserDriver implements BrowserDriver {
   visited: string[] = [];
   clicked: string[] = [];
   checked: string[] = [];
+  /** `locator(sel).fill(value)` calls, in order. */
+  filled: { selector: string; value: string }[] = [];
+  /** Where a click navigates, decided at click time (falls back to the screen's `clicks`). */
+  onClick?: (page: FakePage, selector: string) => string | undefined;
   /** Answers `page.evaluate(expression)` (e.g. an in-page fetch) for the current page. */
   evaluate?: (page: FakePage, expression: string) => unknown;
 
   constructor(
-    init: Partial<Pick<FakeBrowserDriver, 'screens' | 'redirects' | 'cookies' | 'evaluate'>> = {},
+    init: Partial<
+      Pick<FakeBrowserDriver, 'screens' | 'redirects' | 'cookies' | 'evaluate' | 'onClick'>
+    > = {},
   ) {
     Object.assign(this, init);
   }

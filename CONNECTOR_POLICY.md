@@ -25,6 +25,26 @@ third-party ones.
    Interstitial handlers can only dismiss screens the user has explicitly asked to skip. Today the
    only one is the Shibboleth attribute-release consent, which the user agrees to on every login.
 
+   **Saved-password sign-in the student chose.** One exception to "no password filling", decided by
+   the student on 2026-10-06 for a portal whose sessions end 60 minutes after sign-in whatever
+   happens: `shizuoka-vpn-files` may type the student's **own** user name and password, which the
+   student saved in the OS keychain through `unicontext login` / `unicontext secrets set`
+   (`SavedCredentialsAdapter`), into the realm's normal sign-in form, and nothing else. Conditions,
+   all enforced in code with tests (docs/connectors/shizuoka-vpn-files.md):
+   - opt-in per source (nothing happens without saved credentials) and off with one setting;
+   - only the realm's own form on the portal host over HTTPS, the normal flow (no hidden or
+     disabled form, no replayed tokens); one-time codes, MFA, secondary passwords and CAPTCHAs are
+     never filled or bypassed, and a "continue / other sessions" button is never pressed: they stop
+     the attempt with `auth_required` and say what was seen;
+   - rate-limited (one attempt per interval) and stopped for good on a wrong password, a lock-out or
+     MFA until the student saves the credentials again or signs in by hand, so retries can never
+     lock the account;
+   - the values never leave the keychain and the form fields: not in config, the database, logs,
+     traces, state files or error messages.
+
+   Any other connector that wants the same needs the student's own decision and the same
+   conditions.
+
 3. **Read-only by default (§50).** Connectors do not change state in the source. If an endpoint
    has a side effect, it goes on a hard-coded denylist in the connector's HTTP layer, and a test
    proves the request is refused before anything is sent. Examples are marking notices read,
@@ -98,7 +118,8 @@ vulnerabilities and connector bugs are handled separately.
 ## 6. Checklist for a new connector
 
 - [ ] Reads only the user's own or public data; no enumeration.
-- [ ] Logs in only through the normal flow; no credential filling and no hidden-form login.
+- [ ] Logs in only through the normal flow; no credential filling (except the student-chosen,
+      saved-password sign-in of §1.2) and no hidden-form login.
 - [ ] Side-effecting endpoints are on a denylist, with a test.
 - [ ] RateLimiter is used and schedules are sensible; one session means serialized requests.
 - [ ] Metadata has `apiStability`, `risk`, `testedVersion`; version detection and drift

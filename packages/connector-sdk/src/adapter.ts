@@ -132,6 +132,35 @@ export function supportsInteractiveLogin(
   return typeof (adapter as Partial<InteractiveAuthAdapter>).login === 'function';
 }
 
+/** One credential the student may store (OS keychain only) so the adapter can sign in again by itself. */
+export interface CredentialSecret {
+  /** Secret name; the SecretStore key is `secretKey(sourceId, secret)`. */
+  secret: string;
+  /** What to ask for, e.g. "VPN のユーザー名". */
+  label: string;
+  /** Show what is typed (a user name), or not (a password). */
+  echo: boolean;
+}
+
+/**
+ * Optional extension: an adapter that signs in again by itself with credentials the student chose
+ * to store in the OS keychain (opt-in per source; never in config, logs, the database or errors).
+ * The host asks for them only when the student agrees (`unicontext login <source>` /
+ * `unicontext secrets set <source> <name>`).
+ */
+export interface SavedCredentialsAdapter extends SourceAdapter {
+  credentialSecrets(): CredentialSecret[];
+  /** The stored credentials were saved again or deleted: reset attempt limits. */
+  credentialsChanged(): Promise<void> | void;
+}
+
+export function supportsSavedCredentials(
+  adapter: SourceAdapter,
+): adapter is SavedCredentialsAdapter {
+  const a = adapter as Partial<SavedCredentialsAdapter>;
+  return typeof a.credentialSecrets === 'function' && typeof a.credentialsChanged === 'function';
+}
+
 /** Listener for pushed changes (filesystem events, watched import folders). */
 export interface WatchListener {
   /** Hand the result to SyncEngine.ingest(sourceId, result). */

@@ -49,13 +49,23 @@ Unmapped folders stay fully visible.
 - **A failed or empty listing is never a deletion.** `403 ファイル参照エラー` and empty `200` are
   treated as flaky/retryable; the last good listing is kept. A file is removed from the index only
   when its folder lists **successfully** without it. The connector never declares `complete`, so the
-  sync engine can never delete unseen items either. A lost session aborts the run with
-  `auth_required` and makes no changes at all.
+  sync engine can never delete unseen items either. A session lost before anything was listed
+  fails the run with `auth_required` and changes nothing; one lost in the middle of a long walk
+  keeps the pages already listed (and the cursor), deletes nothing, and the next run asks for a
+  sign-in (or signs in again with the saved password, below).
 - **Polite & incremental.** One request at a time with a pause (≈3 s + jitter) and exponential
-  backoff; `maxFoldersPerRun` (default 60) per run; the walk resumes from where it stopped via the
+  backoff; `maxFoldersPerRun` (default 60) per page; the walk resumes from where it stopped via the
   cursor, re-lists stale folders, and re-seeds the whole tree every `rewalkAfterHours` (72 h). A root that
   has never been listed OK is retried as soon as its backoff allows (capped at 30 min), not after 72 h.
+  A folder that failed (flaky 403 / empty) stays on the frontier for up to 3 failures instead of
+  waiting a day for its parent to be listed again; a forbidden placeholder does not.
   Schedule is daily; keep it off known maintenance windows.
+- **The whole tree inside one sign-in.** When UniContext knows when the current session was signed
+  in (`signedInAt` in `portal-session.json`, written by `login` and by the automatic sign-in), one
+  sync keeps going page after page (each page is stored as it arrives) until the tree is indexed,
+  `walk.maxFoldersPerSession` (2000) folders, or `signedInAt + browser.sessionMaxMinutes −
+  walk.sessionMarginMinutes` (60 − 5 = 55 min). At ≈3.75 s per folder that is ≈800 folders per
+  sign-in. Without a known sign-in time it is one page per sync, as before.
 - **Own browser profile.** Not shared with LiveCampusU/Teams (different host and session system).
 
 ## Enabling it and signing in
@@ -67,7 +77,8 @@ Unmapped folders stay fully visible.
      shizuoka-vpn-files: { enabled: true }
    ```
 
-2. Sign in once (the human does the password/MFA; UniContext never types credentials):
+2. Sign in once (the human does the password/MFA; UniContext types credentials only when the student
+   saved them for automatic sign-in, see below):
 
    ```
    unicontext login shizuoka-vpn-files
@@ -121,7 +132,8 @@ Unmapped folders stay fully visible.
    would drop it when the window closes; the profile is launched with `--restore-last-session`,
    which keeps such cookies in the profile's own cookie store (nothing is exported), and closes with
    a single blank tab so the next launch does not re-request a portal page. When the session is
-   gone (the portal ends it after at most 60 min), a sync stops with `auth_required` — run `login`
+   gone (the portal ends it 60 min after sign-in), a sync signs in again with the saved password
+   when the student stored one, else stops with `auth_required` — run `login`
    again.
 
 How "signed in" is decided (`authenticate()`, never prompts): a browser profile on disk proves
@@ -141,20 +153,95 @@ instead of running the sync next to it.
 
 Optional config (all under `sources.shizuoka-vpn-files`): `roots.disable` / `roots.include`,
 `courseMap` (`[{ path, root?, course }]`), `prefetch` (path prefixes to pre-download small files),
-`walk.*` (caps and intervals), `files.*` (download/extract limits), `mirror.*` (opt-in local copy),
-`browser.*` (`channel`, `executablePath`, `loginTimeoutMs`, `bootTimeoutMs`, `sessionMaxMinutes`).
+`prefetchCurrentYear` (also the course folders of the current academic year, e.g.
+`class/2026…/…`; needs `mirror.enabled`, and `mirror.maxFileMB` decides what is small),
+`walk.*` (caps and intervals, incl. `maxFoldersPerSession`, `sessionMarginMinutes`), `files.*`
+(download/extract limits), `mirror.*` (opt-in local copy), `browser.*` (`channel`,
+`executablePath`, `loginTimeoutMs`, `bootTimeoutMs`, `sessionMaxMinutes`), `autoLogin.*`
+(`enabled`, `minIntervalMinutes` 10, `maxConsecutiveFailures` 3, `submitTimeoutMs` 30 s).
+
+## Session lifetime: what one sign-in buys
+
+The portal ends every session **60 minutes after sign-in** (`DSmaxTimeout = 3600`, research §2.3),
+however busy it is; it also ends idle sessions (`DSLastAccess`). Concretely, after one manual
+sign-in:
+
+| Within the 60 minutes | After them |
+| --- | --- |
+| The post-login sync walks the whole tree (above) and the opt-in mirror/prefetch pass downloads small files of linked / current-year folders | No portal request succeeds. Every sync logs `auth_required` (observed 2026-10-06 from 13:33 JST, 76 min after the 12:17 sign-in) |
+| On-request downloads work | The **index stays**: browse / search / recent answer from it, with each folder's last listing time; files already downloaded or mirrored are served from disk |
+| | A file that is not cached yet answers `authRequired: true` with "このファイルはまだ UniContext に保存されていない…サインインしてください" |
+
+A keep-alive cannot help: it only defeats the idle timeout, never `DSmaxTimeout`. Ways to stay
+signed in longer, best first:
+
+1. **Automatic sign-in with the saved password** (implemented, opt-in, below). Each daily sync and
+   each on-request download that finds the session gone signs in again by itself.
+2. Ask the faculty's IT to raise the role's max session length or allow a persistent session
+   (an Ivanti role setting; nothing UniContext can change).
+3. A full VPN client + direct SMB would remove the portal entirely, but the student confirmed the
+   Store Pulse/Ivanti app does not connect (research §4), and on campus the share is reachable
+   without VPN only from the campus network.
+
+## Automatic sign-in with the saved password (opt-in)
+
+Decided by the student on 2026-10-06 ("セッションじゃなくてパスワードをセキュアに保存すれば同じこと"):
+UniContext may keep the VPN user name and password in the **OS keychain** (Windows Credential
+Manager, `SecretStore`) and sign in again by itself when the session is gone.
+
+- **Turning it on**: `unicontext login shizuoka-vpn-files` asks once whether to save them (`y/N`;
+  `--save-password` skips the question, `--no-save-password` never asks); the user name is typed
+  visibly, the password without echo. Or `unicontext secrets set shizuoka-vpn-files username` /
+  `… password`. `unicontext secrets list shizuoka-vpn-files` shows whether they are stored (never
+  the values); `unicontext secrets delete shizuoka-vpn-files password` turns it off, as does
+  `autoLogin.enabled: false`. Saving them again (or a successful manual sign-in) clears any stop
+  below.
+- **Where it types**: only into `form[name="frmLogin"]`'s `username` and `password` fields on
+  `https://<portal host>/dana-na/auth/url_3/welcome.cgi` (the realm's form, checked before typing),
+  then presses that form's own submit button. The read-only route still blocks every non-GET
+  except the sign-in POSTs under `/dana-na/auth/`. The session is then confirmed by the same
+  portal check as a manual sign-in (`landing-page` JSON). A page that is not that form gets nothing
+  typed (`form_not_found`).
+- **When it stops** (and reports `auth_required` with what it saw, e.g. `自動サインインできませんでした:
+  二段階認証（ワンタイムコードなど）を求められました / … mfa @ /dana-na/auth/url_3/…`):
+  - wrong user name or password (`p=failed`, or the form again after submit), a lock-out (`p=…lock…`),
+    an MFA / one-time-code / secondary-password page, a CAPTCHA, or an unrecognised form: **stops
+    for good** until the credentials are saved again or the student signs in by hand, so a changed
+    password can never lock the account through retries;
+  - Ivanti's "other user sessions in progress" page (`btnContinue` / `FormDataStr`): **never
+    pressed** — Continue can end another session, which may be the student's own browser session,
+    and UniContext cannot tell whose it is. Counted as a soft failure;
+  - no recognisable answer within `submitTimeoutMs`: soft failure.
+  Soft failures are retried at most once per `minIntervalMinutes` (10) and stop after
+  `maxConsecutiveFailures` (3) in a row. A browser profile held by another UniContext process does
+  not count as an attempt (nothing was typed).
+- **Never written anywhere else**: not config, the database, raw payloads, logs, `login-trace.jsonl`,
+  `portal-session.json` or `auto-login.json` (that file holds timestamps, the last outcome name and
+  a path without query only), and not in error messages (any browser error text is scrubbed of
+  both values). Tested with the fake portal (`test/auto-login.test.ts`).
+- **Risks the student accepted**: the password sits in Windows Credential Manager, readable by any
+  program running as the same Windows user; automated sign-in to the portal is not something the
+  university documents as allowed (the connector stays read-only); a portal change (MFA added, a
+  new form) stops it rather than working around it.
 
 ## Exploring from the AI (local index, read-only)
 
 MCP tools (local and the remote read-only surface):
 
 - `browse_vpn_files { root?, path?, limit?, offset? }` — a folder's subfolders (each with its last
-  successful listing time and status) and files. No `root` → the share roots.
+  successful listing time and status) and files. No `root` → the share roots. While nothing has
+  been indexed yet, the answer carries `index: { empty: true, sources: [{ source, health, … }],
+  note }` so an empty list is never read as "the share is empty".
 - `search_vpn_files { query, year?, course?, root? }` — name/path substring across the whole index.
 - `list_recent_vpn_files { since?, root? }` — recently added/updated files, newest first.
 - `download_course_file { file }` — download one file's bytes/text on request (pass a `document:…`
   id from the tools above). Downloaded files are cached locally, so later reads never touch the
   portal; retries use backoff.
+
+All four are on the remote surface (`https://uc.nemut.ai`, read-only and write grants alike;
+`apps/mcp/test/remote-surface.test.ts`). ChatGPT caches a connector's tool list: its last
+`tools/list` was on 2026-10-05 12:15 JST, an hour before these tools existed, so it needs
+**Settings → Connectors → UniContext → Refresh** (or reconnecting) and a new chat to see them.
 
 Context-engine functions behind them: `browseVpnFiles`, `searchVpnFiles`, `recentVpnFiles`
 (`@unicontext/context-engine`).

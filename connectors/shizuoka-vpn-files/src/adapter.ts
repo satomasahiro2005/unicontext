@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import type { Capability, HealthStatus } from '@unicontext/canonical-model';
 import type {
   AuthResult,
+  CredentialSecret,
   DownloadableFile,
   FileDownloadAdapter,
   FileDownloadOutcome,
@@ -13,25 +14,17 @@ import type {
   InteractiveLoginOptions,
   RawDeletion,
   RawItem,
+  SavedCredentialsAdapter,
   SyncInput,
   SyncResult,
 } from '@unicontext/connector-sdk';
-import {
-  AuthRequiredError,
-  type Clock,
-  errorMessage,
-  type Logger,
-} from '@unicontext/core';
+import { AuthRequiredError, type Clock, errorMessage, type Logger } from '@unicontext/core';
+import { CREDENTIAL_SECRETS } from './auto-login.js';
 import type { ShizuokaVpnFilesConfig } from './config.js';
-import { courseHintForPath, isPrefetchPath } from './courses.js';
+import { academicYear, courseHintForPath, isPrefetchPath } from './courses.js';
 import type { VpnDeployment, VpnRoot } from './deployment.js';
 import { PRODUCT } from './metadata.js';
-import {
-  extensionOf,
-  joinPath,
-  mimeFromName,
-  parentOf,
-} from './parse.js';
+import { extensionOf, joinPath, mimeFromName, parentOf } from './parse.js';
 import type { ListResult, StreamFileResult, VpnPortalClient } from './client.js';
 import { FilePayloadSchema, type FilePayload } from './schemas.js';
 
@@ -68,8 +61,24 @@ export interface WalkState {
 /** Latest one-time migration (1: clear the backoff a never-listed root got from a dead session). */
 const STATE_MIGRATION = 1;
 
+/** A failing folder stays on the frontier for this many failures, then waits for its parent. */
+const MAX_DEFERRED_FAILURES = 3;
+
 /** A root that was never listed OK keeps a short backoff, so it is retried soon (30 min). */
 const NEVER_LISTED_BACKOFF_CAP_MS = 30 * 60_000;
+
+/**
+ * Should a folder that could not be listed stay on the frontier? Not a forbidden placeholder (a
+ * 403 the first time it was seen) and not one that failed too often (it waits for its parent's
+ * next listing); a root that was never listed OK always stays (its backoff is capped at 30 min).
+ */
+function retryableFolder(rs: RootState, root: VpnRoot, path: string): boolean {
+  if (path === root.startDir && !hasOkFolder(rs)) return true;
+  return (
+    rs.folders[path]?.status !== 'forbidden' &&
+    (rs.backoff[path]?.failures ?? 0) <= MAX_DEFERRED_FAILURES
+  );
+}
 
 export function emptyState(): WalkState {
   return { version: 1, roots: {}, migrated: STATE_MIGRATION };
@@ -123,15 +132,25 @@ export interface WithClient {
 /** When a live portal session was last verified (ISO time), shared by the CLI and the daemon. */
 export interface SessionMarker {
   read(): string | undefined;
-  /** `undefined` forgets it (signed out, session ended). */
+  /** `undefined` forgets it (signed out, session ended), including the sign-in time. */
   write(verifiedAt: string | undefined): void;
+  /**
+   * When the current session was signed in (a manual or automatic sign-in): the portal ends it
+   * `sessionMaxMinutes` later whatever happens (Ivanti `DSmaxTimeout`). Optional for old stores.
+   */
+  readSignedInAt?(): string | undefined;
+  /** Record a fresh sign-in (also counts as a verification). */
+  writeSignedInAt?(at: string): void;
 }
 
 /** A session verified this recently is trusted without opening the browser again. */
 const RECHECK_AFTER_MS = 2 * 60_000;
 
 export interface TeamsLikeExtract {
-  (data: Uint8Array, ext: string): Promise<{ text: string; pages?: { page: number; text: string }[] }>;
+  (
+    data: Uint8Array,
+    ext: string,
+  ): Promise<{ text: string; pages?: { page: number; text: string }[] }>;
 }
 
 export interface ShizuokaVpnFilesAdapterOptions {
@@ -149,6 +168,13 @@ export interface ShizuokaVpnFilesAdapterOptions {
   /** Default: in memory only. */
   sessionMarker?: SessionMarker;
   withClient: WithClient;
+  /**
+   * One rate-limited automatic sign-in with the credentials the student saved in the OS keychain
+   * (see auto-login.ts). `undefined` when there are none (or it is turned off). Never prompts.
+   */
+  autoSignIn?: () => Promise<AuthResult | undefined>;
+  /** Forget the automatic sign-in history (credentials saved again, or a manual sign-in worked). */
+  resetAutoSignIn?: () => void;
   login?: (options?: InteractiveLoginOptions) => Promise<AuthResult>;
   logout?: () => Promise<void>;
   close?: () => Promise<void>;
@@ -178,7 +204,28 @@ interface RunOutput {
    * OK, empty or forbidden — not a login redirect, not a transport error).
    */
   proved: boolean;
+  /** List requests made (whatever they answered). */
+  requests: number;
+  /** The portal dropped the session in the middle (a login redirect): the run stopped there. */
+  sessionLost: boolean;
 }
+
+/** A sync that keeps going over several pages while the session window lasts. */
+interface Sweep {
+  token: string;
+  state: WalkState;
+  /** List requests made by the earlier pages of this sync. */
+  requests: number;
+  /** An automatic sign-in was already tried in this sync. */
+  autoTried: boolean;
+}
+
+/** A file that is not cached yet needs the live portal (the index itself never does). */
+const downloadNeedsSignInMessage = (sourceId: string): string =>
+  `このファイルはまだ UniContext に保存されていないため、SSL-VPN ポータルから取る必要がありますが、サインインが切れています。「unicontext login ${sourceId}」でサインインしてください（フォルダの一覧と検索はローカルの索引から使えます）。 / This file is not cached yet and the SSL-VPN portal session has ended; run \`unicontext login ${sourceId}\` (browsing and searching the index still work).`;
+
+const sessionExpiredMessage = (sourceId: string): string =>
+  `SSL-VPN ポータルのセッションが切れました。「unicontext login ${sourceId}」で再度サインインしてください。 / SSL-VPN portal session expired; run \`unicontext login ${sourceId}\`.`;
 
 /** External id of a file / folder raw item. */
 export function fileExternalId(rootKey: string, path: string): string {
@@ -193,7 +240,9 @@ export function folderExternalId(rootKey: string, path: string): string {
  * downloads files on request — all read-only through the student's signed-in session. The crawl is
  * NOT filtered by enrolled course; a failed or empty listing is never a deletion (research §3.4).
  */
-export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDownloadAdapter {
+export class ShizuokaVpnFilesAdapter
+  implements InteractiveAuthAdapter, FileDownloadAdapter, SavedCredentialsAdapter
+{
   readonly id: string;
   readonly fileSourceTypes = ['szvpn.file'] as const;
   readonly fileTextSourceTypes = ['szvpn.fileText'] as const;
@@ -201,15 +250,24 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
   private healthState: HealthStatus;
   lastRunCounts: Record<string, number> = {};
   private readonly marker: SessionMarker;
+  /** The sync in progress over several pages (see {@link Sweep}). */
+  private sweep: Sweep | undefined;
 
   constructor(private readonly options: ShizuokaVpnFilesAdapterOptions) {
     this.id = `shizuoka-vpn-files:${options.sourceId}`;
     this.healthState = { state: 'healthy', checkedAt: options.clock.now().toISOString() };
     let mem: string | undefined;
+    let signedIn: string | undefined;
     this.marker = options.sessionMarker ?? {
       read: () => mem,
       write: (at) => {
         mem = at;
+        if (at === undefined) signedIn = undefined;
+      },
+      readSignedInAt: () => signedIn,
+      writeSignedInAt: (at) => {
+        mem = at;
+        signedIn = at;
       },
     };
   }
@@ -218,11 +276,32 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     return Promise.resolve([...CAPABILITIES]);
   }
 
+  credentialSecrets(): CredentialSecret[] {
+    return CREDENTIAL_SECRETS.map((c) => ({ ...c }));
+  }
+
+  credentialsChanged(): void {
+    this.options.resetAutoSignIn?.();
+  }
+
   private signInRequired(detail?: string): AuthResult {
     return {
       status: 'auth_required',
       message: `SSL-VPN ポータルのサインインが必要です。「unicontext login ${this.options.sourceId}」でサインインしてください。 / SSL-VPN portal sign-in required; run \`unicontext login ${this.options.sourceId}\`.${detail ? ` (${detail})` : ''}`,
     };
+  }
+
+  /**
+   * The session is gone: sign in again with the saved credentials when the student chose that
+   * (rate-limited, see auto-login.ts), else auth_required. Never prompts.
+   */
+  private async signInAgain(detail?: string): Promise<AuthResult> {
+    const auto = await this.options.autoSignIn?.();
+    if (auto?.status === 'authenticated') {
+      this.markSignedIn();
+      return auto;
+    }
+    return this.signInRequired(auto?.message ?? detail);
   }
 
   private verifiedAgoMs(): number | undefined {
@@ -241,19 +320,39 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     this.marker.write(this.now().toISOString());
   }
 
+  private markSignedIn(): void {
+    const now = this.now().toISOString();
+    if (this.marker.writeSignedInAt) this.marker.writeSignedInAt(now);
+    else this.marker.write(now);
+  }
+
+  /**
+   * Until when the current session can be used for a long walk: its sign-in time plus the portal's
+   * hard cap (`sessionMaxMinutes`, Ivanti DSmaxTimeout) minus a margin. Unknown sign-in time (a
+   * session verified but not signed in by this UniContext) → undefined: one page per sync.
+   */
+  private sessionDeadline(): Date | undefined {
+    const at = this.marker.readSignedInAt?.();
+    const t = at ? Date.parse(at) : NaN;
+    if (Number.isNaN(t)) return undefined;
+    const b = this.options.config.browser;
+    const w = this.options.config.walk;
+    return new Date(t + (b.sessionMaxMinutes - w.sessionMarginMinutes) * 60_000);
+  }
+
   /**
    * "Signed in" only for a portal session that was actually verified: a browser profile on disk
    * proves nothing (a sign-in window that closed early leaves one behind). Never prompts.
-   * - never verified, or longer ago than the portal keeps a session → auth_required, without
-   *   opening a browser;
+   * - never verified, or longer ago than the portal keeps a session → sign in again with the saved
+   *   credentials if the student stored them, else auth_required, without opening a browser;
    * - verified within the last 2 minutes (a sync or login just did) → authenticated;
    * - otherwise a headless check against the portal decides.
    */
   async authenticate(): Promise<AuthResult> {
-    if (!this.options.profileExists()) return this.signInRequired();
+    if (!this.options.profileExists()) return this.signInAgain();
     const ago = this.verifiedAgoMs();
     const maxMs = this.options.config.browser.sessionMaxMinutes * 60_000;
-    if (ago === undefined || ago < 0 || ago > maxMs) return this.signInRequired();
+    if (ago === undefined || ago < 0 || ago > maxMs) return this.signInAgain();
     if (ago <= RECHECK_AFTER_MS)
       return { status: 'authenticated', message: 'SSL-VPN portal session verified' };
     // The other UniContext process (daemon sync / CLI) is using the session right now.
@@ -262,20 +361,25 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
         status: 'authenticated',
         message: 'SSL-VPN portal session in use by another UniContext process',
       };
-    if (!this.options.verifySession) return this.signInRequired();
+    if (!this.options.verifySession) return this.signInAgain();
     const r = await this.options.verifySession();
     if (r.status === 'authenticated') {
       this.markVerified();
       return { status: 'authenticated', message: 'SSL-VPN portal session verified' };
     }
     this.marker.write(undefined);
-    return this.signInRequired(r.message);
+    return this.signInAgain(r.message);
   }
 
   async login(options?: InteractiveLoginOptions): Promise<AuthResult> {
-    if (!this.options.login) return { status: 'failed', message: 'Interactive login is not available' };
+    if (!this.options.login)
+      return { status: 'failed', message: 'Interactive login is not available' };
     const r = await this.options.login(options);
-    if (r.status === 'authenticated') this.markVerified();
+    if (r.status === 'authenticated') {
+      this.markSignedIn();
+      // The student signed in by hand: a stopped automatic sign-in may try again.
+      this.options.resetAutoSignIn?.();
+    }
     return r;
   }
 
@@ -319,56 +423,151 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     return this.enabledRoots()[0]?.key ?? '';
   }
 
-  async sync(input: SyncInput): Promise<SyncResult> {
-    const state = loadState(input.cursor?.extra);
-    let out: { result: RunOutput } | { auth: AuthResult };
+  /** One page of the walk in one browser session. A lost session is returned, not thrown. */
+  private async runPage(
+    state: WalkState,
+    input: SyncInput,
+  ): Promise<{ result: RunOutput } | { auth: AuthResult }> {
     try {
-      out = await this.options.withClient(async (client) => {
+      return await this.options.withClient(async (client) => {
         const r = await this.run(client, state, input);
         // A run that asked the portal nothing proves nothing: when the last verification is
         // stale, ask once (one same-origin GET) instead of refreshing the marker blindly.
-        if (!r.proved && this.verificationStale()) r.proved = (await client.probeSession?.()) === true;
+        if (!r.proved && !r.sessionLost && this.verificationStale())
+          r.proved = (await client.probeSession?.()) === true;
         return r;
       });
     } catch (e) {
-      if (e instanceof AuthRequiredError) {
-        this.marker.write(undefined);
-        this.healthState = {
-          state: 'auth_required',
-          checkedAt: this.now().toISOString(),
-          message: e.message,
-        };
-      }
+      if (e instanceof AuthRequiredError)
+        return { auth: { status: 'auth_required', message: e.message } };
       throw e;
     }
-    const now = this.now().toISOString();
-    if ('auth' in out) {
-      this.marker.write(undefined);
-      this.healthState = {
-        state: 'auth_required',
-        checkedAt: now,
-        ...(out.auth.message ? { message: out.auth.message } : {}),
+  }
+
+  /** Is there a folder the walk could list right now (not waiting out a backoff)? */
+  private pendingWork(state: WalkState): boolean {
+    const now = this.now().getTime();
+    for (const root of this.enabledRoots()) {
+      const rs = state.roots[root.key];
+      if (!rs) return true;
+      for (const p of rs.frontier) {
+        const bo = rs.backoff[p];
+        if (!bo || new Date(bo.nextAttemptAt).getTime() <= now) return true;
+      }
+    }
+    return false;
+  }
+
+  private sessionGone(message: string): void {
+    this.marker.write(undefined);
+    this.healthState = { state: 'auth_required', checkedAt: this.now().toISOString(), message };
+  }
+
+  /**
+   * One page of the walk (`maxFoldersPerRun` folders). Right after a sign-in whose time is known,
+   * the sync keeps going page after page (the engine stores each page as it arrives) until the
+   * tree is indexed, `maxFoldersPerSession`, or the session window closes. A session that drops
+   * in the middle is signed in again with the saved credentials when the student stored them;
+   * otherwise the pages already listed are kept (never a deletion) and the next run says
+   * auth_required. A session lost before anything was listed fails the run with auth_required.
+   */
+  async sync(input: SyncInput): Promise<SyncResult> {
+    const cont = input.pageToken && this.sweep?.token === input.pageToken ? this.sweep : undefined;
+    this.sweep = undefined;
+    const state = cont ? cont.state : loadState(input.cursor?.extra);
+    // Later pages continue the same walk: never re-seed the frontier.
+    const pageInput: SyncInput = cont ? { ...input, mode: 'incremental' } : input;
+    let autoTried = cont?.autoTried ?? false;
+
+    // A continuation page that starts after the session window: nothing more this sync.
+    const windowEnd = this.sessionDeadline();
+    if (cont && (windowEnd === undefined || this.now().getTime() >= windowEnd.getTime()))
+      return {
+        items: [],
+        cursor: { extra: state as unknown as Record<string, unknown> },
+        productVersion: { product: PRODUCT, version: this.options.deployment.id },
       };
-      throw new AuthRequiredError(out.auth.message ?? 'SSL-VPN portal sign-in required');
+
+    let out = await this.runPage(state, pageInput);
+    const lost = (o: typeof out): boolean => 'auth' in o || o.result.sessionLost;
+    const progressed = (o: typeof out): boolean =>
+      'result' in o && (o.result.items.length > 0 || o.result.deletions.length > 0);
+    let partial: RunOutput | undefined;
+    let autoMessage: string | undefined;
+    if (lost(out) && !autoTried && this.options.autoSignIn) {
+      autoTried = true;
+      if (progressed(out)) partial = (out as { result: RunOutput }).result;
+      const again = await this.signInAgain();
+      if (again.status === 'authenticated')
+        out = await this.runPage(state, { ...pageInput, mode: 'incremental' });
+      else autoMessage = again.message;
+    }
+    if (partial && 'result' in out) out = { result: mergeRuns(partial, out.result) };
+    else if (partial && 'auth' in out) out = { result: { ...partial, sessionLost: true } };
+
+    const now = this.now().toISOString();
+    if ('auth' in out || (out.result.sessionLost && !progressed(out) && !cont)) {
+      const message =
+        autoMessage ??
+        ('auth' in out
+          ? (out.auth.message ?? 'SSL-VPN portal sign-in required')
+          : sessionExpiredMessage(this.options.sourceId));
+      this.sessionGone(message);
+      throw new AuthRequiredError(message);
     }
     const r = out.result;
-    if (r.proved) this.markVerified();
+    const warnings = [...r.warnings];
+    if (r.sessionLost) {
+      // Keep what was listed (cursor included); the next run asks for a sign-in.
+      this.sessionGone(sessionExpiredMessage(this.options.sourceId));
+      warnings.push(
+        'SSL-VPN portal session ended during the walk; the folders listed so far are kept. Sign in again to continue.',
+      );
+    } else if (r.proved) this.markVerified();
     this.lastRunCounts = r.counts;
-    const degraded = (r.counts.listErrors ?? 0) > 0 && (r.counts.foldersListed ?? 0) === 0;
-    this.healthState = degraded
-      ? { state: 'degraded', checkedAt: now, message: 'portal listing is flaky; kept last good index' }
-      : { state: 'healthy', checkedAt: now, lastSuccessAt: now };
+    if (!r.sessionLost) {
+      const degraded = (r.counts.listErrors ?? 0) > 0 && (r.counts.foldersListed ?? 0) === 0;
+      this.healthState = degraded
+        ? {
+            state: 'degraded',
+            checkedAt: now,
+            message: 'portal listing is flaky; kept last good index',
+          }
+        : { state: 'healthy', checkedAt: now, lastSuccessAt: now };
+    }
+
+    const requests = (cont?.requests ?? 0) + r.requests;
+    const deadline = this.sessionDeadline();
+    const more =
+      !r.sessionLost &&
+      r.requests > 0 &&
+      !input.signal?.aborted &&
+      deadline !== undefined &&
+      this.now().getTime() < deadline.getTime() &&
+      requests < this.options.config.walk.maxFoldersPerSession &&
+      this.pendingWork(state);
+    let nextPageToken: string | undefined;
+    if (more) {
+      nextPageToken = `sweep:${requests}:${this.now().getTime()}`;
+      this.sweep = { token: nextPageToken, state, requests, autoTried };
+    }
     return {
       items: r.items,
       ...(r.deletions.length ? { deletions: r.deletions } : {}),
       cursor: { extra: state as unknown as Record<string, unknown> },
       productVersion: { product: PRODUCT, version: this.options.deployment.id },
+      ...(nextPageToken ? { hasMore: true, nextPageToken } : {}),
       // NEVER declare `complete`: the listing is flaky, so unseen items must not be deleted.
-      ...(r.warnings.length ? { warnings: r.warnings } : {}),
+      ...(warnings.length ? { warnings } : {}),
     };
   }
 
-  private rootState(state: WalkState, root: VpnRoot, mode: SyncInput['mode'], now: Date): RootState {
+  private rootState(
+    state: WalkState,
+    root: VpnRoot,
+    mode: SyncInput['mode'],
+    now: Date,
+  ): RootState {
     const cfg = this.options.config.walk;
     let rs = state.roots[root.key];
     if (!rs) {
@@ -387,7 +586,8 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
       // until then). The backoff of a never-listed root is capped at 30 minutes.
       const cap = now.getTime() + NEVER_LISTED_BACKOFF_CAP_MS;
       for (const b of Object.values(rs.backoff))
-        if (new Date(b.nextAttemptAt).getTime() > cap) b.nextAttemptAt = new Date(cap).toISOString();
+        if (new Date(b.nextAttemptAt).getTime() > cap)
+          b.nextAttemptAt = new Date(cap).toISOString();
       rs.frontier = [root.startDir];
       return rs;
     }
@@ -442,31 +642,54 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
       for (const f of Object.values(rs.folders)) filesTotal += f.childFileCount;
 
     let budget = cfg.walk.maxFoldersPerRun;
+    let requests = 0;
+    // Inside a known sign-in window: stop at its end. A run that starts after it (the portal kept
+    // the session longer than assumed) still lists its one page, as before.
+    const windowEnd = this.sessionDeadline()?.getTime();
+    const deadline = windowEnd !== undefined && windowEnd > now.getTime() ? windowEnd : undefined;
+    let sessionLost = false;
     for (const root of roots) {
-      if (budget <= 0) break;
+      if (budget <= 0 || sessionLost) break;
       const rs = this.rootState(state, root, input.mode, now);
       const visited = new Set<string>();
+      // Folders skipped for now (waiting out a backoff, or already tried in this run) stay on the
+      // frontier, so a flaky folder is retried later instead of being forgotten until its parent
+      // is listed again; a forbidden placeholder or a folder that failed too often is dropped
+      // (as before), so the re-walk and refresh of an otherwise finished tree still happen.
+      const deferred: string[] = [];
+      const retryable = (p: string): boolean => retryableFolder(rs, root, p);
       while (budget > 0 && rs.frontier.length > 0) {
         if (input.signal?.aborted) break;
+        // Never start a request past the session window (a page of slow retries could).
+        if (deadline !== undefined && this.now().getTime() >= deadline) break;
         const path = rs.frontier.shift()!;
-        if (visited.has(path)) continue;
-        visited.add(path);
+        if (visited.has(path)) {
+          if (retryable(path)) deferred.push(path);
+          continue;
+        }
         const depth = path === '' ? 0 : path.split('/').length;
         if (depth > cfg.walk.maxDepth) continue;
         const bo = rs.backoff[path];
-        if (bo && new Date(bo.nextAttemptAt).getTime() > now.getTime()) continue;
+        if (bo && new Date(bo.nextAttemptAt).getTime() > now.getTime()) {
+          if (retryable(path)) deferred.push(path);
+          continue;
+        }
         if (filesTotal >= cfg.walk.maxFilesTotal) {
+          rs.frontier.unshift(path);
           warnings.push('file index cap reached; stopping the walk');
           break;
         }
+        visited.add(path);
         budget--;
+        requests++;
         const result = await this.listWithRetry(client, root, path);
-        // A `session` result means the portal dropped us to a login page: abort with
-        // auth_required and make NO changes at all (never a deletion).
-        if (result.status === 'session')
-          throw new AuthRequiredError(
-            `SSL-VPN ポータルのセッションが切れました。「unicontext login ${this.options.sourceId}」で再度サインインしてください。 / SSL-VPN portal session expired; run \`unicontext login ${this.options.sourceId}\`.`,
-          );
+        // A `session` result means the portal dropped us to a login page: stop here, change
+        // nothing for this folder (never a deletion) and let the caller decide.
+        if (result.status === 'session') {
+          rs.frontier.unshift(path);
+          sessionLost = true;
+          break;
+        }
         if (result.status === 'ok' || result.status === 'empty' || result.status === 'forbidden')
           proved = true;
         this.applyListing(
@@ -481,12 +704,17 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
         if (result.status === 'ok') filesTotal += result.entries.filter((e) => e.isFile).length;
         await this.pause(cfg.walk.requestDelayMs);
       }
+      for (const p of deferred) if (!rs.frontier.includes(p)) rs.frontier.push(p);
     }
-    return { items, deletions, warnings, counts, proved };
+    return { items, deletions, warnings, counts, proved, requests, sessionLost };
   }
 
   /** List one folder, retrying transient failures (flaky 403 / empty 200) within the run. */
-  private async listWithRetry(client: VpnPortalClient, root: VpnRoot, path: string): Promise<ListResult> {
+  private async listWithRetry(
+    client: VpnPortalClient,
+    root: VpnRoot,
+    path: string,
+  ): Promise<ListResult> {
     const cfg = this.options.config.walk;
     let last: ListResult = { status: 'error', httpStatus: 0, message: 'not attempted' };
     for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
@@ -509,7 +737,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     depth: number,
     result: ListResult,
     rs: RootState,
-    acc: Omit<RunOutput, 'proved'>,
+    acc: Pick<RunOutput, 'items' | 'deletions' | 'warnings' | 'counts'>,
     nowIso: string,
   ): void {
     if (result.status !== 'ok') {
@@ -536,12 +764,11 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
           subfolders: [],
           childFileCount: 0,
         };
-        acc.items.push(
-          this.folderItem(root, path, depth, nowIso, 'forbidden', [], result.message),
-        );
+        acc.items.push(this.folderItem(root, path, depth, nowIso, 'forbidden', [], result.message));
       }
-      // Re-visit later: push to the end of the frontier.
-      if (!rs.frontier.includes(path)) rs.frontier.push(path);
+      // Re-visit later (push to the end of the frontier) unless it is a forbidden placeholder or
+      // failed too often; a never-listed root is always retried (its backoff is capped).
+      if (retryableFolder(rs, root, path) && !rs.frontier.includes(path)) rs.frontier.push(path);
       return;
     }
 
@@ -593,7 +820,10 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
       const presentSub = new Set(newSubfolders);
       for (const oldSub of prev.subfolders)
         if (!presentSub.has(oldSub)) {
-          acc.deletions.push({ sourceType: 'szvpn.folder', externalId: folderExternalId(root.key, oldSub) });
+          acc.deletions.push({
+            sourceType: 'szvpn.folder',
+            externalId: folderExternalId(root.key, oldSub),
+          });
           delete rs.folders[oldSub];
         }
     }
@@ -619,7 +849,13 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     depth: number,
     nowIso: string,
     status: 'ok' | 'forbidden',
-    children: { name: string; isFile: boolean; path: string; sizeBytes?: number; modifiedAt?: string }[],
+    children: {
+      name: string;
+      isFile: boolean;
+      path: string;
+      sizeBytes?: number;
+      modifiedAt?: string;
+    }[],
     accessError?: string,
     course?: ReturnType<typeof courseHintForPath>,
   ): RawItem {
@@ -652,7 +888,13 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     root: VpnRoot,
     parent: string,
     path: string,
-    e: { name: string; sizeBytes: number | undefined; sizeText: string | undefined; modifiedAt: string | undefined; modifiedText: string | undefined },
+    e: {
+      name: string;
+      sizeBytes: number | undefined;
+      sizeText: string | undefined;
+      modifiedAt: string | undefined;
+      modifiedText: string | undefined;
+    },
     nowIso: string,
   ): RawItem {
     const cfg = this.options.config;
@@ -675,7 +917,7 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
       version,
       listedAt: nowIso,
       course: course ?? null,
-      prefetch: isPrefetchPath(cfg, path),
+      prefetch: isPrefetchPath(cfg, path, academicYear(this.now(), this.options.timezone)),
     };
     return {
       sourceType: 'szvpn.file',
@@ -704,7 +946,11 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     };
   }
 
-  describeFile(item: { sourceType: string; externalId: string; payload: unknown }): DownloadableFile | undefined {
+  describeFile(item: {
+    sourceType: string;
+    externalId: string;
+    payload: unknown;
+  }): DownloadableFile | undefined {
     if (item.sourceType !== 'szvpn.file') return undefined;
     const r = FilePayloadSchema.safeParse(item.payload);
     if (!r.success) return undefined;
@@ -754,18 +1000,33 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
 
     const downloads = jobs.filter((j) => !j.req.extractOnly);
     if (downloads.length > 0) {
-      let out: { result: void } | { auth: AuthResult };
-      try {
-        out = await this.options.withClient((client) =>
-          this.downloadAll(client, downloads, results, warnings, options.signal),
-        );
-      } catch (e) {
-        if (e instanceof AuthRequiredError) this.marker.write(undefined);
-        throw e;
+      const attempt = async (): Promise<{ result: void } | { auth: AuthResult }> => {
+        try {
+          return await this.options.withClient((client) =>
+            this.downloadAll(client, downloads, results, warnings, options.signal),
+          );
+        } catch (e) {
+          if (e instanceof AuthRequiredError)
+            return { auth: { status: 'auth_required', message: e.message } };
+          throw e;
+        }
+      };
+      let out = await attempt();
+      let reason: string | undefined;
+      if ('auth' in out) {
+        this.marker.write(undefined);
+        // Sign in again with the saved credentials (rate-limited), then try once more.
+        const again = await this.signInAgain();
+        if (again.status === 'authenticated') {
+          for (const d of downloads) results.delete(d.req.externalId);
+          out = await attempt();
+        } else reason = again.message;
       }
       if ('auth' in out) {
         this.marker.write(undefined);
-        throw new AuthRequiredError(out.auth.message ?? 'SSL-VPN portal sign-in required');
+        throw new AuthRequiredError(
+          `${downloadNeedsSignInMessage(this.options.sourceId)}${reason ? ` (${reason})` : ''}`,
+        );
       }
       // Only bytes that arrived prove the session (a 404 or a size refusal may be any page).
       if ([...results.values()].some((o) => o.status === 'downloaded')) this.markVerified();
@@ -811,7 +1072,12 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     }
     return {
       results: requests.map(
-        (r) => results.get(r.externalId) ?? { externalId: r.externalId, status: 'failed', error: 'not processed' },
+        (r) =>
+          results.get(r.externalId) ?? {
+            externalId: r.externalId,
+            status: 'failed',
+            error: 'not processed',
+          },
       ),
       items,
       warnings,
@@ -828,7 +1094,11 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     const cfg = this.options.config.files;
     for (const [i, { req, p }] of downloads.entries()) {
       if (signal?.aborted) {
-        results.set(req.externalId, { externalId: req.externalId, status: 'failed', error: 'aborted' });
+        results.set(req.externalId, {
+          externalId: req.externalId,
+          status: 'failed',
+          error: 'aborted',
+        });
         continue;
       }
       results.set(req.externalId, await this.downloadOneWithRetry(client, req, p, warnings));
@@ -843,13 +1113,19 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     warnings: string[],
   ): Promise<FileDownloadOutcome> {
     const cfg = this.options.config.files;
-    let last: FileDownloadOutcome = { externalId: req.externalId, status: 'failed', version: p.version };
+    let last: FileDownloadOutcome = {
+      externalId: req.externalId,
+      status: 'failed',
+      version: p.version,
+    };
     for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
       const o = await this.downloadOne(client, req, p);
       if (o.status === 'downloaded' || o.status === 'notFound' || o.status === 'tooLarge') return o;
       last = o;
       if (attempt < cfg.maxRetries) {
-        warnings.push(`${p.name}: download attempt ${attempt + 1} failed (${o.error ?? o.status}); retrying`);
+        warnings.push(
+          `${p.name}: download attempt ${attempt + 1} failed (${o.error ?? o.status}); retrying`,
+        );
         await this.pause(cfg.downloadDelayMs * 2 ** attempt);
       }
     }
@@ -887,10 +1163,12 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
     await handle.close();
     if (!r.ok) {
       await rm(part, { force: true });
-      if (r.reason === 'session') throw new AuthRequiredError('SSL-VPN portal sign-in required');
+      if (r.reason === 'session')
+        throw new AuthRequiredError(downloadNeedsSignInMessage(this.options.sourceId));
       return {
         externalId: req.externalId,
-        status: r.reason === 'tooLarge' ? 'tooLarge' : r.reason === 'notFound' ? 'notFound' : 'failed',
+        status:
+          r.reason === 'tooLarge' ? 'tooLarge' : r.reason === 'notFound' ? 'notFound' : 'failed',
         version: p.version,
         ...(r.status ? { error: `HTTP ${r.status}` } : {}),
       };
@@ -904,6 +1182,22 @@ export class ShizuokaVpnFilesAdapter implements InteractiveAuthAdapter, FileDown
       ...(r.contentType ? { contentType: r.contentType } : {}),
     };
   }
+}
+
+/** Two runs of one page (before and after an automatic sign-in) as one. */
+function mergeRuns(a: RunOutput, b: RunOutput): RunOutput {
+  const counts: Counts = { ...a.counts };
+  for (const [k, v] of Object.entries(b.counts))
+    counts[k] = k === 'roots' ? v : (counts[k] ?? 0) + v;
+  return {
+    items: [...a.items, ...b.items],
+    deletions: [...a.deletions, ...b.deletions],
+    warnings: [...a.warnings, ...b.warnings],
+    counts,
+    proved: a.proved || b.proved,
+    requests: a.requests + b.requests,
+    sessionLost: b.sessionLost,
+  };
 }
 
 function rootLabelOf(deployment: VpnDeployment, rootKey: string): string {

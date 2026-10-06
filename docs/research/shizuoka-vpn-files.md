@@ -298,3 +298,28 @@ interactive な `login` は、秘密を含まない記録を、このソース�
 プローブの控えめさ（CONNECTOR_POLICY §4）: パスワード/MFA 欄が見えているページでは確認を送らない。
 `landing-page` が `/dana-na/auth/welcome.cgi` などへ戻された（未ログイン）ときは `list-shares` / fb list の
 2 本目以降を出さない（200・リダイレクトなしの HTML のときだけ）。同じページ・同じパスへは 5 秒に 1 回まで。
+
+## 10. 2026-10-06 午後: サインインできたのに索引が空のまま
+
+本人の `%LOCALAPPDATA%\unicontext` を**複製して**読んだ（稼働中の daemon には触れていない）。
+
+- **12:17 の「成功」は 1 フォルダも一覧していない** [観測]。`sync_state.extra_json` は §9.1 と同じ
+  `roots["fs-share"] = { frontier: [], folders: {}, backoff: { "": … 02:37Z }, seededAt: 02:34Z }` のまま、
+  `updated_at` 03:17:31Z。`raw_items` に `szvpn.*` は 0 件。12:17 に同期した daemon は 12:10 起動で、
+  §9.1 の修正（b4e77ef、13:57 に main へ）より前のビルド（1cfaba2、12:05）だった。その版は、一度も
+  一覧できていない root でも frontier が空なら `rewalkAfterHours`（72h）まで再投入しないため、
+  リクエスト 0 件で終わり、しかも marker を書いて「成功」にした。browse の `status: roots, folders: []`
+  はこの空の索引をそのまま返していた（別テーブルを読んでいたのではない）。
+- 13:57 以降の版は移行（`migrated: 1`）と再投入でこの状態を直すが、**直す前にセッションが切れた**。
+  `portal-session.json` の `verifiedAt` は 03:17:31Z で、60 分（`sessionMaxMinutes`）を過ぎた 13:17 JST 以降、
+  `authenticate()` はブラウザを開かずに `auth_required` を返す。daemon ログの 13:33 以降の
+  `SSL-VPN portal sign-in required` はこれ（daemon を再起動しても同じ）。次のサインインで root から歩く。
+- もう一つの穴: 修正後でも、サインイン直後の同期は `maxFoldersPerRun`（60）で止まり、次は 1 日後
+  （その頃にはセッションがない）。→ サインイン時刻（`signedInAt`）を記録し、その 55 分のあいだは 1 回の
+  同期でページを重ねてツリー全体を歩く（`walk.maxFoldersPerSession`）。
+- ChatGPT に VPN の 3 ツールが見えないのは、remote の監査ログで最後の `tools/list` が 10/05 12:15 JST
+  （ツール追加 af920db の 13:20 より前）だったため。サーバーは remote でも 3 本とも出している（テストで確認）。
+  ChatGPT 側のコネクタの Refresh が要る。
+- 本人の決定: パスワードを OS キーチェーンに保存して自動で再サインインする（connector doc「Automatic sign-in」）。
+  Ivanti のサインイン直後の遷移（`login.cgi` の次）は依然 fixture に無いので、自動サインインは
+  `landing-page` の JSON でだけ成功と判断し、見慣れない画面では止まる。

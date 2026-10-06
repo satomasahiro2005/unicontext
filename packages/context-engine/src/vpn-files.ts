@@ -87,6 +87,48 @@ export interface VpnBrowse {
   files: VpnFileRef[];
   /** More children than `limit`; raise `offset`. */
   truncated?: boolean;
+  /**
+   * Only when nothing has been indexed yet: why (each VPN source's sync state), so an empty
+   * answer is never read as "the share is empty".
+   */
+  index?: VpnIndexStatus;
+}
+
+export interface VpnIndexStatus {
+  empty: true;
+  sources: {
+    source: string;
+    /** Connector health: healthy / auth_required / degraded / … (never_synced when unknown). */
+    health: string;
+    message?: string;
+    lastSuccessAt?: string;
+  }[];
+  note: string;
+}
+
+/** Why the index is empty (no folder listed yet), from the VPN sources' health. */
+function emptyIndexStatus(uc: UniContext, source?: string): VpnIndexStatus {
+  const sources = uc.sync
+    .sources()
+    .filter((s) => s.metadata.rawTypes.includes(VPN_FOLDER_TYPE))
+    .filter((s) => !source || s.sourceId === source)
+    .map((s) => {
+      const h = uc.sync.health(s.sourceId);
+      return {
+        source: s.sourceId,
+        health: h?.state ?? 'never_synced',
+        ...(h?.message ? { message: h.message } : {}),
+        ...(h?.lastSuccessAt ? { lastSuccessAt: h.lastSuccessAt } : {}),
+      };
+    });
+  const signIn = sources.some((s) => s.health === 'auth_required');
+  return {
+    empty: true,
+    sources,
+    note: signIn
+      ? 'VPNファイル共有の索引はまだ空です（フォルダを1つも一覧できていません）。SSL-VPN ポータルへのサインインが必要です。「共有が空」という意味ではありません。 / The VPN file index is still empty (no folder listed yet): the SSL-VPN portal needs a sign-in. This does not mean the share is empty.'
+      : 'VPNファイル共有の索引はまだ空です（フォルダを1つも一覧できていません）。「共有が空」という意味ではありません。 / The VPN file index is still empty (no folder listed yet). This does not mean the share is empty.',
+  };
 }
 
 const norm = (s: string): string => s.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
@@ -121,7 +163,13 @@ function folderIndex(uc: UniContext, source?: string): Map<string, FolderEntry> 
   return map;
 }
 
-function folderRef(entry: FolderEntry | undefined, source: string, root: string, path: string, name: string): VpnFolderRef {
+function folderRef(
+  entry: FolderEntry | undefined,
+  source: string,
+  root: string,
+  path: string,
+  name: string,
+): VpnFolderRef {
   if (!entry)
     return {
       source,
@@ -153,7 +201,13 @@ function docIdFor(source: string, root: string, path: string): string {
   return stableId('document', source, root, path);
 }
 
-function fileRef(uc: UniContext, source: string, root: string, child: FolderChild, course?: CourseHint): VpnFileRef {
+function fileRef(
+  uc: UniContext,
+  source: string,
+  root: string,
+  child: FolderChild,
+  course?: CourseHint,
+): VpnFileRef {
   const id = docIdFor(source, root, child.path);
   const doc = uc.sync.stores.entities.getOfKind('document', id);
   const indexed =
@@ -165,9 +219,18 @@ function fileRef(uc: UniContext, source: string, root: string, child: FolderChil
     root,
     name: child.name,
     path: child.path,
-    label: doc?.extra && typeof doc.extra.label === 'string' ? doc.extra.label : `${root}/${child.path}`,
-    ...(child.sizeBytes !== undefined ? { sizeBytes: child.sizeBytes } : doc?.sizeBytes !== undefined ? { sizeBytes: doc.sizeBytes } : {}),
-    ...(child.modifiedAt ? { modifiedAt: child.modifiedAt } : doc?.modifiedAt ? { modifiedAt: doc.modifiedAt } : {}),
+    label:
+      doc?.extra && typeof doc.extra.label === 'string' ? doc.extra.label : `${root}/${child.path}`,
+    ...(child.sizeBytes !== undefined
+      ? { sizeBytes: child.sizeBytes }
+      : doc?.sizeBytes !== undefined
+        ? { sizeBytes: doc.sizeBytes }
+        : {}),
+    ...(child.modifiedAt
+      ? { modifiedAt: child.modifiedAt }
+      : doc?.modifiedAt
+        ? { modifiedAt: doc.modifiedAt }
+        : {}),
     ...(doc?.mimeType ? { mimeType: doc.mimeType } : {}),
     ...(indexed ? { indexed: true } : {}),
     ...(course ? { course } : {}),
@@ -198,8 +261,11 @@ export function browseVpnFiles(
       path: '',
       label: 'VPN ファイル共有',
       status: 'roots',
-      folders: roots.map((e) => folderRef(e, e.source, e.payload.root, e.payload.path, e.payload.name || e.payload.label)),
+      folders: roots.map((e) =>
+        folderRef(e, e.source, e.payload.root, e.payload.path, e.payload.name || e.payload.label),
+      ),
       files: [],
+      ...(index.size === 0 ? { index: emptyIndexStatus(uc, options.source) } : {}),
     };
   }
 
@@ -261,7 +327,14 @@ export interface VpnSearchResult {
 /** Substring search over the indexed tree (file/folder name and path), optional year/course filters. */
 export function searchVpnFiles(
   uc: UniContext,
-  options: { query: string; source?: string; root?: string; year?: number; course?: string; limit?: number },
+  options: {
+    query: string;
+    source?: string;
+    root?: string;
+    year?: number;
+    course?: string;
+    limit?: number;
+  },
 ): VpnSearchResult {
   const q = norm(options.query);
   const limit = Math.max(1, Math.min(options.limit ?? 30, 200));

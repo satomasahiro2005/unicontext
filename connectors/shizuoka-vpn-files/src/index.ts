@@ -1,4 +1,5 @@
 export * from './adapter.js';
+export * from './auto-login.js';
 export * from './client.js';
 export * from './config.js';
 export * from './connector.js';

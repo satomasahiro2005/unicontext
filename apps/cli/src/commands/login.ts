@@ -12,7 +12,7 @@ import type { CliContext } from '../context.js';
 import { CliError, loginHint } from '../errors.js';
 import { shortTime } from '../format/common.js';
 import { action, type Harness } from '../harness.js';
-import { promptMissingSecrets } from './secrets.js';
+import { offerSavedCredentials, promptMissingSecrets } from './secrets.js';
 
 const AUTH_LABELS: Record<AuthResult['status'], string> = {
   authenticated: '認証できました',
@@ -82,7 +82,8 @@ async function waitForJob(
     }
     await ctx.deps.sleep(POLL_MS);
     polls++;
-    job = (await daemon.get<SyncJobResponse>(`/api/v1/sync-jobs/${encodeURIComponent(job.id)}`)).job;
+    job = (await daemon.get<SyncJobResponse>(`/api/v1/sync-jobs/${encodeURIComponent(job.id)}`))
+      .job;
   }
   return { job, timedOut: false };
 }
@@ -96,8 +97,16 @@ export function registerLogin(program: Command, h: Harness): void {
       '--wait-sync',
       'ログイン後にデーモンの同期が終わるまで待つ（最大10分） / wait for the daemon sync to finish',
     )
+    .option(
+      '--save-password',
+      '自動で再サインインできるソースで、聞かずにパスワードの保存へ進む / store the sign-in credentials for automatic re-login without asking',
+    )
+    .option(
+      '--no-save-password',
+      'パスワードの保存を勧めない / never offer to store the sign-in credentials',
+    )
     .action(
-      action(h, async (ctx, { args, opts }) => {
+      action<{ waitSync?: boolean; savePassword?: boolean }>(h, async (ctx, { args, opts }) => {
         const sourceId = String(args[0]);
         const rt = await ctx.runtime();
         const info = rt.sourceInfo.get(sourceId);
@@ -130,6 +139,11 @@ export function registerLogin(program: Command, h: Harness): void {
         // Token-based sources (envSecrets / headerSecrets, e.g. an MCP server): ask for the values
         // the keychain does not hold yet, without echo, before the adapter tries to connect.
         const enteredSecrets = await promptMissingSecrets(ctx, sourceId);
+        // Sources that can sign in again by themselves (the VPN portal): offer to keep the
+        // password in the OS keychain; authenticate() below then tries it before any window.
+        enteredSecrets.push(
+          ...(await offerSavedCredentials(ctx, sourceId, adapter, opts.savePassword)),
+        );
         let auth: AuthResult;
         try {
           // authenticate() never prompts (connector-sdk contract); when the stored session is not

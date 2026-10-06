@@ -32,6 +32,18 @@ describe('a root that was never listed OK is retried, not left poisoned', () => 
     expect(r.items.some((i) => i.externalId === 'fs-share:')).toBe(true);
   });
 
+  it('the state read from the student’s database on 2026-10-06 (12:17 sync wrote nothing) lists the root', async () => {
+    // sync_state.extra_json of shizuoka-vpn-files, copied verbatim (updated_at 03:17:31Z): the
+    // 12:17 "successful" sync ran code that waited 72 h to re-walk a root that was never listed.
+    const live = JSON.parse(
+      '{"version":1,"roots":{"fs-share":{"frontier":[],"folders":{},"backoff":{"":{"failures":1,"nextAttemptAt":"2026-10-06T02:37:01.653Z"}},"seededAt":"2026-10-06T02:34:56.306Z"}}}',
+    ) as unknown;
+    const h = harness({ clock: testClock(new Date('2026-10-06T03:17:31Z')) });
+    const r = await h.adapter.sync({ mode: 'incremental', cursor: cursorOf(live) });
+    expect(h.client.listCalls[0]).toBe('');
+    expect(r.items.filter((i) => i.sourceType === 'szvpn.folder').length).toBeGreaterThan(0);
+  });
+
   it('the same state with a seededAt inside the re-walk window is re-seeded too', async () => {
     const h = harness();
     const live = {
