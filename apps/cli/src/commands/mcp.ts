@@ -5,6 +5,8 @@ import {
   fetchDetailsOnRequest,
   openAnnouncements,
   type OpenAnnouncementsReport,
+  openLink,
+  type OpenLinkReport,
 } from '@unicontext/context-engine';
 import type { Command } from 'commander';
 import { action, type Harness } from '../harness.js';
@@ -61,6 +63,17 @@ export function registerMcp(program: Command, h: Harness): void {
                     { timeoutMs: 30 * 60_000 },
                   )
                 : downloadCourseFiles(rt.uc, refs, { filesDir: rt.filesDir, extract: o.extract });
+            },
+            // SharePoint / OneDrive links: the daemon holds the browser profile (as for downloads).
+            openLink: async (url, o) => {
+              const daemon = await ctx.daemon();
+              return daemon
+                ? daemon.post<OpenLinkReport>(
+                    '/api/v1/files/open-link',
+                    { url, extract: o.extract },
+                    { timeoutMs: 30 * 60_000 },
+                  )
+                : openLink(rt.uc, url, { filesDir: rt.filesDir, extract: o.extract });
             },
           });
         },

@@ -21,6 +21,9 @@ import {
   mirrorFiles,
   mirrorStatus,
   openAnnouncements,
+  openLink,
+  type OpenLinkReport,
+  MAX_LINK_LENGTH,
   setPaceSlots,
 } from '@unicontext/context-engine';
 import {
@@ -827,6 +830,26 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
       return mirrorFiles(uc, {
         filesDir: runtime.filesDir,
         ...(body.sourceId ? { sourceId: body.sourceId } : {}),
+      });
+    },
+  );
+
+  // ---- SharePoint / OneDrive links (open_link): resolved with the teams-web session ---------
+  // Read-only at the source; serialized with the source's sync like downloads.
+  app.post<{ Body: unknown }>(
+    '/api/v1/files/open-link',
+    write,
+    async (request): Promise<OpenLinkReport> => {
+      const body = parse(
+        z.object({
+          url: z.string().min(1).max(MAX_LINK_LENGTH),
+          extract: z.boolean().optional(),
+        }),
+        request.body,
+      );
+      return openLink(uc, body.url, {
+        filesDir: runtime.filesDir,
+        ...(body.extract !== undefined ? { extract: body.extract } : {}),
       });
     },
   );

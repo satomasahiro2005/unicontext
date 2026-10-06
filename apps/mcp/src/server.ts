@@ -118,8 +118,14 @@ import {
   searchSyllabus,
   searchSyllabusShape,
 } from './syllabus.js';
+import {
+  OPEN_LINK_INSTRUCTION_EN,
+  OPEN_LINK_INSTRUCTION_JA,
+  type OpenLinkDeps,
+  registerOpenLinkTool,
+} from './open-link.js';
 
-export interface McpDeps {
+export interface McpDeps extends OpenLinkDeps {
   uc: UniContext;
   proposals: ProposalStore;
   logger?: Logger;
@@ -253,6 +259,7 @@ export const SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_JA,
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
+  OPEN_LINK_INSTRUCTION_JA,
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   UNKNOWN_DEADLINE_POLICY_EN,
   'Answers must cite sources, must report conflicting sources instead of picking one, and corrections are propose-only. Deadlines, to-dos and notes the student mentions in any chat can be registered with add_deadline / add_task / add_note so every other session sees them; they never override a university system.',
@@ -260,6 +267,7 @@ export const SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
+  OPEN_LINK_INSTRUCTION_EN,
 ].join('\n');
 
 /** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */
@@ -273,11 +281,13 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
+  OPEN_LINK_INSTRUCTION_JA,
   'Read-only: answers must cite sources and report conflicting sources instead of picking one.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   UNKNOWN_DEADLINE_POLICY_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
+  OPEN_LINK_INSTRUCTION_EN,
 ].join('\n');
 
 /** Instructions of the remote surface when the grant includes unicontext.write. */
@@ -296,6 +306,7 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   '保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
+  OPEN_LINK_INSTRUCTION_JA,
   'Register deadlines, to-dos and notes the student mentions or plans in any chat (add_deadline / add_task / add_note) so every other session and client sees them. Writes go to UniContext only (never to a university system) and cannot change authoritative data, task status or grades.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   UNKNOWN_DEADLINE_POLICY_EN,
@@ -303,6 +314,7 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
+  OPEN_LINK_INSTRUCTION_EN,
 ].join('\n');
 
 // ---------- shared plumbing ----------
@@ -1830,6 +1842,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
     { title: '文書', description: '文書のメタデータと本文の抜粋（出典つき）', mimeType },
     (uri, v) => read(uri, () => documentBundle(idOf(v.id))),
   );
+
+  // ----- SharePoint / OneDrive links (open_link, see open-link.ts) -----
+  registerOpenLinkTool(tool, {
+    uc,
+    remote,
+    ...(deps.openLink ? { openLink: deps.openLink } : {}),
+    ...(deps.filesDir ? { filesDir: deps.filesDir } : {}),
+    ...(deps.downloadFiles ? { downloadFiles: deps.downloadFiles } : {}),
+    ...(deps.fileLink ? { fileLink: deps.fileLink } : {}),
+  });
 
   return server;
 }

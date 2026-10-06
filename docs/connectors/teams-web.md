@@ -10,15 +10,16 @@ v2 client (`testedVersion: v2`), default authority `collaboration`, schedule `30
 
 ## What it reads
 
-| Data                          | Where it comes from                                                                                                                                                          | Raw type                  |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| Teams and channels            | The client's own cache (`conversation-manager` IndexedDB, read-only transaction) after it booted. The client fetches the full team list only on its first boot, then deltas. | `teamsweb.team`           |
-| Channel posts and replies     | Each channel is opened through its documented deep link (`/l/channel/…`, in-app navigation); the client loads (and caches) its posts; the cached reply chains are read.      | `teamsweb.replychain`     |
-| Assignments (課題) + my state | The responses `/api/v1.0/edu/me/work` the Assignments app inside Teams receives when its three tabs are shown (今後の予定 / 期限を経過 / 完了), all pages.                   | `teamsweb.assignment`     |
-| Assignments bot cards         | Fallback only: cards in channels whose assignment the service did not list (dropped once it lists the student's work completely).                                            | `teamsweb.assignmentCard` |
-| Files                         | SharePoint drive delta (`/_api/v2.0/drive/root/delta`) by same-origin `fetch` from a page on the team's SharePoint site, with the page's own session.                        | `teamsweb.driveItem`      |
-| File text (opt-in)            | PDF/DOCX/PPTX downloaded inside the page (`/_api/v2.0/drive/items/{id}/content`), extracted with the local-files extractors, size-capped.                                    | `teamsweb.fileText`       |
-| File downloads / mirror       | Same endpoint (classic `GetFileById(…)/$value` as fallback), streamed from the page to a local file on request or for the opt-in mirror; text as above.                      | `teamsweb.fileText`       |
+| Data                          | Where it comes from                                                                                                                                                                                 | Raw type                  |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| Teams and channels            | The client's own cache (`conversation-manager` IndexedDB, read-only transaction) after it booted. The client fetches the full team list only on its first boot, then deltas.                        | `teamsweb.team`           |
+| Channel posts and replies     | Each channel is opened through its documented deep link (`/l/channel/…`, in-app navigation); the client loads (and caches) its posts; the cached reply chains are read.                             | `teamsweb.replychain`     |
+| Assignments (課題) + my state | The responses `/api/v1.0/edu/me/work` the Assignments app inside Teams receives when its three tabs are shown (今後の予定 / 期限を経過 / 完了), all pages.                                          | `teamsweb.assignment`     |
+| Assignments bot cards         | Fallback only: cards in channels whose assignment the service did not list (dropped once it lists the student's work completely).                                                                   | `teamsweb.assignmentCard` |
+| Files                         | SharePoint drive delta (`/_api/v2.0/drive/root/delta`) by same-origin `fetch` from a page on the team's SharePoint site, with the page's own session.                                               | `teamsweb.driveItem`      |
+| File text (opt-in)            | PDF/DOCX/PPTX downloaded inside the page (`/_api/v2.0/drive/items/{id}/content`), extracted with the local-files extractors, size-capped.                                                           | `teamsweb.fileText`       |
+| Linked files (open_link)      | A SharePoint / OneDrive link resolved on request with `/_api/v2.0/shares/{id}/driveItem` (and its children) inside a page of the link's site; see [links](#links-in-emails-and-messages-open_link). | `teamsweb.linkItem`       |
+| File downloads / mirror       | Same endpoint (classic `GetFileById(…)/$value` as fallback), streamed from the page to a local file on request or for the opt-in mirror; text as above.                                             | `teamsweb.fileText`       |
 
 ## Safety rules (enforced in code)
 
@@ -89,6 +90,40 @@ copy and files that disappeared (deleted, or their course is no longer mirrored)
 locally. The index (`<data dir>/files/teams-web/mirror.json`) remembers versions (SharePoint
 `cTag`), so unchanged files are never fetched again. Only class teams are mirrored.
 
+## Links in emails and messages (`open_link`)
+
+A SharePoint / OneDrive for Business link that reaches the AI from somewhere else (a university
+email read through ChatGPT's Gmail connector, a notice, a Teams post) is opened through this
+source's signed-in session instead of asking the student to open it: MCP `open_link { url }`,
+`unicontext files open <url>`, `POST /api/v1/files/open-link`.
+
+- **Links**: sharing links (`/:b:/s/<site>/…`, `/:f:/t/…`, `/:w:/g/personal/<user>/…`,
+  `/:x:/r/sites/…`), file and folder URLs on `*.sharepoint.com` and `*-my.sharepoint.com`, Office
+  web links (`_layouts/15/Doc.aspx?sourcedoc={id}`), library views (`…/Forms/AllItems.aspx?id=…`),
+  and Teams file links (`teams.microsoft.com/l/file/…?objectUrl=…`). `&amp;` from an HTML mail is
+  decoded. Personal Microsoft-account OneDrive (`1drv.ms`, `onedrive.live.com`), SharePoint pages,
+  notebooks and lists, and other hosts are refused with a reason (`status: unsupported`).
+- **How**: a headless session of the shared profile starts on the link's site (no Teams boot) and
+  the page GETs `/_api/v2.0/shares/u!<base64url(link)>/driveItem` with its own session (an Office
+  web link that the sharing API does not take falls back to `GetFileById` → its path). When a
+  sharing link is refused (403), the request is repeated once with
+  `Prefer: redeemSharingLinkIfNecessary`, the API's form of what the browser does when the student
+  clicks the link: no permission is requested or changed, but SharePoint may record the link's use
+  as it does for a click. A folder's children are listed through the same sharing id (200 per page,
+  at most 3 pages, 0.5 s between pages; `truncated` says more exist). Download URLs never leave the
+  page. 401 → `authRequired`, 403 → `forbidden`, 404 → `notFound`, 429/503 → `throttled`; nothing
+  is guessed.
+- **Stored as**: a file in a known team's default library is `teamsweb.driveItem` with the sync's
+  own id (a synced file is reused as is; the default library id comes from synced files, else one
+  `GET {site}/_api/v2.0/drive`); any other file is `teamsweb.linkItem` (same payload; a team site's
+  other library keeps the team, so a class team's file belongs to its course; elsewhere the
+  container is `site:<host>/<site path>`, no course). Link items are never mirrored and the nightly
+  full listing does not delete them. Their document ids work with `download_course_file`.
+- **Then**: a file is downloaded and text-extracted through the ordinary on-demand download (same
+  queue, pacing, size cap and cache) and the tool returns the document, path (local only), course
+  and text excerpt; a folder returns its files (document ids) and subfolders (their URLs, to open
+  with `open_link`).
+
 ## Incremental sync and state
 
 `cursor.extra` (sync_state) holds per channel the client's last-activity time when it was read,
@@ -113,6 +148,7 @@ for the first time, the first Assignments read, a newly joined team's library) i
 | Assignment (`me/work`)                     | `assignment` (due date with year, points, class) + `submission` mirrored from Teams (authority `submission-system`, never set by UniContext)                                    |
 | Bot card                                   | `assignment` stub (`origin: extracted`, due date inferred from 「期限 M月D日」)                                                                                                 |
 | SharePoint file                            | `document` + `material` (folder, channel, modified by/at, webUrl without temporary tokens)                                                                                      |
+| Linked file (`teamsweb.linkItem`)          | same as a SharePoint file; course only when it is on a class team's site                                                                                                        |
 
 Instructors are the team creator and the authors of the class's assignments (the client does not
 expose other members' roles). Class teams join the academic system's offerings through the identity

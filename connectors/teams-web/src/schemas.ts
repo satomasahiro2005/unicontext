@@ -13,6 +13,7 @@ export const RAW_TYPES = [
   'teamsweb.assignmentCard',
   'teamsweb.driveItem',
   'teamsweb.fileText',
+  'teamsweb.linkItem',
 ] as const;
 export type RawType = (typeof RAW_TYPES)[number];
 export function isRawType(t: string): t is RawType {
@@ -231,4 +232,6 @@ export const SCHEMAS: Record<RawType, z.ZodType> = {
   'teamsweb.assignmentCard': AssignmentCardPayloadSchema,
   'teamsweb.driveItem': DriveItemPayloadSchema,
   'teamsweb.fileText': FileTextPayloadSchema,
+  /** A file opened through a SharePoint / OneDrive link (open_link), outside the synced libraries. */
+  'teamsweb.linkItem': DriveItemPayloadSchema,
 };
