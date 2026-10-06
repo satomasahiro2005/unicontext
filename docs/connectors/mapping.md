@@ -188,6 +188,25 @@ facts:
 
 `value` is any JSON (undefined skips the fact). AI-produced values never come from the mapping.
 
+## `files` (optional)
+
+```yaml
+files:
+  hostAllowlist: ['edusercontent.com', '*.edusercontent.com'] # exact host, or *.suffix (subdomains)
+  credentials: none # the only value: file requests carry no cookie or token
+  maxBytes: 52428800 # default 50 MiB
+```
+
+A mapping with `files` makes the adapter a `FileDownloadAdapter` (`MappedSourceAdapter`:
+`describeFile`, `downloadFiles`; `fileSourceTypes` are all the mapping's raw types). A file is a
+`document` entity whose `url` is on an allowed host: `describeFile` takes the document (the
+caller passes it next to the raw item, because one raw item can hold several files) and names the
+file by its URL. `downloadFiles` is a plain HTTPS GET with `redirect: 'manual'` (a 3xx is a
+failure), no `Authorization` or cookie header, the host re-checked against the allowlist, streamed
+to `<target>.part` and renamed when complete; a body above `maxBytes` (declared or streamed) is
+`tooLarge` and leaves nothing on disk. `RunOptions.fileFetch` replaces `fetch` (tests).
+Ids of requests that name another host are refused before any request is made.
+
 ## `drift`
 
 ```yaml

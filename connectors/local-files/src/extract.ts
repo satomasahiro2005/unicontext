@@ -3,6 +3,7 @@ import { imageSize } from 'image-size';
 import JSZip from 'jszip';
 import mammoth from 'mammoth';
 import { extractText, getDocumentProxy } from 'unpdf';
+import { pdfDataOptions } from './pdf-options.js';
 import type { FileSlide } from './types.js';
 
 export const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -281,7 +282,7 @@ export function htmlToText(html: string): string {
 }
 
 async function extractPdf(buf: Uint8Array): Promise<ExtractedContent> {
-  const pdf = await getDocumentProxy(new Uint8Array(buf));
+  const pdf = await getDocumentProxy(new Uint8Array(buf), pdfDataOptions());
   try {
     const { text } = await extractText(pdf, { mergePages: false });
     let total = 0;
@@ -327,7 +328,7 @@ function slideTitle(xml: string): string | undefined {
   return undefined;
 }
 
-function relTargets(xml: string): Map<string, string> {
+export function relTargets(xml: string): Map<string, string> {
   const map = new Map<string, string>();
   for (const m of xml.matchAll(/<Relationship\b[^>]*>/g)) {
     const id = /\bId="([^"]*)"/.exec(m[0])?.[1];
@@ -337,11 +338,12 @@ function relTargets(xml: string): Map<string, string> {
   return map;
 }
 
-async function extractPptx(buf: Uint8Array): Promise<ExtractedContent> {
-  const zip = await JSZip.loadAsync(buf);
+/**
+ * Paths of the slide parts of a PPTX in presentation order (`ppt/slides/slideN.xml`): from
+ * presentation.xml (sldIdLst) and its relationships, else by slide number.
+ */
+export async function pptxSlidePaths(zip: JSZip): Promise<string[]> {
   const read = async (name: string): Promise<string | undefined> => zip.file(name)?.async('string');
-
-  // Slide order from presentation.xml (sldIdLst) + its relationships; fall back to slideN order.
   let slidePaths: string[] = [];
   const pres = await read('ppt/presentation.xml');
   const presRels = await read('ppt/_rels/presentation.xml.rels');
@@ -359,6 +361,13 @@ async function extractPptx(buf: Uint8Array): Promise<ExtractedContent> {
       .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
       .sort((a, b) => num(a) - num(b));
   }
+  return slidePaths;
+}
+
+export async function extractPptx(buf: Uint8Array): Promise<ExtractedContent> {
+  const zip = await JSZip.loadAsync(buf);
+  const read = async (name: string): Promise<string | undefined> => zip.file(name)?.async('string');
+  const slidePaths = await pptxSlidePaths(zip);
 
   const slides: FileSlide[] = [];
   let total = 0;

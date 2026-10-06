@@ -71,6 +71,32 @@ describe('parseMappingSpec', () => {
     expect(() => parseMappingSpec({ ...base(), drift: { 'x.zzz': {} } })).toThrow(/no resource/);
   });
 
+  it('parses the optional `files` section: allowlisted hosts, no credentials, byte cap', () => {
+    expect(parseMappingSpec(base()).files).toBeUndefined();
+    const spec = parseMappingSpec({
+      ...base(),
+      files: { hostAllowlist: ['edusercontent.com', '*.edusercontent.com'] },
+    });
+    expect(spec.files).toEqual({
+      hostAllowlist: ['edusercontent.com', '*.edusercontent.com'],
+      credentials: 'none',
+      maxBytes: 50 * 1024 * 1024,
+    });
+    expect(parseMappingSpec({ ...base(), files: { hostAllowlist: ['a.example'], maxBytes: 9 } }).files)
+      .toMatchObject({ maxBytes: 9 });
+    for (const files of [
+      { hostAllowlist: [] },
+      { hostAllowlist: ['*'] },
+      { hostAllowlist: ['https://a.example'] },
+      { hostAllowlist: ['a.example'], credentials: 'cookie' },
+      { hostAllowlist: ['a.example'], maxBytes: 0 },
+      { hostAllowlist: ['a.example'], redirect: 'follow' },
+    ])
+      expect(() => parseMappingSpec({ ...base(), files }), JSON.stringify(files)).toThrow(
+        /Invalid mapping/,
+      );
+  });
+
   it('validates on-request details, onRequest resources and refreshAfter', () => {
     const child = {
       name: 'b',

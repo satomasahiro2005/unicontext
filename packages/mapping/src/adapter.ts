@@ -6,6 +6,11 @@ import {
   type ConnectorMetadata,
   defineMetadata,
   type DetailFetchResult,
+  type DownloadableFile,
+  type FileDownloadOutcome,
+  type FileDownloadRequest,
+  type FileDownloadSettings,
+  type RawItem,
   type SourceAdapter,
   type SyncInput,
   type SyncResult,
@@ -17,6 +22,7 @@ import {
   type ResourceCaller,
   type RunOptions,
 } from './runner.js';
+import { createFileDownloads, type FileItemLike } from './file-download.js';
 import { loadMappingFile, type MappingSpec, parseMappingSpec } from './spec.js';
 
 /**
@@ -37,6 +43,22 @@ export abstract class MappedSourceAdapter implements SourceAdapter {
     options?: { signal?: AbortSignal },
   ) => Promise<DetailFetchResult>;
 
+  /**
+   * File downloads (FileDownloadAdapter), present only when the mapping declares `files`: a plain
+   * HTTPS GET of a document's url on an allowed host, no credentials (see file-download.ts).
+   * `describeFile` also takes the document the caller knows (`item.document`), because one raw
+   * item (a lesson) can hold several files.
+   */
+  readonly fileSourceTypes?: readonly string[];
+  readonly fileTextSourceTypes?: readonly string[];
+  readonly hostExtractsFileText?: boolean;
+  readonly fileSettings?: () => FileDownloadSettings;
+  readonly describeFile?: (item: FileItemLike) => DownloadableFile | undefined;
+  readonly downloadFiles?: (
+    requests: readonly FileDownloadRequest[],
+    options?: { signal?: AbortSignal },
+  ) => Promise<{ results: FileDownloadOutcome[]; items: RawItem[]; warnings: string[] }>;
+
   constructor(
     readonly id: string,
     readonly spec: MappingSpec,
@@ -44,6 +66,19 @@ export abstract class MappedSourceAdapter implements SourceAdapter {
   ) {
     if (spec.details.length > 0)
       this.fetchDetails = (requests, options = {}) => this.runDetails(requests, options);
+    if (spec.files) {
+      const f = createFileDownloads(spec.files, {
+        fetch: runOptions.fileFetch,
+        rawTypes: [...new Set(spec.resources.map((r) => r.sourceType))],
+        label: spec.sourceLabel ?? spec.product,
+      });
+      this.fileSourceTypes = f.fileSourceTypes;
+      this.fileTextSourceTypes = f.fileTextSourceTypes;
+      this.hostExtractsFileText = f.hostExtractsFileText;
+      this.fileSettings = f.fileSettings;
+      this.describeFile = f.describeFile;
+      this.downloadFiles = f.downloadFiles;
+    }
   }
 
   private async runDetails(

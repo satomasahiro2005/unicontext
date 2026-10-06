@@ -654,6 +654,53 @@ candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `Task
   view, usable as MCP tool input schemas), `getView(engine, name, params)` (validated dispatcher),
   `isContextViewName`.
 
+#### Documents and rendering (`documents.ts`)
+
+One read-only door to any document UniContext knows, for MCP `get_document` (the AI gets the
+document itself, so the student is never asked to paste or screenshot it).
+
+- `resolveDocument(uc, ref, {filesDir?, downloadFiles?}) → DocumentHandle {id, ref, sourceId, title,
+  mimeType, sizeBytes, sourcePath, citations, candidates?, fetch(), storedPages()}`. `ref` is a
+  `document:` / `material:` / `announcement:` id, a search hit id (a `documentChunk:` → its
+  document), `<course>/<path>` (`files.ts resolveFileRef`), or a path inside a local-files root
+  (roots come from the indexed `file.document` raw items; a path outside them, or a link that leads
+  out of them, is refused). `fetch()` returns `{ok: true, path | bytes}` or `{ok: false,
+  unsupported: {reason, openUrl?}}` and tries, in order: the file on this computer (local-files);
+  a `FileDownloadAdapter` source through `downloadCourseFiles` (Teams, the VPN file share, Ed
+  attachments; the existing cache under `<files dir>/<source>/cache` is reused, and the daemon's
+  `downloadFiles` hook is used when given); the raw blob of the item (wordpress-portal PDFs);
+  then the policy answers: a LiveCampusU attachment is unsupported with the notice URL as
+  `openUrl` (`LCU_ATTACHMENT_REASON`), Microsoft 365 / OneDrive / mail files are unsupported
+  while that source is disabled. Nothing is requested from a university endpoint that was not
+  already allowed. An announcement with exactly one attached document resolves to that document,
+  with several it lists them in `candidates`.
+- `files.ts` passes the document next to its raw item to `describeFile` (one raw item, e.g. an
+  Ed lesson, can hold several files) and keys the cache by the `externalId` the adapter returns.
+- `readDocument(handle, {pages?, render?, defaultPages = 5, maxImages = 8, maxImageBase64, ocr}) →
+  DocumentRead {document, kind, pageCount?, pages: [{index, kind: page | slide | image, text,
+  ocrText?, origin?, needsVision?}], images: DocumentImage[], warnings, citations, unsupported?,
+  fromStoredText?}`. It never throws for a document that exists: bytes it cannot get, or a file that
+  does not open, give `unsupported` / a warning plus the text UniContext stored (`fromStoredText`).
+  `parsePageSpec` reads `"1-5"`, `"2,4-6"`, `3` or a number list.
+- `render/`: **PDF** (`pdf.ts`) page-by-page text with unpdf and, per page, a picture through
+  `renderPageAsImage` on `@napi-rs/canvas`; a page with fewer than 20 characters is a scan: it is
+  rendered and marked `needsVision`. **PPTX** (`pptx.ts`) per-slide text from local-files'
+  `extractPptx` plus the slide's `ppt/media/*` images (decorations under 2 KB or 48 px, repeated
+  logos, EMF/WMF/SVG are left out; there is no LibreOffice, so a slide is not drawn). **DOCX**
+  text plus embedded images. **Images** (`image.ts`): png / jpg / gif / webp (heic only when the
+  canvas decodes it) are brought down to 1568 px on the long edge and JPEG q80 (stepping down until
+  one picture fits the base64 budget, 1.5 MB). The canvas is loaded lazily on first use: a missing
+  native binary degrades to text only with a warning (a PNG / JPEG / GIF that already fits goes out
+  unchanged). **OCR** (`ocr.ts`, optional): on Windows with the ja-JP `Windows.Media.Ocr` language,
+  a PowerShell child process (feature-detected once, 20 s timeout) reads scanned pages into
+  `ocrText` (`origin: 'ocr'`); otherwise the picture goes to the client's own vision.
+- MCP `get_document` (`apps/mcp/src/document.ts`, `registerDocumentTools`) builds its
+  `CallToolResult` directly: a text JSON envelope `{document, kind, pageCount, pages, images,
+  truncated, warnings, citations, answerHint, unsupported?}` followed by `{type: 'image'}` items.
+  Local surface: at most 8 images, each at most 1.5 MB base64, 6 MB in all; remote: 4 images, 3 MB in
+  all, and no local paths. Without `pages` the first 5 are returned with `pageCount` and the
+  `pages:` to ask for next; `maxChars` (default 20000) cuts the text.
+
 ### 3.13 Next action, student state and attention (`next-action.ts`, `attention.ts`)
 
 The student does not prioritise; UniContext decides. Everything here is deterministic (no LLM)

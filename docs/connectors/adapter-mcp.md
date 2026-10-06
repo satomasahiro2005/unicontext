@@ -127,6 +127,13 @@ announcements, messages) targets the `edstem-mcp` stdio server of
 | `edstem.thread`        | `list_threads {courseId, limit: 50, sort: new}` per course              | `thread` (not for announcements; summaries carry no body or author)                                                                                                                                                          | `discussion`                                                                                         |
 | `edstem.thread_detail` | `get_thread {threadId}` for announcements and threads active in 30 days | `announcement` (type `announcement`, importance `high` when pinned) or the opening post as `message` (`isQuestion` for `question`); every answer, comment and nested reply as `message` (authorRole from the Ed course role) | announcements and staff posts (admin/staff/ta/tutor): `instructor-announcement`; others `discussion` |
 
+## Files
+
+A mapping's `files:` section (see [mapping.md](mapping.md)) gives the adapter on-request file
+downloads that do **not** go through the MCP server: UniContext fetches the document's `url` itself
+with a plain GET (allowlisted host, no credentials, no redirects, byte cap). The EdStem mapping
+uses it for `edusercontent.com` attachments ([edstem.md](edstem.md)).
+
 ## Schedule
 
 `15m` by default (`defaultSchedule`). Every sync is a full relist (`complete: true` resources mark

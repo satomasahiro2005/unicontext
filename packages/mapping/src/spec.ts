@@ -178,7 +178,28 @@ const DetailRuleSchema = z
   .strict();
 export type DetailRule = z.infer<typeof DetailRuleSchema>;
 
-/** Mini drift schema: `{field: "string" | "number?" | "string|null" | {nested} | [elem]}`. */
+/**
+ * Files a source hosts that UniContext may fetch on request (FileDownloadAdapter): a plain HTTPS
+ * GET of a document's `url` against hosts the mapping names, no cookies, no tokens, no redirects
+ * (a 3xx is a failure), streamed to disk under a byte cap. Hosts are `example.com` (exact) or
+ * `*.example.com` (any subdomain).
+ */
+const FilesSpecSchema = z
+  .object({
+    hostAllowlist: z.array(z.string().regex(/^(\*\.)?[a-z0-9.-]+\.[a-z]{2,}$/i)).min(1),
+    /** Only `none` exists: file requests never carry credentials. */
+    credentials: z.literal('none').default('none'),
+    /** Largest file fetched (bytes). */
+    maxBytes: z
+      .number()
+      .int()
+      .positive()
+      .default(50 * 1024 * 1024),
+  })
+  .strict();
+export type FilesSpec = z.infer<typeof FilesSpecSchema>;
+
+/** Mini drift schema:`{field: "string" | "number?" | "string|null" | {nested} | [elem]}`. */
 export type DriftTypeSpec = string | DriftTypeSpec[] | { [key: string]: DriftTypeSpec };
 const DriftTypeSchema: z.ZodType<DriftTypeSpec> = z.lazy(() =>
   z.union([z.string(), z.array(DriftTypeSchema).length(1), z.record(z.string(), DriftTypeSchema)]),
@@ -206,6 +227,8 @@ export const MappingSpecSchema = z
     facts: z.array(FactRuleSchema).default([]),
     /** On-request detail fetches (see DetailRuleSchema). */
     details: z.array(DetailRuleSchema).default([]),
+    /** Hosts of files UniContext may download on request (see FilesSpecSchema). */
+    files: FilesSpecSchema.optional(),
     drift: z.record(z.string(), z.record(z.string(), DriftTypeSchema)).optional(),
     /** Also report fields the mini drift schema does not list (default: only missing / changed). */
     strictDrift: z.boolean().default(false),

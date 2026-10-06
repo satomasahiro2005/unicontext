@@ -2,6 +2,7 @@ import type { RawItem, SyncInput, SyncResult } from '@unicontext/connector-sdk';
 import {
   AuthRequiredError,
   ConnectorError,
+  type FetchLike,
   OfflineError,
   parseDuration,
   RateLimitedError,
@@ -60,6 +61,8 @@ export interface RunOptions {
    */
   detail?: { seed: Record<string, unknown[]>; only: readonly string[] };
   onWarning?: (message: string) => void;
+  /** HTTP used for the spec's `files:` downloads (default: global fetch; tests inject one). */
+  fileFetch?: FetchLike;
 }
 
 /** nextPageToken payload: where the run continues. Plain JSON so it survives a restart. */

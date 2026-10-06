@@ -62,5 +62,8 @@
     "@unicontext/wordpress-portal": "workspace:*",
     "@unicontext/teams-web": "workspace:*",
     "@unicontext/shizuoka-vpn-files": "workspace:*"
+  },
+  "devDependencies": {
+    "@unicontext/mapping": "workspace:*"
   }
 }
