@@ -167,7 +167,10 @@ export class SyllabusAdapter implements SourceAdapter {
     return Promise.resolve();
   }
 
-  /** One catalog unit per (term, faculty); a year without a known title code is skipped with a warning. */
+  /**
+   * One catalog unit per (term, faculty), the faculties' campus 全学教育 included unless
+   * `generalEducation: false`; a year without a known title code is skipped with a warning.
+   */
   private catalogUnits(warnings: string[]): SyllabusUnit[] {
     const catalog = this.ctx.config.catalog;
     if (!catalog) return [];
@@ -175,8 +178,14 @@ export class SyllabusAdapter implements SourceAdapter {
     const terms = resolveCatalogTerms(catalog.terms, this.ctx.clock.now(), timeZone);
     const units: SyllabusUnit[] = [];
     const unknown = new Set<string>();
+    const faculties = [...catalog.faculties];
+    if (catalog.generalEducation)
+      for (const f of catalog.faculties) {
+        const ge = this.strategy.generalEducationFor?.(f);
+        if (ge && !faculties.includes(ge)) faculties.push(ge);
+      }
     for (const term of terms) {
-      for (const faculty of catalog.faculties) {
+      for (const faculty of faculties) {
         const titleCode = this.strategy.titleCodeFor?.(term.year, faculty);
         if (!titleCode) {
           unknown.add(`${term.year} ${faculty}`);

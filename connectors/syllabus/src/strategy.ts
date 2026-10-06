@@ -27,6 +27,8 @@ export interface SyllabusStrategy {
   readonly baseUrl: string;
   /** Search form `title` value for a year x faculty code, when the system has such a table. */
   titleCodeFor?(year: number, faculty: string): string | undefined;
+  /** Faculty code of the general education (全学教育) catalog on `faculty`'s campus, when known. */
+  generalEducationFor?(faculty: string): string | undefined;
   /** Reverse of `titleCodeFor`: the academic year a title value belongs to, when known. */
   yearOfTitleCode?(titleCode: string): number | undefined;
   /** Find candidate rows for a target or a search. Never opens details. */

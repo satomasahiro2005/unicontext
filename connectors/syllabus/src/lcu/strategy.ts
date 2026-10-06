@@ -111,6 +111,10 @@ export class LcuPublicStrategy implements SyllabusStrategy {
     return this.options.deployment.titles[String(year)]?.[faculty];
   }
 
+  generalEducationFor(faculty: string): string | undefined {
+    return this.options.deployment.generalEducation?.[faculty];
+  }
+
   yearOfTitleCode(titleCode: string): number | undefined {
     for (const [year, codes] of Object.entries(this.options.deployment.titles))
       if (Object.values(codes).includes(titleCode) && /^\d+$/.test(year)) return Number(year);

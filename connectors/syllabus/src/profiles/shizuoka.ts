@@ -107,6 +107,22 @@ function descending(first: number, faculties: readonly string[]): Record<string,
   return Object.fromEntries(faculties.map((f, i) => [f, String(first - i)]));
 }
 
+/**
+ * 全学教育科目 are listed per campus: 浜松 (LA-H) for 情報学部 and 工学部, 静岡 (LA-S) for the other
+ * undergraduate faculties. The same course code exists on both campuses with different classes and
+ * slots, so a Hamamatsu student's catalog needs LA-H, not LA-S.
+ */
+const GENERAL_EDUCATION: Record<string, string> = {
+  'IN-B': 'LA-H',
+  'EN-B': 'LA-H',
+  'HS-B': 'LA-S',
+  'ED-B': 'LA-S',
+  'SC-B': 'LA-S',
+  'AG-B': 'LA-S',
+  'GL-B': 'LA-S',
+  'RD-B': 'LA-S',
+};
+
 export const shizuokaDeployment: LcuDeployment = {
   id: 'shizuoka',
   baseUrl: 'https://gakujo.shizuoka.ac.jp/lcu-web/',
@@ -116,4 +132,5 @@ export const shizuokaDeployment: LcuDeployment = {
     publicCancellations: 'SC_90002szu_01',
   },
   titles: TITLES,
+  generalEducation: GENERAL_EDUCATION,
 };

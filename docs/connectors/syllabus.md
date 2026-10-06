@@ -59,7 +59,7 @@ the polite daily [`catalog`](#catalog-mode-whole-term-listing) mode.
 | `targets[]`                                         | `[]`                 | `{year, subjectCode, faculty? \| titleCode?, classCode?}`. `titleCode` is the search form's `title` value (2243 = 2026 情報学部); `faculty` is looked up in `titles`; without both, all titles are searched and rows are filtered by `year`. `classCode` is matched against the row's クラス (`1クラス`) or its hidden class code. |
 | `searches[]`                                        | `[]`                 | `{year?, faculty?, title?, category?, subjectName?, jikanwariSubjectName?, staffName?, practitionerFlag?, semester?, term?, subjectCode?, numbering?, subjectType?, week?, period?, freeword?, maxRows=10}` (form field names of the search screen).                                                                               |
 | `unitsPerPage`                                      | `5`                  | Units per `sync()` page.                                                                                                                                                                                                                                                                                                           |
-| `catalog`                                           | absent (off)         | Whole-term catalog ingestion, see [below](#catalog-mode-whole-term-listing): `{faculties?, titleCodes?, terms=[current,next], detailsPerRun=30, detailMaxAgeDays=30, maxRows=1500}`.                                                                                                                                               |
+| `catalog`                                           | absent (off)         | Whole-term catalog ingestion, see [below](#catalog-mode-whole-term-listing): `{faculties?, titleCodes?, terms=[year,next], generalEducation=true, detailsPerRun=30, detailMaxAgeDays=30, maxRows=1500}`.                                                                                                                           |
 | `minRequestIntervalMs`                              | `1000`               | Minimum gap between two HTTP requests of this connector (on top of the shared rate limiter, which allows bursts of 5); `0` disables.                                                                                                                                                                                               |
 
 Deployment settings are resolved as: explicit source config > `profile.products.syllabus` >
@@ -97,8 +97,9 @@ many days.
 sources:
   syllabus:
     catalog:
-      faculties: [IN-B, LA-S] # codes of the deployment title table (or titleCodes: ['2243'])
-      terms: [current, next] # default; or explicit [{ year: 2026, semester: '2' }]
+      faculties: [IN-B] # codes of the deployment title table (or titleCodes: ['2243'])
+      # generalEducation: true # default: also the campus 全学教育 of each faculty (IN-B -> LA-H)
+      terms: [year, next] # default; or current / explicit [{ year: 2026, semester: '2' }]
       detailsPerRun: 30 # max syllabus detail pages opened per sync run (default 30)
       detailMaxAgeDays: 30 # re-open a detail after this many days (default 30)
       maxRows: 1500 # safety cap of rows per (faculty, term) search (default 1500)
@@ -106,8 +107,18 @@ sources:
 
 - **Terms** come from the clock (`ctx.clock`, in the profile's time zone) and the Japanese academic
   year (April start): April-September is 前期 (`semester` `1`), October-March is 後期 (`2`; January-March
-  still belongs to the year that began the previous April). On 2026-10-01 `current` = 2026 後期 and
-  `next` = 2027 前期; in May 2026 `current` = 2026 前期 and `next` = 2026 後期.
+  still belongs to the year that began the previous April). On 2026-10-01 `current` = 2026 後期,
+  `year` = 2026 前期 and 2026 後期, `next` = 2027 前期; in May 2026 `current` = 2026 前期 and
+  `next` = 2026 後期. The default `[year, next]` keeps the half of the year that already ran
+  searchable (planning next year needs this year's 前期 offerings) and adds the next term once its
+  title code is known.
+- **Faculties** are title-table codes. With `generalEducation` (default `true`) each faculty also
+  brings the 全学教育 catalog of its campus from the deployment's `generalEducation` table
+  (Shizuoka: 情報学部 IN-B and 工学部 EN-B -> 浜松 LA-H; the other undergraduate faculties -> 静岡
+  LA-S). The same 全学教育 course code is offered on both campuses with different classes and
+  slots (e.g. 生命科学 16111007: 静岡 学部共通２ 月5・6, 浜松 P1 火3・4), so listing the wrong
+  campus shows courses the student cannot take and hides the ones they can. Other deployments
+  (or overrides) set `generalEducation: { <faculty>: <code> }` in the source config or profile.
 - **One search per (faculty, term)** (`title` = year x faculty code, `semester` = `1`/`2`). The result
   table carries every row in one HTML page (講義名, 担当教員, クラス, タイトル, カテゴリ, 科目コード,
   ナンバリング, 学年, 開講学期, 曜日・時限), and **every row becomes a `syllabus.entry`** (same
@@ -143,11 +154,12 @@ sources:
 
 ### Request budget
 
-| Part                                 | Requests                                                          |
-| ------------------------------------ | ----------------------------------------------------------------- |
-| one catalog search (init, search)    | 4 (init + redirect, search + redirect)                            |
-| one detail (re-search + linkselect)  | about 6 (init, form, search, results, linkselect, detail)         |
-| one daily run, 2 faculties x 2 terms | 4 searches (16) + `detailsPerRun` 30 x 6 = about **200 requests** |
+| Part                                 | Requests                                                                 |
+| ------------------------------------ | ------------------------------------------------------------------------ |
+| one catalog search (init, search)    | 4 (init + redirect, search + redirect)                                   |
+| one detail (re-search + linkselect)  | about 6 (init, form, search, results, linkselect, detail)                |
+| one daily run, 2 faculties x 2 terms | 4 searches (16) + `detailsPerRun` 30 x 6 = about **200 requests**        |
+| same with `[year, next]` in 後期     | 4 searches while next year is unpublished, 6 once it is: still about 200 |
 
 At the default `minRequestIntervalMs` of 1000 that is a few minutes a day, one request at a time.
 With 800 rows per term it takes about a month to read every detail once; until then the remaining

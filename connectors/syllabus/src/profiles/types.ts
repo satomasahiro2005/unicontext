@@ -21,4 +21,10 @@ export interface LcuDeployment {
   baseUrl: string;
   screens: LcuScreens;
   titles: TitleCodes;
+  /**
+   * Faculty code -> faculty code of the general education (全学教育) catalog taught on its campus,
+   * e.g. IN-B -> LA-H (Hamamatsu). Lets a catalog of one faculty include the courses its students
+   * actually take next to their own faculty's.
+   */
+  generalEducation?: Record<string, string>;
 }

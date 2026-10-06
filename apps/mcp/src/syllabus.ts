@@ -31,7 +31,8 @@ import type { EnvelopeOptions } from './envelope.js';
  *
  * The course catalog is whatever the syllabus connector stored: courseOffering entities owned by a
  * raw source whose connector is "@unicontext/syllabus" (for a daily catalog sync that is every
- * course of the current and the next term, most of them from the list row alone).
+ * course of the current academic year and the next term, of the configured faculties and their
+ * campus 全学教育, most of them from the list row alone).
  */
 
 export interface SyllabusToolOutput {

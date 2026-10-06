@@ -44,9 +44,12 @@ const SemesterCodeSchema = z
   .union([z.literal('1'), z.literal('2'), z.literal(1), z.literal(2)])
   .transform((v): '1' | '2' => (String(v) === '2' ? '2' : '1'));
 
-/** One academic term of the catalog: `current` / `next` follow the clock, or name year + semester. */
+/**
+ * One academic term of the catalog: `current` / `next` follow the clock, `year` is both semesters
+ * of the current academic year (前期 stays listed during 後期), or name year + semester.
+ */
 export const SyllabusCatalogTermSchema = z.union([
-  z.enum(['current', 'next']),
+  z.enum(['current', 'next', 'year']),
   z.object({ year: z.number().int(), semester: SemesterCodeSchema }),
 ]);
 export type SyllabusCatalogTerm = z.infer<typeof SyllabusCatalogTermSchema>;
@@ -62,7 +65,16 @@ export const SyllabusCatalogSchema = z
     faculties: z.array(z.string().min(1)).default([]),
     /** Search form `title` values used directly (year is taken from the title table when known). */
     titleCodes: z.array(z.string().min(1)).default([]),
-    terms: z.array(SyllabusCatalogTermSchema).min(1).default(['current', 'next']),
+    /**
+     * Default: the whole current academic year plus the next term, so the half of the year that
+     * already ran (or is still to come) stays searchable for planning.
+     */
+    terms: z.array(SyllabusCatalogTermSchema).min(1).default(['year', 'next']),
+    /**
+     * Also list the 全学教育 (general education) catalog of each faculty's campus, from the
+     * deployment's table (Shizuoka: IN-B / EN-B -> LA-H, the other faculties -> LA-S).
+     */
+    generalEducation: z.boolean().default(true),
     /** Max syllabus detail pages opened per sync run, shared by all catalog searches. */
     detailsPerRun: z.number().int().nonnegative().default(30),
     /** A cached detail older than this many days is opened again (budget permitting). */

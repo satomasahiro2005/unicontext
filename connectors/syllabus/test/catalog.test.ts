@@ -90,7 +90,12 @@ function setup(options: SetupOptions = {}) {
     screens: { syllabusSearch: 'SC_06001B00_21', syllabusDetail: 'SC_06001B00_22' },
     titles: TITLES,
     minRequestIntervalMs: 0,
-    catalog: { faculties: ['IN-B', 'LA-S'], ...(options.catalog ?? {}) },
+    // Most tests are about budgets and caching, so they pin the two-term window.
+    catalog: {
+      faculties: ['IN-B', 'LA-S'],
+      terms: ['current', 'next'],
+      ...(options.catalog ?? {}),
+    },
     ...(options.config ?? {}),
   });
   const adapter = new SyllabusAdapter(
@@ -155,6 +160,23 @@ describe('catalog term resolution', () => {
       resolveCatalogTerms(['current', { year: 2026, semester: '2' }, 'next'], oct),
     ).toHaveLength(2);
   });
+
+  it('year = both semesters of the current academic year (前期 stays listed during 後期)', () => {
+    expect(resolveCatalogTerms(['year', 'next'], at('2026-10-06T03:00:00Z'))).toEqual([
+      { year: 2026, semester: '1' },
+      { year: 2026, semester: '2' },
+      { year: 2027, semester: '1' },
+    ]);
+    expect(resolveCatalogTerms(['year', 'next'], at('2026-05-10T03:00:00Z'))).toEqual([
+      { year: 2026, semester: '1' },
+      { year: 2026, semester: '2' },
+    ]);
+    // January-March still belongs to the academic year that began the previous April.
+    expect(resolveCatalogTerms(['year'], at('2027-02-01T03:00:00Z'))).toEqual([
+      { year: 2026, semester: '1' },
+      { year: 2026, semester: '2' },
+    ]);
+  });
 });
 
 describe('catalog config', () => {
@@ -164,7 +186,8 @@ describe('catalog config', () => {
     expect(SyllabusCatalogSchema.parse({ faculties: ['IN-B'] })).toEqual({
       faculties: ['IN-B'],
       titleCodes: [],
-      terms: ['current', 'next'],
+      terms: ['year', 'next'],
+      generalEducation: true,
       detailsPerRun: 30,
       detailMaxAgeDays: 30,
       maxRows: 1500,
@@ -476,6 +499,84 @@ describe('syllabus catalog sync', () => {
     expect(warningsOf(pages).some((w) => /in a row failed/.test(w))).toBe(true);
     expect(pages.at(-1)?.complete).toEqual({ sourceTypes: ['syllabus.entry'] });
     expect(await adapter.health()).toMatchObject({ state: 'degraded' });
+  });
+});
+
+describe('the whole current year and the campus 全学教育 (Hamamatsu student)', () => {
+  const LA_H = '2026年度　全学教育科目（浜松） [LA-H]';
+  // The same 全学教育 course code is offered on both campuses with different classes and slots.
+  const HAMAMATSU: CatalogRow[] = [
+    ...CATALOG,
+    row('77100010', 'オペレーティングシステム', '前期', '2243', '月3・4'),
+    { ...row('16111007', '生命科学', '後期', '2250', '月5・6'), className: '学部共通２' },
+    {
+      ...row('16111007', '生命科学', '後期', '2249', '火3・4'),
+      title: LA_H,
+      className: 'P1',
+      grade: '3年、4年',
+    },
+    { ...row('16126023', '社会と製造業', '後期', '2249', '火3・4'), title: LA_H, className: 'L0' },
+    { ...row('16024106', '総合英語Ⅱ', '前期', '2249', '金3・4'), title: LA_H, className: 'P1' },
+  ];
+
+  function hamamatsu(catalog: Record<string, unknown> = {}, config: Record<string, unknown> = {}) {
+    const srv = createLcuServer({ catalog: HAMAMATSU });
+    const cfg = SyllabusConfigSchema.parse({
+      deployment: 'shizuoka',
+      baseUrl: BASE,
+      minRequestIntervalMs: 0,
+      catalog: { faculties: ['IN-B'], detailsPerRun: 0, ...catalog },
+      ...config,
+    });
+    const adapter = new SyllabusAdapter(
+      makeContext(cfg, srv.fetch, undefined, {
+        clock: new ManualClock('2026-10-06T03:00:00.000Z'),
+      }),
+    );
+    return { srv, adapter };
+  }
+
+  it('by default lists 前期 and 後期 of the current year and the LA-H catalog of IN-B', async () => {
+    const { srv, adapter } = hamamatsu();
+    const { items, pages } = await runAll(adapter);
+    expect(srv.state.searches.map((s) => [s['title'], s['semester']])).toEqual([
+      ['2243', '1'],
+      ['2249', '1'],
+      ['2243', '2'],
+      ['2249', '2'],
+    ]);
+    const ps = payloads(items);
+    // 前期 of the current year stays searchable during 後期.
+    expect(ps.find((p) => p.subjectCode === '77100010')?.row['開講学期']).toBe('前期');
+    // The Hamamatsu class of the 全学教育 course, not the Shizuoka one.
+    const life = ps.filter((p) => p.subjectCode === '16111007');
+    expect(life.map((p) => [p.className, p.row['曜日・時限']])).toEqual([['P1', '火3・4']]);
+    expect(ps.some((p) => p.subjectCode === '16126023')).toBe(true);
+    expect(warningsOf(pages)).toContain(
+      'syllabus for 2027 LA-H is not published/known yet (no title code)',
+    );
+    expect(pages.at(-1)?.complete).toEqual({ sourceTypes: ['syllabus.entry'] });
+  });
+
+  it('generalEducation: false lists only the configured faculties', async () => {
+    const h = hamamatsu({ generalEducation: false, terms: ['current'] });
+    await runAll(h.adapter);
+    expect(h.srv.state.searches.map((s) => s['title'])).toEqual(['2243']);
+  });
+
+  it('does not add a campus catalog twice when it is configured explicitly', async () => {
+    const h = hamamatsu({ faculties: ['IN-B', 'LA-H'], terms: ['current'] });
+    await runAll(h.adapter);
+    expect(h.srv.state.searches.map((s) => s['title'])).toEqual(['2243', '2249']);
+  });
+
+  it('config can map a faculty to its general education catalog', async () => {
+    const h = hamamatsu(
+      { faculties: ['SC-B'], terms: ['current'] },
+      { generalEducation: { 'SC-B': 'LA-H' } },
+    );
+    await runAll(h.adapter);
+    expect(h.srv.state.searches.map((s) => s['title'])).toEqual(['2246', '2249']);
   });
 });
 

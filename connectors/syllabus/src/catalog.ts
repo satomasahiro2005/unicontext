@@ -49,7 +49,10 @@ export function nextTerm(t: AcademicTerm): AcademicTerm {
   return t.semester === '1' ? { year: t.year, semester: '2' } : { year: t.year + 1, semester: '1' };
 }
 
-/** Resolve the configured terms (`current` / `next` / explicit) against the clock, deduplicated. */
+/**
+ * Resolve the configured terms (`current` / `next` / `year` / explicit) against the clock,
+ * deduplicated. `year` = 前期 and 後期 of the academic year that runs at `now`.
+ */
 export function resolveCatalogTerms(
   terms: readonly SyllabusCatalogTerm[],
   now: Date,
@@ -63,7 +66,10 @@ export function resolveCatalogTerms(
   for (const t of terms) {
     if (t === 'current') add(current);
     else if (t === 'next') add(nextTerm(current));
-    else add({ year: t.year, semester: t.semester });
+    else if (t === 'year') {
+      add({ year: current.year, semester: '1' });
+      add({ year: current.year, semester: '2' });
+    } else add({ year: t.year, semester: t.semester });
   }
   return out;
 }

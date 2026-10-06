@@ -108,8 +108,8 @@ own courses, once the syllabus source has a `catalog` (details:
 sources:
   syllabus:
     catalog:
-      faculties: [IN-B, LA-S] # 情報学部 + 全学教育科目（静岡）
-      terms: [current, next] # e.g. on 2026-10-01: 2026 後期 and 2027 前期 (if published)
+      faculties: [IN-B] # 情報学部; its campus 全学教育科目（浜松） LA-H is added automatically
+      terms: [year, next] # default; on 2026-10-01: 2026 前期 + 後期, and 2027 前期 once published
       detailsPerRun: 30 # detail pages opened per daily run; the rest stay list-only until later runs
 ```
 

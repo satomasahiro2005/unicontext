@@ -20,6 +20,8 @@ export const DeploymentSettingsSchema = z.object({
     })
     .optional(),
   titles: z.record(z.string(), z.record(z.string(), z.string())).optional(),
+  /** Faculty code -> its campus's general education faculty code, e.g. { "IN-B": "LA-H" }. */
+  generalEducation: z.record(z.string(), z.string()).optional(),
 });
 export type DeploymentSettings = z.infer<typeof DeploymentSettingsSchema>;
 
@@ -64,6 +66,11 @@ export function resolveDeployment(
   for (const source of [profile.titles, config.titles])
     for (const [year, codes] of Object.entries(source ?? {}))
       titles[year] = { ...(titles[year] ?? {}), ...codes };
+  const generalEducation = {
+    ...(named?.generalEducation ?? {}),
+    ...(profile.generalEducation ?? {}),
+    ...(config.generalEducation ?? {}),
+  };
   return {
     id: name ?? 'custom',
     baseUrl: ensureSlash(baseUrl),
@@ -73,5 +80,6 @@ export function resolveDeployment(
       publicCancellations: screens.publicCancellations ?? '',
     },
     titles,
+    ...(Object.keys(generalEducation).length ? { generalEducation } : {}),
   };
 }
