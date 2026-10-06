@@ -41,7 +41,10 @@ export async function fetchDetailsOnRequest(
     throw new ValidationError(`at most ${MAX_DETAIL_FETCH_PER_REQUEST} ids per request`);
   const stores = uc.sync.stores;
   const results = new Map<string, DetailFetchItemResult>();
-  const bySource = new Map<string, { id: string; externalId: string; payload: unknown }[]>();
+  const bySource = new Map<
+    string,
+    { id: string; externalId: string; sourceType: string; payload: unknown }[]
+  >();
 
   for (const id of unique) {
     const raw = stores.sourceRefs
@@ -63,7 +66,7 @@ export async function fetchDetailsOnRequest(
       continue;
     }
     const list = bySource.get(raw.sourceId) ?? [];
-    list.push({ id, externalId: raw.externalId, payload: raw.payload });
+    list.push({ id, externalId: raw.externalId, sourceType: raw.sourceType, payload: raw.payload });
     bySource.set(raw.sourceId, list);
   }
 
@@ -73,7 +76,11 @@ export async function fetchDetailsOnRequest(
     if (!supportsDetailFetch(adapter)) continue;
     try {
       const out = await adapter.fetchDetails(
-        wanted.map((w) => ({ externalId: w.externalId, previousPayload: w.payload })),
+        wanted.map((w) => ({
+          externalId: w.externalId,
+          sourceType: w.sourceType,
+          previousPayload: w.payload,
+        })),
         options.signal ? { signal: options.signal } : {},
       );
       warnings.push(...out.warnings);

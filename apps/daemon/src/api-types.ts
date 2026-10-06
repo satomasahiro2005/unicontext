@@ -176,6 +176,8 @@ export interface CoursesResponse {
 
 export interface AssignmentItem {
   taskId: string;
+  /** The assignment behind the task; MCP get_assignment returns its full content. */
+  assignmentId?: string | undefined;
   title: string;
   course: CourseRef | undefined;
   dueAt: string | undefined;

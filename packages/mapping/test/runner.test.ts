@@ -7,6 +7,7 @@ import {
   createMappedNormalizer,
   mappingMetadata,
   parseMappingSpec,
+  runMappedDetails,
   runMappedResources,
   type ResourceCaller,
 } from '../src/index.js';
@@ -346,5 +347,133 @@ describe('createMappedAdapter + compliance', () => {
     const res = await adapter.sync({ mode: 'initial' });
     expect(res.items).toHaveLength(6);
     expect(ANNOUNCEMENTS.items).toHaveLength(1);
+  });
+});
+
+describe('fan-out expand, refreshAfter and on-request details', () => {
+  const lessonsSpec = parseMappingSpec({
+    id: 'l',
+    product: 'l',
+    capabilities: ['assignments'],
+    resources: [
+      {
+        name: 'lessons',
+        call: { tool: 'list' },
+        sourceType: 'l.lesson',
+        externalId: '$string(id)',
+      },
+      {
+        name: 'details',
+        forEach: { resource: 'lessons', as: 'l', refreshAfter: '24h', always: 'open = true' },
+        call: { tool: 'get', args: { id: '{{l.id}}' } },
+        sourceType: 'l.detail',
+        externalId: '$string(id)',
+      },
+      {
+        name: 'questions',
+        forEach: {
+          resource: 'details',
+          as: 's',
+          expand: '($d := $; slides[quiz = true].{"slide": id, "lesson": $d.id})',
+          refreshAfter: '24h',
+        },
+        call: { tool: 'questions', args: { slide: '{{s.slide}}' } },
+        sourceType: 'l.question',
+        externalId: '$string(id)',
+        attach: { lesson: 's.lesson' },
+      },
+      {
+        name: 'answers',
+        onRequest: true,
+        forEach: { resource: 'details', as: 's', expand: 'slides[quiz = true]' },
+        call: { tool: 'answers', args: { slide: '{{s.id}}' } },
+        sourceType: 'l.answer',
+        externalId: '$string(q)',
+      },
+    ],
+    details: [
+      { sourceType: 'l.lesson', resource: 'lessons', run: ['details', 'questions', 'answers'] },
+    ],
+  });
+  const LESSONS = [
+    { id: 1, open: true },
+    { id: 2, open: false },
+  ];
+  const caller = (): { c: ResourceCaller; requests: { tool: string; args: unknown }[] } => {
+    const requests: { tool: string; args: unknown }[] = [];
+    const c: ResourceCaller = {
+      call(req) {
+        const tool = String(req.call.tool);
+        const args = (req.call.args ?? {}) as Record<string, number>;
+        requests.push({ tool, args });
+        const id = args.id ?? 0;
+        const slide = args.slide ?? 0;
+        if (tool === 'list') return Promise.resolve({ data: LESSONS });
+        if (tool === 'get')
+          return Promise.resolve({
+            data: { id, slides: [{ id: id * 10, quiz: true }, { id: id * 10 + 1 }] },
+          });
+        if (tool === 'questions') return Promise.resolve({ data: [{ id: slide * 10 }] });
+        return Promise.resolve({ data: [{ q: slide }] });
+      },
+    };
+    return { c, requests };
+  };
+
+  it('expands parents into elements, skips recent calls unless "always", and never runs onRequest in a sync', async () => {
+    const { c, requests } = caller();
+    const fetchLog = new Map<string, number>();
+    let t = 1_000_000;
+    const opts = { fetchLog, now: () => t };
+    const first = await runAll(c, opts, { mode: 'initial' }, lessonsSpec);
+    expect(first.items.map((i) => `${i.sourceType}:${i.externalId}`)).toEqual([
+      'l.lesson:1',
+      'l.lesson:2',
+      'l.detail:1',
+      'l.detail:2',
+      'l.question:100',
+      'l.question:200',
+    ]);
+    expect(first.items.find((i) => i.externalId === '100')?.payload).toMatchObject({
+      _parent: { lesson: 1 },
+    });
+    expect(requests.some((r) => r.tool === 'answers')).toBe(false);
+    requests.length = 0;
+    t += 3_600_000;
+    await runAll(c, opts, { mode: 'initial' }, lessonsSpec);
+    // lesson 1 is "always"; lesson 2 and all questions were read within 24h
+    expect(requests.map((r) => `${r.tool}:${JSON.stringify(r.args)}`)).toEqual([
+      'list:{}',
+      'get:{"id":1}',
+    ]);
+    requests.length = 0;
+    t += 24 * 3_600_000;
+    await runAll(c, opts, { mode: 'initial' }, lessonsSpec);
+    expect(requests.filter((r) => r.tool === 'get')).toHaveLength(2);
+    expect(requests.filter((r) => r.tool === 'questions')).toHaveLength(2);
+  });
+
+  it('runs a details rule for one stored item, onRequest included, without completing anything', async () => {
+    const { c, requests } = caller();
+    const res = await runMappedDetails(
+      lessonsSpec,
+      c,
+      { externalId: '2', sourceType: 'l.lesson', payload: LESSONS[1] },
+      // a recent sync read does not stop a request
+      { fetchLog: new Map([['details|{"tool":"get","args":{"id":2}}', Date.now()]]) },
+    );
+    expect(res.error).toBeUndefined();
+    expect(requests.map((r) => r.tool)).toEqual(['get', 'questions', 'answers']);
+    expect(res.items.map((i) => `${i.sourceType}:${i.externalId}`)).toEqual([
+      'l.detail:2',
+      'l.question:200',
+      'l.answer:20',
+    ]);
+    const none = await runMappedDetails(lessonsSpec, c, {
+      externalId: 'x',
+      sourceType: 'l.other',
+      payload: {},
+    });
+    expect(none.error).toMatch(/no on-request details/);
   });
 });

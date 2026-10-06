@@ -192,7 +192,7 @@ export function supportsOpenAnnouncements(
  */
 export interface DetailFetchAdapter extends SourceAdapter {
   fetchDetails(
-    requests: readonly { externalId: string; previousPayload?: unknown }[],
+    requests: readonly { externalId: string; sourceType?: string; previousPayload?: unknown }[],
     options?: { signal?: AbortSignal },
   ): Promise<DetailFetchResult>;
 }

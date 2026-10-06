@@ -43,6 +43,7 @@ import {
   CANVAS_ANNOUNCEMENTS,
   createCanvasServer,
   createEdServer,
+  ED_LESSONS,
   inMemoryFactory,
   type ServerOptions,
 } from './fixtures/servers.js';
@@ -493,12 +494,22 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
       edSpec(),
       inMemoryFactory(() => createEdServer({ calls })),
     );
-    const readTools = ['get_lesson', 'get_thread', 'list_courses', 'list_lessons', 'list_threads'];
-    expect(adapter.mappedTools().sort()).toEqual(readTools);
+    const syncTools = [
+      'get_lesson',
+      'get_thread',
+      'list_courses',
+      'list_lessons',
+      'list_slide_questions',
+      'list_threads',
+    ];
+    // + two read tools only called on the student's request (get_assignment)
+    expect(adapter.mappedTools().sort()).toEqual(
+      [...syncTools, 'list_lesson_files', 'list_slide_responses'].sort(),
+    );
     expect((await adapter.health()).state).toBe('healthy');
     const { items, pages } = await syncAll(adapter);
     // only read tools; the server's write tools are never touched
-    expect([...new Set(calls.map((c) => c.tool))].sort()).toEqual(readTools);
+    expect([...new Set(calls.map((c) => c.tool))].sort()).toEqual(syncTools);
     expect(calls.find((c) => c.tool === 'list_courses')?.args).toEqual({ includeArchived: false });
     expect(calls.find((c) => c.tool === 'list_threads')?.args).toEqual({
       courseId: 55,
@@ -519,9 +530,16 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
       'edstem.lesson:2002',
       'edstem.lesson:2003',
       'edstem.lesson:2004',
-      // lesson text only for unfinished lessons that are work to hand in
+      // every lesson's text (the first sync reads all of them)
+      'edstem.lesson_detail:2001',
       'edstem.lesson_detail:2002',
+      'edstem.lesson_detail:2003',
       'edstem.lesson_detail:2004',
+      // the questions of every quiz slide
+      'edstem.slide_question:404981',
+      'edstem.slide_question:423710',
+      'edstem.slide_question:5001',
+      'edstem.slide_question:5002',
       'edstem.thread:1001',
       'edstem.thread:1002',
       'edstem.thread:1003',
@@ -675,6 +693,133 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
       ['not_submitted', 'submission-system'],
       ['submitted', 'submission-system'],
     ]);
+  });
+
+  it('makes every lesson, quiz question and slide file a searchable document of the course', async () => {
+    const adapter = adapterFor(
+      edSpec(),
+      inMemoryFactory(() => createEdServer()),
+    );
+    const { items } = await syncAll(adapter);
+    await adapter.dispose();
+    const { entities, outputs } = await normalizeAll(edSpec(), items);
+    expect(outputs.flatMap(({ out }) => out.warnings ?? [])).toEqual([]);
+    const course = entities.find((e) => e.kind === 'courseOffering');
+    const docs = entities.filter((e) => e.kind === 'document') as unknown as {
+      title: string;
+      text?: string;
+      url?: string;
+      path?: string;
+      mimeType?: string;
+      courseOfferingId?: string;
+      extra?: Record<string, unknown>;
+    }[];
+    const byTitle = Object.fromEntries(docs.map((d) => [d.title, d]));
+    // 質問1 / 質問2 in Ed's order (index 1, 2 here; the listing came back out of order)
+    expect(byTitle['当日課題 (小レポート1) 質問1']).toMatchObject({
+      text: '画像形式のファイルを貼り付けて提出すること\nビデオレンタル店のデータベースの概念モデルを設計し、ER図を提出しなさい。',
+      url: 'https://edstem.org/au/courses/55/lessons/2002/slides/821141',
+      path: '/Ed Lessons/第1回: ガイダンス・導入 (10／1)/当日課題 (小レポート1)/質問1',
+      courseOfferingId: course?.id,
+      extra: { edKind: 'question', lessonId: 2002, slideId: 821141, questionNumber: 1 },
+    });
+    expect(byTitle['当日課題 (小レポート1) 質問2']?.text).toBe(
+      '授業の感想をDiscussionのスレッドに投稿し、そのスレッド番号を記載してください',
+    );
+    // several quiz slides: the slide title tells them apart; 0-based index still numbers from 1;
+    // choices are listed, the answer key (solution / explanation) never
+    expect(byTitle['Quiz 2 前半 質問1']?.text).toBe(
+      '主キーの性質はどれか\n選択肢:\n1. 一意である\n2. NULL を許す',
+    );
+    expect(byTitle['Quiz 2 後半 質問1']?.text).toBe('第2正規形を説明せよ');
+    expect(JSON.stringify(docs)).not.toContain('SECRET-ANSWER-KEY');
+    // the lesson text, slide by slide
+    expect(byTitle['当日の講義資料']).toMatchObject({
+      text: '[講義資料]\n(ファイル: https://static.edusercontent.com/files/AAAA)\n\n[まとめ]\n正規化は第3回で扱う',
+      url: 'https://edstem.org/au/courses/55/lessons/2001',
+      extra: { edKind: 'lesson', lessonId: 2001 },
+    });
+    expect(byTitle['当日課題 (小レポート1)']?.text).toBe(
+      '[課題 (小レポート1)]\n提出期限: 10月6日 17:00PM\n(クイズ: 設問は「当日課題 (小レポート1) 質問…」)',
+    );
+    // an Ed-hosted slide file, with its link
+    expect(byTitle['講義資料.pdf']).toMatchObject({
+      url: 'https://static.edusercontent.com/files/AAAA',
+      mimeType: 'application/pdf',
+      courseOfferingId: course?.id,
+    });
+    const refs = outputs
+      .filter((o) => o.item.sourceType === 'edstem.slide_question')
+      .flatMap((o) => o.out.entities.map((e) => e.ref));
+    expect(refs[0]).toMatchObject({ authority: 'lms' });
+  });
+
+  it('reads unchanged lessons at most once a day and the full lesson on request, read-only', async () => {
+    const calls: { tool: string; args: unknown }[] = [];
+    let now = Date.parse('2026-10-06T00:00:00Z');
+    const adapter = new McpSourceAdapter({
+      sourceId: 'src',
+      spec: edSpec(),
+      config: McpConfigSchema.parse({ command: 'fake-mcp-server' }),
+      secrets: new MemorySecrets(),
+      transportFactory: inMemoryFactory(() => createEdServer({ calls })),
+      runOptions: { now: () => now },
+    });
+    await syncAll(adapter);
+    const first = calls.length;
+    now += 30 * 60_000;
+    const { items } = await syncAll(adapter);
+    const again = calls.slice(first);
+    // 30 minutes later: only the unfinished assignment lessons are read again; quiz questions wait
+    expect(again.filter((c) => c.tool === 'get_lesson').map((c) => c.args)).toEqual([
+      { lessonId: 2002 },
+      { lessonId: 2004 },
+    ]);
+    expect(again.some((c) => c.tool === 'list_slide_questions')).toBe(false);
+    // stored items of skipped calls are not retired
+    expect(items.some((i) => i.sourceType === 'edstem.lesson_detail')).toBe(true);
+    expect((await syncAll(adapter)).pages.at(-1)?.complete).toBeUndefined();
+    now += 24 * 3_600_000;
+    const before = calls.length;
+    await syncAll(adapter);
+    expect(calls.slice(before).filter((c) => c.tool === 'get_lesson')).toHaveLength(4);
+
+    // on request: one lesson in full, with the student's saved answers and its files
+    expect(typeof adapter.fetchDetails).toBe('function');
+    const lesson = ED_LESSONS[1];
+    const start = calls.length;
+    const res = await adapter.fetchDetails!([
+      { externalId: '2002', sourceType: 'edstem.lesson', previousPayload: lesson },
+    ]);
+    expect(res.results).toEqual([{ externalId: '2002', status: 'fetched' }]);
+    expect(res.warnings).toEqual([]);
+    expect(calls.slice(start).map((c) => c.tool)).toEqual([
+      'get_lesson',
+      'list_slide_questions',
+      'list_slide_responses',
+      'list_lesson_files',
+    ]);
+    expect(res.items.map((i) => `${i.sourceType}:${i.externalId}`).sort()).toEqual([
+      'edstem.lesson_detail:2002',
+      'edstem.slide_question:404981',
+      'edstem.slide_question:423710',
+      'edstem.slide_response:404981',
+    ]);
+    const response = res.items.find((i) => i.sourceType === 'edstem.slide_response');
+    expect(response?.payload).toMatchObject({
+      questionId: 404981,
+      _parent: { lessonId: 2002, slideId: 821141, lessonTitle: '当日課題 (小レポート1)' },
+    });
+    // a request never moves the sync cursor or completes a listing, and refuses unknown types
+    const other = await adapter.fetchDetails!([
+      { externalId: '1001', sourceType: 'edstem.thread', previousPayload: { id: 1001 } },
+    ]);
+    expect(other.results[0]).toMatchObject({ status: 'failed' });
+    // no write tool was ever called
+    expect(
+      calls.filter((c) => /^(create|reply|submit|mark)_/.test(c.tool)).map((c) => c.tool),
+    ).toEqual([]);
+    await adapter.dispose();
   });
 
   it('maps Ed sessions onto the profile terms and links into the account region', async () => {

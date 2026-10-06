@@ -924,7 +924,11 @@ must not write anything found in mail or calendar into UniContext.
   `createSinksFromConfig(config.notifications, {secrets})` builds them from config.
 - `@unicontext/mcp` (apps/mcp): `createMcpServer(deps)`, `runStdioServer`, `handleMcpHttp` (stateless streamable
   HTTP), the file-backed `ProposalStore` + `applyProposal` (propose -> confirm -> execute, §50) and `buildAssignments`.
-  Every tool result is an envelope `{data, citations, conflicts, answerHint}`.
+  Every tool result is an envelope `{data, citations, conflicts, answerHint}`. `get_assignment`
+  (`assignment-detail.ts`) takes an assignment / task id (get_assignments items carry `assignmentId`) or the
+  `document:` of an Ed lesson, re-reads it through `fetchDetailsOnRequest` (the source's `DetailFetchAdapter`; for
+  mapped adapters the mapping's `details` rule), and returns the deadline/status plus, for an Ed lesson, every slide
+  with its text, quiz questions (prompt, choices, the student's saved answer) and files; never answer keys.
 - `@unicontext/daemon` (apps/daemon): `createRuntime` (config + profile + dynamic connector loading + secrets, shared by
   the CLI and MCP stdio), `startDaemon` (lock file, scheduler, notifications, Fastify on 127.0.0.1: REST `/api/v1`, Web
   UI static files, `/mcp`), `DaemonClient`, service install helpers and `api-types` (wire types, type-only subpath).
@@ -1017,7 +1021,11 @@ createNormalizer})`. Product logic stays in the connector; university-specific v
 
 Adapters (`adapter-mcp`, `adapter-cli`, `adapter-rest`, `adapter-browser`) implement
 `SourceAdapter` generically (tool discovery / CLI JSON / OpenAPI / Playwright session) and pair
-with a per-service `Normalizer`; they plug into the engine the same way.
+with a per-service `Normalizer`; they plug into the engine the same way. Mapped adapters
+(`@unicontext/mapping`) also get `forEach.expand` (fan out over parts of a parent, e.g. quiz
+slides), `forEach.refreshAfter`/`always` (skip a detail call made recently in this process) and,
+with a mapping `details` section, `fetchDetails` (`onRequest` resources run only when the user asks;
+docs/connectors/mapping.md).
 
 ## 5. Using the foundation from apps (lane b)
 

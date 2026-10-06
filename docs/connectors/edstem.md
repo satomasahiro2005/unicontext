@@ -24,22 +24,31 @@ server reports its version in `unicontext sources` (column バージョン) so a
 
 ### What UniContext calls
 
-Five tools, all `readOnlyHint: true` in the server (`src/mcp/server.ts`):
+Eight tools, all `readOnlyHint: true` in the server (`src/mcp/server.ts`); the last two only on the
+student's request (`get_assignment`), never in a sync:
 
-| Tool           | Arguments                            | Returns (one JSON text block)                                                                                                                                            |
-| -------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `list_courses` | `{includeArchived: false}`           | `[{id, code, name, year?, session?, status?, role?}]` from Ed's `/api/user` enrolments                                                                                   |
-| `list_threads` | `{courseId, limit: 50, sort: "new"}` | `[{id, number, title, type, category, courseId, subcategory?, createdAt?, updatedAt?, metrics?, flags?}]`; no body, no author                                            |
-| `get_thread`   | `{threadId}`                         | summary + `{userId, document, endorsement?, users: {"<id>": {id, name, courseRole?}}, answers?, comments?}`; replies nest under `comments` at any depth                  |
-| `list_lessons` | `{courseId}`                         | `[{id, courseId, moduleId, title, moduleName?, kind?, state?, status?, availableAt?, dueAt?}]`; `status` is the student's progress (unattempted / attempted / completed) |
-| `get_lesson`   | `{lessonId}`                         | summary + `{outline?, lockedAt?, createdAt?, slides: [{id, title?, type?, content? (Ed document XML)}]}`                                                                 |
+| Tool                   | Arguments                            | Returns (one JSON text block)                                                                                                                                                           |
+| ---------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_courses`         | `{includeArchived: false}`           | `[{id, code, name, year?, session?, status?, role?}]` from Ed's `/api/user` enrolments                                                                                                  |
+| `list_threads`         | `{courseId, limit: 50, sort: "new"}` | `[{id, number, title, type, category, courseId, subcategory?, createdAt?, updatedAt?, metrics?, flags?}]`; no body, no author                                                           |
+| `get_thread`           | `{threadId}`                         | summary + `{userId, document, endorsement?, users: {"<id>": {id, name, courseRole?}}, answers?, comments?}`; replies nest under `comments` at any depth                                 |
+| `list_lessons`         | `{courseId}`                         | `[{id, courseId, moduleId, title, moduleName?, kind?, state?, status?, availableAt?, dueAt?}]`; `status` is the student's progress (unattempted / attempted / completed)                |
+| `get_lesson`           | `{lessonId}`                         | summary + `{outline?, lockedAt?, createdAt?, slides: [{id, title?, type?, content? (Ed document XML)}]}`                                                                                |
+| `list_slide_questions` | `{slideId}`                          | `[{id, slideId, index, type, content (Ed XML), answers: [choice], explanation?, solution?}]`: the questions of one quiz slide. `solution` / `explanation` (answer key) are never mapped |
+| `list_slide_responses` | `{slideId}`                          | `[{questionId, userId, createdAt?, correct?, data: {content? \| choices?}}]`: the student's own saved answers (on request only)                                                         |
+| `list_lesson_files`    | `{lessonId}`                         | `[{filename, url, mediaType?, slideId?, slideTitle?, source}]`: Ed-hosted files of a lesson (on request only)                                                                           |
 
 `get_thread` runs for announcements and for threads created or updated in the last 30 days (one
-call each, `minIntervalMs` apart). The server also exposes write tools (`create_thread`,
+call each, `minIntervalMs` apart). `get_lesson` runs for unfinished assignment lessons on every
+sync and for every other lesson at most once a day per daemon process; `list_slide_questions` once
+a day per quiz slide (`forEach.refreshAfter: 24h`, new lessons on first sight). With the Shizuoka
+courses (~30 lessons) that is about 5 extra calls per 30-minute sync plus ~40 once a day. The server also exposes write tools (`create_thread`,
 `reply_thread`, `submit_slide`, `submit_slide_answer`, `mark_lessons_read`); the mapping never
-names them (adapter-mcp only calls tools the mapping names, §50) and the source config does not set
+names them (reading a quiz's questions or saved answers is a plain GET: it does not view, save or
+submit anything) (adapter-mcp only calls tools the mapping names, §50) and the source config does not set
 `EDSTEM_ALLOW_POSTING`, so the two posting tools refuse even if something asked. The adapter test
-`EdStem through edstem-mcp` asserts that a full sync calls exactly the five read tools.
+`EdStem through edstem-mcp` asserts that a full sync calls exactly six read tools and an on-request
+read the four lesson tools, and never a write tool.
 
 ## Install (once, outside the repo)
 
@@ -156,6 +165,30 @@ is Ed (authority `submission-system`): link `https://edstem.org/<region>/courses
   system's status).
 - Lecture material lessons (「当日の講義資料」) are not assignments.
 
+## Lesson content: search and get_assignment
+
+Where the questions live: a Shizuoka 小レポート is an Ed **lesson** (e.g. 「当日課題 (小レポート1)」
+in the module 「第1回: …」) whose single **quiz slide** holds only the deadline sentence; the
+questions themselves (質問1, 質問2, …) are the slide's quiz questions (`list_slide_questions`), not
+slide text and not a discussion thread. SQL exercises are `postgres` slides (prompt in the slide
+text), lecture PDFs are `pdf` slides (`fileUrl`).
+
+- Search: each lesson is a `document` (title = lesson title, text = every slide in order:
+  `[slide title]` + text, file links, a pointer to the quiz questions), each quiz question a
+  `document` titled `<lesson> 質問<n>` (`<lesson> <slide> 質問<n>` when a lesson has several quiz
+  slides) with its prompt and numbered choices, each slide file a `document` with its link
+  (`application/pdf`). All carry the course offering, path `/Ed Lessons/<module>/<lesson>/…`
+  (get_course files), authority `lms`, and cite the Ed lesson or slide URL
+  (`https://edstem.org/<region>/courses/<c>/lessons/<l>/slides/<s>`). `search "小レポート1 質問2"`
+  finds the question; its `document:…` id opens the whole assignment in `get_assignment`.
+- `get_assignment` (MCP): `assignment:…` / `task:…` (get_assignments now returns `assignmentId`)
+  or the `document:…` of an Ed lesson. It re-reads the lesson from Ed on request (`details` rule:
+  `get_lesson`, `list_slide_questions`, `list_slide_responses`, `list_lesson_files`; waits up to
+  25 s, then answers from what is stored) and returns the deadline/status plus `lesson.slides[]`
+  in order: text, file `{name, url}`, and `questions[]` `{number, prompt, choices?, myAnswer?}`
+  where `myAnswer` is the student's own saved answer on Ed (`choices` 1-based). Answer keys are
+  never returned. A lecture-material lesson (not an assignment) returns the stored lesson.
+
 ## Mapping summary
 
 Courses: Ed's `year` is the academic year, and `session` is free text typed by the course admin.
@@ -186,5 +219,9 @@ never marked deleted.
 - Every sync relists 50 newest threads per active course; there is no incremental cursor.
 - Threads older than 30 days whose details were never fetched (e.g. before the first sync) appear
   as titles only.
-- Ed lessons, quizzes and files are not mapped (the server has read tools for them; not needed yet).
+- Ed-hosted files are listed with their link (Ed's file links open without signing in) but are not
+  downloaded or text-extracted (`download_course_file` covers Teams / SharePoint / VPN files).
+- A saved answer the student deleted on Ed stays in UniContext until it is replaced (responses are
+  read on request and never retired).
+- The once-a-day refresh lives in the daemon process; a restart reads every lesson once.
 - Anonymous posts have no author name.

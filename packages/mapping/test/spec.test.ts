@@ -71,6 +71,91 @@ describe('parseMappingSpec', () => {
     expect(() => parseMappingSpec({ ...base(), drift: { 'x.zzz': {} } })).toThrow(/no resource/);
   });
 
+  it('validates on-request details, onRequest resources and refreshAfter', () => {
+    const child = {
+      name: 'b',
+      sourceType: 'x.b',
+      externalId: 'id',
+      forEach: { resource: 'a', as: 'p' },
+    };
+    const ok = parseMappingSpec({
+      ...base(),
+      resources: [
+        { name: 'a', sourceType: 'x.a', externalId: 'id' },
+        {
+          ...child,
+          forEach: {
+            ...child.forEach,
+            refreshAfter: '24h',
+            always: 'open = true',
+            expand: 'items',
+          },
+        },
+        {
+          ...child,
+          name: 'c',
+          sourceType: 'x.c',
+          onRequest: true,
+          forEach: { resource: 'b', as: 'q' },
+        },
+      ],
+      details: [{ sourceType: 'x.a', resource: 'a', run: ['b', 'c'] }],
+    });
+    expect(ok.details).toHaveLength(1);
+    expect(ok.resources[2]?.onRequest).toBe(true);
+    // an onRequest resource no details rule runs; a run step that does not fan out from the chain
+    expect(() =>
+      parseMappingSpec({
+        ...base(),
+        resources: [base().resources as never, { ...child, onRequest: true }].flat(),
+      }),
+    ).toThrow(/no details rule runs b/);
+    expect(() =>
+      parseMappingSpec({
+        ...base(),
+        resources: [
+          { name: 'a', sourceType: 'x.a', externalId: 'id' },
+          { ...child, forEach: undefined },
+        ],
+        details: [{ sourceType: 'x.a', resource: 'a', run: ['b'] }],
+      }),
+    ).toThrow(/must fan out from a/);
+    expect(() =>
+      parseMappingSpec({
+        ...base(),
+        details: [{ sourceType: 'x.zzz', resource: 'a', run: ['a'] }],
+      }),
+    ).toThrow(/produces x\.a/);
+    // always without refreshAfter; refreshAfter on a complete listing; bad durations
+    expect(() =>
+      parseMappingSpec({
+        ...base(),
+        resources: [
+          base().resources as never,
+          { ...child, forEach: { ...child.forEach, always: 'x' } },
+        ].flat(),
+      }),
+    ).toThrow(/needs "refreshAfter"/);
+    expect(() =>
+      parseMappingSpec({
+        ...base(),
+        resources: [
+          base().resources as never,
+          { ...child, complete: true, forEach: { ...child.forEach, refreshAfter: '1h' } },
+        ].flat(),
+      }),
+    ).toThrow(/cannot be "complete"/);
+    expect(() =>
+      parseMappingSpec({
+        ...base(),
+        resources: [
+          base().resources as never,
+          { ...child, forEach: { ...child.forEach, refreshAfter: 'daily' } },
+        ].flat(),
+      }),
+    ).toThrow(/duration/);
+  });
+
   it('catches JSONata syntax errors, also inside templates', () => {
     expect(() =>
       parseMappingSpec({

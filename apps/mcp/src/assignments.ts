@@ -12,6 +12,11 @@ import { linkedTodoDetails } from '@unicontext/task-engine';
 /** One task/assignment as shown to AI clients and the REST twin (apps/daemon `AssignmentItem`). */
 export interface AssignmentItem {
   taskId: string;
+  /**
+   * The assignment behind the task (undefined for an exam or a self-made to-do). get_assignment
+   * takes it (or taskId) and returns the full content: questions, choices, files, saved answers.
+   */
+  assignmentId?: string | undefined;
   title: string;
   course: CourseRef | undefined;
   dueAt: string | undefined;
@@ -98,6 +103,7 @@ export function buildAssignments(uc: UniContext, filter: AssignmentFilter = {}):
         t.dueAt || !OPEN_TASK_STATUSES.includes(t.status) ? undefined : estimate(t);
       return {
         taskId: t.id,
+        ...(t.assignmentId ? { assignmentId: t.assignmentId } : {}),
         title: t.title,
         course: uc.context.courseRef(t.courseOfferingId),
         dueAt: t.dueAt,

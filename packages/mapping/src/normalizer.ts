@@ -7,6 +7,7 @@ import {
 import {
   contentHash,
   extractDeadlines,
+  markupToText,
   parseExternalTermLabel,
   termForDate,
   termForExternalLabel,
@@ -57,34 +58,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 /** Term names a label can carry when there is no academic calendar to map it through. */
 const UNIVERSITY_TERM_WORD = /(前|後)学?期|通年|集中/;
 
-const ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-};
-
 /** Markup (Ed document XML, simple HTML) → text, one line per paragraph / break / list item. */
 function plainText(markup: unknown): string | undefined {
-  const parts = (Array.isArray(markup) ? markup : [markup])
-    .map((m) => toStringValue(m))
-    .filter((m): m is string => m !== undefined && m !== '');
-  if (parts.length === 0) return undefined;
-  const text = parts
-    .join('\n')
-    .replace(/<\/(?:paragraph|p|div|li|heading|h[1-6]|callout)>|<br\s*\/?>|<break\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&(#\d+|[a-z]+);/gi, (m, e: string) =>
-      e.startsWith('#')
-        ? String.fromCodePoint(Number(e.slice(1)))
-        : (ENTITIES[e.toLowerCase()] ?? m),
-    )
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  return text || undefined;
+  return markupToText((Array.isArray(markup) ? markup : [markup]).map((m) => toStringValue(m)));
 }
 
 /**
