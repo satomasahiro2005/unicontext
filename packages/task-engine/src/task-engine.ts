@@ -49,6 +49,13 @@ import { ClassSchedule } from './class-schedule.js';
 import { doneMarker, groupAddress, shortDeadlineTitle } from './deadline-context.js';
 import { extractDeadlines } from './deadline-extractor.js';
 import { extractSessionRuleFacts } from './session-rules.js';
+import {
+  isStudentStatementStatus,
+  latestTaskProgress,
+  TASK_PROGRESS_PREDICATE,
+  type TaskProgress,
+  taskProgressSubject,
+} from './progress.js';
 import { paceStatus, type PaceStatus, weekStartOf, weekStartOfDue } from './pace.js';
 
 export const DEADLINE_PREDICATE = 'deadline';
@@ -95,8 +102,21 @@ export function linkedTodoDetails(notes: string | undefined): string | undefined
 
 export const EXTRACTOR_ID = 'ja-deadline-rules';
 
-/** Who is asking to change a task status. AI may never mark work as submitted/completed (§19). */
-export type StatusActor = 'user' | 'ai' | 'system';
+/** The fact a student's own status rests on survives re-derivation (record_task_progress). */
+const keepStudentEvidence = (
+  prev: Task | undefined,
+): { statusEvidenceFactId?: Task['statusEvidenceFactId'] } =>
+  prev?.statusSetBy === 'user' && prev.statusEvidenceFactId
+    ? { statusEvidenceFactId: prev.statusEvidenceFactId }
+    : {};
+
+/**
+ * Who is asking to change a task status. AI may never mark work as submitted/completed (§19).
+ * `student-statement` is the student's own word relayed by an AI client (record_task_progress):
+ * it may set pending / in_progress / completed / cancelled and is stored as the student's own
+ * status, but never `submitted` (submission systems only) or `expired_past_term`.
+ */
+export type StatusActor = 'user' | 'ai' | 'system' | 'student-statement';
 
 export interface TaskEngineOptions {
   db: UniContextDatabase;
@@ -231,12 +251,14 @@ export class TaskEngine {
 
   /**
    * Change status with policy checks: AI cannot set submitted/completed; the system cannot set
-   * submitted (that only comes from submission-system facts during derive()).
+   * submitted (that only comes from submission-system facts during derive()); the student's own
+   * statement (`student-statement`) sets pending / in_progress / completed / cancelled as the
+   * student's own status with the fact that quotes them (`evidenceFactId`), never submitted.
    */
   setStatus(
     taskId: string,
     status: TaskStatus,
-    options: { actor: StatusActor; note?: string },
+    options: { actor: StatusActor; note?: string; evidenceFactId?: string },
   ): Task {
     const t = this.get(taskId);
     if (!t) throw new NotFoundError(`task ${taskId}`);
@@ -255,16 +277,65 @@ export class TaskEngine {
         'The system marks tasks submitted only from submission-system facts',
       );
     }
+    if (options.actor === 'student-statement' && !isStudentStatementStatus(status)) {
+      throw new PolicyViolationError(
+        status === 'submitted'
+          ? 'A student statement cannot mark a task submitted; only the submission system does'
+          : `A student statement cannot set a task to ${status}`,
+      );
+    }
+    const own = options.actor === 'user' || options.actor === 'student-statement';
     const next: Task = {
       ...t,
       status,
-      statusSetBy: options.actor === 'user' ? 'user' : 'system',
+      statusSetBy: own ? 'user' : 'system',
       ...(options.note ? { notes: options.note } : {}),
       updatedAt: this.clock.now().toISOString(),
     };
-    if (options.actor !== 'user') delete next.statusEvidenceFactId;
+    if (options.actor === 'student-statement' && options.evidenceFactId)
+      next.statusEvidenceFactId = options.evidenceFactId as Task['statusEvidenceFactId'];
+    else if (options.actor !== 'user' || this.restsOnStudentStatement(t))
+      // The owner's own choice replaces what the student once said in chat.
+      delete next.statusEvidenceFactId;
     this.save(next);
     return next;
+  }
+
+  /**
+   * Put a task's status fields back to an earlier snapshot (a retracted student statement).
+   * Only the status, who set it and its evidence fact change.
+   */
+  restoreStatus(
+    taskId: string,
+    previous: {
+      status: TaskStatus;
+      statusSetBy: Task['statusSetBy'];
+      statusEvidenceFactId?: string | undefined;
+    },
+  ): Task {
+    const t = this.get(taskId);
+    if (!t) throw new NotFoundError(`task ${taskId}`);
+    const next: Task = {
+      ...t,
+      status: previous.status,
+      statusSetBy: previous.statusSetBy,
+      updatedAt: this.clock.now().toISOString(),
+    };
+    if (previous.statusEvidenceFactId)
+      next.statusEvidenceFactId = previous.statusEvidenceFactId as Task['statusEvidenceFactId'];
+    else delete next.statusEvidenceFactId;
+    this.save(next);
+    return next;
+  }
+
+  /** The student's newest statement about how far a task has come (record_task_progress). */
+  progressOf(taskId: string): TaskProgress | undefined {
+    return latestTaskProgress(
+      this.facts.active({
+        subjects: [taskProgressSubject(taskId)],
+        predicate: TASK_PROGRESS_PREDICATE,
+      }),
+    );
   }
 
   createManualTask(input: {
@@ -632,6 +703,23 @@ export class TaskEngine {
     return undefined;
   }
 
+  /**
+   * The task's status is an open one (pending / in_progress) that the student only stated in chat
+   * (record_task_progress: its evidence is a task:progress fact), not one the owner set.
+   */
+  private isOpenStudentStatement(t: Task): boolean {
+    return (
+      (t.status === 'pending' || t.status === 'in_progress') && this.restsOnStudentStatement(t)
+    );
+  }
+
+  /** The task's own status was set by a student statement (its evidence is a task:progress fact). */
+  private restsOnStudentStatement(t: Task): boolean {
+    if (t.statusSetBy !== 'user' || !t.statusEvidenceFactId) return false;
+    const f = this.facts.get(t.statusEvidenceFactId);
+    return f?.predicate === TASK_PROGRESS_PREDICATE && f.subject === taskProgressSubject(t.id);
+  }
+
   private expireIfPast(
     status: TaskStatus,
     prev: Task | undefined,
@@ -716,6 +804,7 @@ export class TaskEngine {
             taskKind: 'weekly_pace',
             origin: 'inferred',
             statusSetBy: prev?.statusSetBy ?? 'system',
+            ...keepStudentEvidence(prev),
             ...(text ? { notes: text } : {}),
             createdAt: prev?.createdAt ?? now,
             updatedAt: now,
@@ -824,8 +913,12 @@ export class TaskEngine {
       let status: TaskStatus = prev?.status ?? 'pending';
       let statusSetBy: Task['statusSetBy'] = prev?.statusSetBy ?? 'system';
       let statusEvidenceFactId = prev?.statusEvidenceFactId;
+      // An open status that only rests on what the student said in chat (「始めた」) gives way to
+      // the submission system and to the end of the term; the owner's own choice, completed and
+      // cancelled do not.
+      const openStatement = prev !== undefined && this.isOpenStudentStatement(prev);
       if (evidence) {
-        if (statusSetBy !== 'user') {
+        if (statusSetBy !== 'user' || openStatement) {
           status = 'submitted';
           statusSetBy = 'submission-system';
           statusEvidenceFactId = evidence.id as Task['statusEvidenceFactId'];
@@ -844,14 +937,17 @@ export class TaskEngine {
       // counts, notifications). The student's own status and the submission system's evidence win,
       // and the classification is lifted again when the calendar no longer says so.
       if (
-        statusSetBy === 'system' &&
+        (statusSetBy === 'system' || (openStatement && !evidence)) &&
         (status === 'pending' || status === 'in_progress' || status === 'unknown') &&
         this.pastTermReason({
           ...(a.courseOfferingId ? { courseOfferingId: a.courseOfferingId } : {}),
           dueAt,
         })
-      )
+      ) {
         status = 'expired_past_term';
+        statusSetBy = 'system';
+        statusEvidenceFactId = undefined;
+      }
       const task: Task = {
         id,
         title: a.title,
@@ -897,6 +993,7 @@ export class TaskEngine {
           taskKind: 'exam_preparation',
           origin: 'inferred',
           statusSetBy: prev?.statusSetBy ?? 'system',
+          ...keepStudentEvidence(prev),
           ...(prev?.notes ? { notes: prev.notes } : {}),
           createdAt: prev?.createdAt ?? now,
           updatedAt: now,
@@ -981,6 +1078,7 @@ export class TaskEngine {
           ...(done && prev?.statusSetBy !== 'user'
             ? { statusEvidenceFactId: f.id as Task['statusEvidenceFactId'] }
             : {}),
+          ...keepStudentEvidence(prev),
           evidence,
           ...(prev?.notes ? { notes: prev.notes } : {}),
           createdAt: prev?.createdAt ?? now,
@@ -1078,6 +1176,7 @@ export class TaskEngine {
           taskKind: 'extracted',
           origin: f.origin,
           statusSetBy: prev?.statusSetBy ?? 'system',
+          ...keepStudentEvidence(prev),
           ...(f.evidence ? { evidence: f.evidence } : {}),
           ...(prev?.notes
             ? { notes: prev.notes }

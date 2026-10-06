@@ -121,6 +121,22 @@ describe('next-action MCP tools', () => {
     expect(env.data.assignments.map((a) => a.title)).toContain('小レポート2');
   });
 
+  it('get_attention_required describes the stages, pending and quietUntil', async () => {
+    const c = await connect('remote', { id: 'oauth:desc' });
+    const t = (await c.listTools()).tools.find((x) => x.name === 'get_attention_required');
+    const d = t?.description ?? '';
+    for (const word of [
+      'notifyStage',
+      'overdue',
+      'final',
+      'pending',
+      'quietUntil',
+      'nextEscalationAt',
+    ])
+      expect(d, word).toContain(word);
+    expect(d).not.toContain('Repeats only when severity rises');
+  });
+
   it('get_attention_required dedupes per OAuth client', async () => {
     clock.set('2026-10-05T10:00:00.000Z');
     const a = await connect('remote', { id: 'oauth:chatgpt' });

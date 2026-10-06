@@ -57,6 +57,12 @@ import {
   TODO_PREDICATE,
   type TodoValue,
 } from '@unicontext/task-engine';
+import {
+  prepareTaskProgress,
+  type RecordTaskProgressInput,
+  type TaskProgressDeps,
+  undoTaskProgress,
+} from './task-progress.js';
 
 /*
  * Writes from AI clients (§11, §19–22, §47–49, §74): lectures, deadlines, notes and things to do
@@ -621,6 +627,50 @@ export class AdditionsService {
   }
 
   /**
+   * record_task_progress: what the student said about how far a task has come (stored unconfirmed
+   * but applied at once; retracting restores the earlier status). See task-progress.ts.
+   */
+  async recordTaskProgress(
+    client: AdditionClient,
+    input: RecordTaskProgressInput,
+  ): Promise<AdditionResult> {
+    // The status is applied directly and next actions read the fact live: nothing derived needs
+    // recomputing, so the (slow) pipeline is skipped and a retry cannot time out on it.
+    return this.write(client, this.progressSpec(input), { pipeline: false });
+  }
+
+  private progressSpec(input: RecordTaskProgressInput): WriteSpec {
+    const p = prepareTaskProgress(this.progressDeps(), {
+      ...input,
+      courseOfferingId: this.course(input.courseOfferingId),
+    });
+    return {
+      tool: 'record_task_progress',
+      kind: 'progress',
+      input: p.input,
+      via: viaOf(input),
+      course: p.course,
+      title: p.title,
+      dedupeKey: p.dedupeKey,
+      dueAt: undefined,
+      data: p.data,
+      apply: (a, ref) => p.apply(a, ref),
+    };
+  }
+
+  private progressDeps(): TaskProgressDeps {
+    return {
+      tasks: this.deps.tasks,
+      facts: this.deps.resolver.facts,
+      now: () => this.now(),
+      courseIds: (id) => this.deps.identity.expand(id),
+      courseTitle: (id) => this.deps.courseTitle(id),
+      assignment: (id) => this.entities.getOfKind('assignment', id),
+      exam: (id) => this.entities.getOfKind('exam', id),
+    };
+  }
+
+  /**
    * One lecture recording at once (ingest_lecture): the lecture, then each deadline, to-do and
    * note, every one through the same write path as the single tools (via=recording, so the same
    * dedupe, conflicts, relative-date resolution and rate limits). Each part succeeds or fails on
@@ -1144,7 +1194,7 @@ export class AdditionsService {
         `addition ${id} was confirmed by the owner; only the owner can remove it now`,
       );
     const next = this.undo(a, 'retracted');
-    await this.deps.runPipeline();
+    if (a.kind !== 'progress') await this.deps.runPipeline();
     return { status: 'retracted', addition: this.view(next), audit: this.auditOf(next) };
   }
 
@@ -1203,7 +1253,7 @@ export class AdditionsService {
     if (!a) throw new NotFoundError(`addition ${id}`);
     if (a.status === 'rejected') return this.view(a);
     const next = this.undo(a, 'rejected');
-    await this.deps.runPipeline();
+    if (a.kind !== 'progress') await this.deps.runPipeline();
     return this.view(next);
   }
 
@@ -1378,6 +1428,7 @@ export class AdditionsService {
   private undo(a: Addition, status: 'retracted' | 'rejected'): Addition {
     const now = this.now().toISOString();
     return this.deps.db.transaction(() => {
+      if (a.kind === 'progress') undoTaskProgress({ tasks: this.deps.tasks }, a);
       this.deps.resolver.facts.retract(a.factIds, now);
       for (const id of a.ownEntityIds) this.entities.softDelete(id, now);
       return this.store.save({ ...a, status, updatedAt: now, decidedAt: now });

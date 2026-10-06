@@ -9,6 +9,7 @@
 import type { Assignment, Exam, Submission, Task, TaskStatus } from '@unicontext/canonical-model';
 import { formatShortJa, redact, zonedParts } from '@unicontext/core';
 import { uniqueCitations } from '@unicontext/provenance';
+import { remainingSteps, type TaskProgressValue } from '@unicontext/task-engine';
 import type { CoverageGap, DeadlineCoverage } from './coverage.js';
 import type { EstimatedDue } from './estimate.js';
 import type {
@@ -313,6 +314,8 @@ export interface NextActionHost {
   courseRef(id: string | undefined): CourseRef | undefined;
   citations(task: Task): Citation[];
   recorded(task: Task): RecordedMarker | undefined;
+  /** What the student said about how far the task has come (record_task_progress), if anything. */
+  progress?(task: Task): Pick<TaskProgressValue, 'steps'> | undefined;
   /** Estimated deadline of an item whose due date is unknown (estimate.ts), else undefined. */
   estimate(task: Task): EstimatedDue | undefined;
   /** A course the student does not take (syllabus catalog only, or dropped). */
@@ -524,7 +527,11 @@ export function computeNextActions(
     const basis: NextAction['effort']['basis'] =
       override !== undefined ? 'override' : itemMinutes !== undefined ? 'item' : 'default';
     const steps = stepsFor(workKind, total);
-    const left = steps.slice(t.status === 'in_progress' && steps.length > 1 ? 1 : 0);
+    // The steps the student said they did are dropped; with no record all steps stay (an
+    // in_progress status alone says nothing about which step is done).
+    const remainingPlan = remainingSteps(steps, host.progress?.(t));
+    // Everything done but the work is still open: the last step (hand in, check) remains.
+    const left = remainingPlan.length > 0 ? remainingPlan : steps.slice(-1);
     const remaining = left.reduce((s, x) => s + x.minutes, 0);
     const first = left[0] ?? { text: '', minutes: remaining };
     // Titles of notice deadlines are sentences: drop the final 。 before 「: <step>」.

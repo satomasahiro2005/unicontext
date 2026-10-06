@@ -32,6 +32,7 @@ const KIND_LABELS: Record<AdditionView['kind'], string> = {
   task: 'やること',
   condition: '本人の条件',
   session_rule: 'グループ別の日程',
+  progress: '進み具合',
 };
 
 function printAddition(ctx: CliContext, a: AdditionView, tz: string): void {

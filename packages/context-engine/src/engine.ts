@@ -1712,6 +1712,7 @@ export class ContextEngine {
       courseRef: (id) => this.courseRef(id),
       citations: (t) => this.taskCitations(t),
       recorded: (t) => this.recordedMarker(t),
+      progress: (t) => this.tasks.progressOf(t.id)?.value,
       estimate: (() => {
         let estimate: ((t: Task) => EstimatedDue | undefined) | undefined;
         return (t: Task) => (estimate ??= this.dueEstimator())(t);

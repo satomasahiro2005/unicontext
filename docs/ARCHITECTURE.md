@@ -726,7 +726,7 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
   課題 60, 試験勉強 480, 小テスト対策 30, 今週分 90, 授業準備 15, やること 30 minutes;
   `DEFAULT_EFFORT_MINUTES`). Overrides: `options.effortMinutes[kind]`, else
   `assignment.extra.estimatedMinutes`. Each kind has fixed first steps (`stepsFor`); the largest
-  step absorbs an override; `in_progress` skips the first step.
+  step absorbs an override; the steps the student said they did (below) are dropped, and with no record all steps stay.
 - Free time (`freeMinutes`): awake hours 08:00–24:00 local from now to the deadline, minus the
   student's class times (cancelled classes and self-study slots do not count); half of it is
   assumed usable for one item.
@@ -756,23 +756,42 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
   pacing, the student's notes (`additions.notes`, 10), conflicts, coverage and the ranked next
   actions as `suggestion` (the AI may re-rank).
 - `attentionRequired(uc, clientId, {dryRun?, scope?})` (MCP `get_attention_required`): alerts that
-  are true now — unsubmitted assignments due ≤ 24 h (warning) / ≤ 6 h (critical), and work with an
-  unknown due date whose estimate is ≤ 24 h / ≤ 6 h away or already past (key
-  `deadline-estimate:<task>:<estimate>`, line 「【締切不明・推定】…推定10/8 10:20…で確認」), a class within
+  are true now — unsubmitted assignments due ≤ 24 h, by stage (`notifyStage`, below), and work with an
+  unknown due date whose estimate is ≤ 24 h away, at the same stages, or already past (key
+  `deadline-estimate:<task>:<estimate>:<stage>`, line 「【締切不明・推定】…推定10/8 10:20…で確認」), a class within
   60 min with its room (warning when sources disagree), 休講 today/tomorrow, room changes and
   high/critical notices in the change log since the client's last call (first call: 24 h back),
   pace behind, sources with an expired login or failing sync — each with a ready-to-send `line`.
   Per client (the OAuth client id on the remote surface, `local:<client name>` locally) the table
   `client_marks` (created on first use, outside the migrations) keeps the last call and the
-  severity already told per alert key; an alert repeats only when its severity rises.
+  severity already told per alert key; an alert repeats only when its severity rises, a deadline
+  when its stage advances (the mark keeps the highest stage rank told under `<key without stage>#stage`).
   `nothingImportant` = nothing new; `text` ≤ about 300 characters. Every item also carries
   `attentionId` (stable per thing — task, class meeting, notice, source, course — across calls,
   clients and changes of its due date or severity), `firstSeenAt` / `lastChangedAt` (per client,
-  kept in the marks), `nextEscalationAt` (deadline: 6 h before, then the due time; tomorrow's
+  kept in the marks), `nextEscalationAt` (deadline: the next stage boundary; tomorrow's
   休講 / unknown group: the start of that day; a room change: the day before; pace: next week),
   `recommendedAction` (one concrete step) and `sourceHealth` (health of the sources behind its
   citations, from the deadline coverage; `unknown` when unmatched). A class whose meeting depends
   on a group the student has not registered gives one `group_unknown` item per course.
+
+  *Stages.* A deadline (stated or estimated) has `notifyStage`: `24h` (≤ 24 h left, warning), `6h`
+  (≤ 6 h, critical), `final` (critical; the last 2 h before the deadline. The other trigger, the deadline's own day after
+  22:00 local, never comes earlier: such a deadline is at most 23:59. So the 23時台 rule is this stage; `1h` is reserved in the list and
+  never produced, the last two hours being `final`) and `overdue` (critical; the due time passed, the
+  assignment is still open and unsubmitted, its source does not say late work is refused
+  (`allowLateSubmissions: false`, `isCompleted`) and no later cut-off (`lateDueAt` …) is ahead; flagged for 7 days after the due
+  time, then left to the next actions). The stage is part of the key, so each stage change is told
+  exactly once per client and the same stage is not repeated. `nextEscalationAt` is the next
+  boundary (24h: 6 h before; 6h: 2 h before; final: the due time; overdue: none). Estimates read
+  「【締切不明・推定】」 / 「推定間近」 / 「推定直前」 / 「推定を過ぎた可能性」.
+  `AttentionContext.pending` lists, at most 20, the alerts still true but already told at their stage
+  (`attentionId`, `key`, `notifyStage`, `severity`, `nextEscalationAt`, `line`), so the watcher sees
+  what it is holding back and when it returns; `alreadyTold` stays the count. Items carry
+  `quietUntil` (08:00 local) when it is 0:00-7:59 local and the item is not within 3 h of its time:
+  the night rule stays the client's. Such an item is not marked as told (the client's mark and
+  `since` stay put): it comes back in `items` on every call until 08:00, and from 08:00 without
+  `quietUntil`, when the client sends it once.
 - `briefing(uc, clientId, {kind?, dryRun?})` (MCP `get_briefing`): thin wrapper over the two —
   morning (< 11:00) / evening (≥ 17:00) / check by local time; classes of the day, top action,
   must-do, unsubmitted ≤ 72 h, unknown due dates estimated ≤ 72 h (「締切不明（早めの推定）: …」), news since the client's last briefing (its own `briefing` scope of
@@ -963,6 +982,44 @@ Gmail and Google Calendar findings are currently only read by the ChatGPT schedu
 additions: unconfirmed, cited (message or event reference) and non-authoritative, so they never
 override the university's data and a conflict shows both values. Until then the tasks and skills
 must not write anything found in mail or calendar into UniContext.
+
+#### Task progress (`task-progress.ts`, task-engine `progress.ts`)
+
+The student says 「始めた」「ここまで終わった」「終わった」; UniContext holds it so the AI never asks again
+and the next actions stop proposing what is done. MCP `record_task_progress {task, course?, status?,
+steps?, doneSteps?, statement}` (write tool; remote only with `unicontext.write`): `task` is a `task:` /
+`assignment:` id or a title (with `course`); `statement` is the student's own words, verbatim (required);
+the description tells the AI to call it without asking whenever the student says so and never from its
+own inference. Output `{taskId, title, previousStatus, status, steps, percent?, additionId}`.
+
+- Storage (no migration): a fact `task:progress` with value `{status, steps?: [{label, done}], percent?,
+  statement, statedAt}` and the quote as `evidence`. Tasks are records, not entities, so the fact hangs
+  on a pseudo person derived from the task id (`taskProgressSubject`), one slot per task; the newest
+  `statedAt` wins (`latestTaskProgress`). The fact is `extracted` (an AI produced it: FactSchema §48 allows
+  no AI-made `user` fact); the status it sets is the student's own (`statusSetBy: 'user'`).
+- Status goes through `TaskEngine.setStatus` with the new actor `student-statement`: it may set pending /
+  in_progress / completed / cancelled, never `submitted` (submission systems only) and never
+  `expired_past_term` (or `unknown`); `statusSetBy` becomes `user` and `statusEvidenceFactId` points at the
+  fact (kept through `derive()`). The plain `ai` actor is unchanged (no completed / submitted). A task the
+  submission system reports as submitted keeps that status; only the steps are recorded. A status that
+  only rests on such a statement (open: pending / in_progress, evidence = a `task:progress` fact) gives way
+  later: submission evidence turns the task `submitted` (`submission-system`) and the end of the term makes
+  it `expired_past_term` in `derive()`; completed / cancelled and the owner's own status do not (an owner
+  `setStatus` drops the statement as evidence). Status omitted:
+  done steps on a pending task make it `in_progress`; nothing implies `completed`.
+- It is an addition (tool `record_task_progress`, kind `progress`): stored unconfirmed but applied at
+  once like `set_course_condition`, visible in `list_my_additions`, retractable with `retract_addition`
+  (the owner's reject too): the fact is retracted and the status fields saved with the addition are
+  restored, unless a later statement has taken the status over. `AdditionsService.recordTaskProgress`
+  prepares it (`prepareTaskProgress`, validation before any write) and `undo` calls `undoTaskProgress`.
+  The tool takes `idempotencyKey` like the other write tools (a retry with the same key is replayed, not
+  stored twice). Nothing derived depends on the statement (the status is applied directly, next actions
+  read the fact live), so neither the write nor its retract / reject runs the pipeline.
+- Steps: `steps` replaces the list; `doneSteps` marks steps done (a label that matches no step is added
+  as a step the student did); both start from the plan of that kind of work (`stepsFor`). Labels match
+  after dropping 「（10分）」, width and spaces (`stepsMatch`). The next-action engine drops the done steps
+  of its plan (`host.progress`, `remainingSteps`) instead of guessing from `in_progress`; with no record all
+  steps stay, and with everything done on a task still open the last step remains.
 
 ## 3.12 Apps and notifications (lane b)
 

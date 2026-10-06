@@ -5,7 +5,7 @@
  *   links, exams, tasks, changes that matter, the student's own notes, coverage gaps) with the
  *   deterministic next actions as a suggestion the AI may re-rank.
  * - `attentionRequired(uc, client)`: only what needs telling the student now, deduplicated per
- *   client: an alert repeats only when its severity rises.
+ *   client: an alert repeats only when its severity rises, a deadline when its stage advances.
  * - `briefing(uc, client, kind)`: a morning / evening digest over the two (thin wrapper).
  *
  * Per-client marks live in the `client_marks` table (created on first use).
@@ -57,7 +57,7 @@ export const ATTENTION_TEXT_LIMIT = 300;
 
 export interface ClientMark {
   lastCallAt: string | undefined;
-  /** Alert key → severity rank already told to this client. */
+  /** Alert key → severity rank already told (a deadline: `<key>#stage` → its stage rank). */
   alerted: Record<string, number>;
   /** attentionId → when this client first saw it, when it last changed, and its last signature. */
   seen?: Record<string, { first: string; changed: string; sig: string }>;
@@ -247,6 +247,52 @@ export interface StudentStateContext {
 export type AttentionSeverity = 'info' | 'warning' | 'critical';
 const SEVERITY_RANK: Record<AttentionSeverity, number> = { info: 1, warning: 2, critical: 3 };
 
+/**
+ * How close an unsubmitted deadline is. A deadline is told again when its stage advances, not
+ * only when its severity rises: 24h (within a day), 6h, 1h (reserved: the last two hours already
+ * are 'final'), final (the deadline's day after 22:00 local, or at most 2 h left, whichever comes
+ * first) and overdue (passed, still unsubmitted, late work not ruled out by the source).
+ */
+export const NOTIFY_STAGES = ['24h', '6h', '1h', 'final', 'overdue'] as const;
+export type NotifyStage = (typeof NOTIFY_STAGES)[number];
+const STAGE_RANK: Record<NotifyStage, number> = {
+  '24h': 1,
+  '6h': 2,
+  '1h': 3,
+  final: 4,
+  overdue: 5,
+};
+const STAGE_SEVERITY: Record<NotifyStage, AttentionSeverity> = {
+  '24h': 'warning',
+  '6h': 'critical',
+  '1h': 'critical',
+  final: 'critical',
+  overdue: 'critical',
+};
+/** Overdue work is flagged this long after its due time, then it is left to the next actions. */
+const OVERDUE_WINDOW_DAYS = 7;
+/** At most this many already-told alerts are listed in `pending`. */
+export const PENDING_LIMIT = 20;
+/** Local hours (0:00-7:59) in which the client keeps quiet unless something is within 3 h. */
+const QUIET_UNTIL_HOUR = 8;
+const IMMINENT_HOURS = 3;
+/** Extra fields of an assignment that name a later cut-off for late submissions. */
+const LATE_DUE_KEYS = ['lateDueAt', 'lateDue', 'cutoffAt', 'closesAt'] as const;
+
+/** The stage of an unsubmitted deadline `dueMs` at `nowMs`, and when the next stage starts. */
+export function deadlineStage(
+  dueMs: number,
+  nowMs: number,
+): { stage: NotifyStage; nextAt: number | undefined } {
+  if (dueMs <= nowMs) return { stage: 'overdue', nextAt: undefined };
+  // Final: 2 h before the deadline. The other half of the rule (the deadline's own day after
+  // 22:00 local) never starts earlier: a deadline that day is at most 23:59, within 2 h of 22:00.
+  const finalAt = dueMs - 2 * HOUR;
+  if (nowMs >= finalAt) return { stage: 'final', nextAt: dueMs };
+  if (dueMs - nowMs <= 6 * HOUR) return { stage: '6h', nextAt: finalAt };
+  return { stage: '24h', nextAt: dueMs - 6 * HOUR };
+}
+
 export type AttentionKind =
   | 'deadline'
   | 'class_soon'
@@ -287,10 +333,29 @@ export interface AttentionItem {
   lastChangedAt: string;
   /** When the severity rises if nothing is done (6 h before a deadline, the class day …). */
   nextEscalationAt: string | undefined;
+  /** Deadlines (stated and estimated) only: how close it is; the item is told again per stage. */
+  notifyStage?: NotifyStage | undefined;
+  /**
+   * Local 0:00-7:59 and the item is not within 3 h: keep it until then (the client decides; the
+   * night rule stays the client's). Absent by day and for what is about to happen.
+   */
+  quietUntil?: string | undefined;
   /** One concrete thing to do now (「…を提出する」「教室は…」). */
   recommendedAction: string;
   /** Health of the sources the item relies on. */
   sourceHealth: AttentionSourceHealth[];
+}
+
+/** An alert that is still true but was already told to this client at this stage. */
+export interface PendingAttention {
+  attentionId: string;
+  key: string;
+  notifyStage?: NotifyStage | undefined;
+  severity: AttentionSeverity;
+  /** When the alert is told again if nothing changes (the next stage starts). */
+  nextEscalationAt: string | undefined;
+  line: string;
+  quietUntil?: string | undefined;
 }
 
 export interface AttentionContext {
@@ -305,8 +370,13 @@ export interface AttentionContext {
   items: AttentionItem[];
   /** Ready-to-send notification text (≤ about 300 characters); empty when nothing is important. */
   text: string;
-  /** Alerts still true but already told to this client at the same severity. */
+  /** Alerts still true but already told to this client at the same stage / severity (a count). */
   alreadyTold: number;
+  /**
+   * The same alerts, listed (at most {@link PENDING_LIMIT}), so the watcher sees what it is
+   * holding back and when it comes back (`nextEscalationAt`). Not to be sent again as they are.
+   */
+  pending: PendingAttention[];
   /** False when this call could not be recorded (read-only database). */
   recorded: boolean;
 }
@@ -559,8 +629,10 @@ export function studentState(uc: UniContext): StudentStateContext {
 
 type Draft = Omit<
   AttentionItem,
-  'attentionId' | 'firstSeenAt' | 'lastChangedAt' | 'sourceHealth'
+  'attentionId' | 'firstSeenAt' | 'lastChangedAt' | 'sourceHealth' | 'quietUntil'
 > & {
+  /** Deadlines: the key without its stage; what the client's mark remembers the stage under. */
+  stageBase?: string;
   /** What the item is about, independent of what it says now (→ attentionId). */
   subject: string;
   /** Sources it relies on beyond its citations (a source alert names its own source). */
@@ -579,51 +651,106 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
   const next = uc.context.nextActions({ count: 0 });
   const out: Draft[] = [];
 
-  // Unsubmitted deadlines within 24 h / 6 h; unknown ones by their estimate (「推定」).
+  // Unsubmitted deadlines by stage (24h / 6h / final / overdue); unknown ones by their estimate
+  // (「推定」). The stage is part of the key: a stage change is a new alert, the same stage is told
+  // once. Stated deadlines that already passed come from the open tasks below.
+  const overdueFrom = nowMs - OVERDUE_WINDOW_DAYS * DAY;
   for (const d of next.dueSoon) {
     if (d.hoursLeft > 24) continue;
     const est = d.estimated;
+    if (!est && !d.unsubmitted) continue;
+    const dueMs = Date.parse(est ? est.at : d.dueAt);
+    if (!Number.isFinite(dueMs)) continue;
+    const passed = dueMs <= nowMs || est?.passed === true;
+    if (passed && dueMs < overdueFrom) continue;
+    const { stage, nextAt } = passed
+      ? { stage: 'overdue' as const, nextAt: undefined }
+      : deadlineStage(dueMs, nowMs);
+    const name = d.course ? `${d.course}「${d.title}」` : `「${d.title}」`;
+    const base = est
+      ? `deadline-estimate:${d.taskId}:${est.at}`
+      : `deadline:${d.taskId}:${d.dueAt}`;
+    const tag = stage === 'final' || stage === '1h' ? '直前' : stage === '6h' ? '間近' : '';
     if (est) {
-      const passed = est.passed;
-      const critical = !passed && d.hoursLeft <= 6;
-      const estMs = Date.parse(est.at);
-      const name = d.course ? `${d.course}「${d.title}」` : `「${d.title}」`;
+      const estText = formatShortJa(new Date(dueMs), tz);
       out.push({
         subject: `task:${d.taskId}`,
-        key: `deadline-estimate:${d.taskId}:${est.at}`,
+        stageBase: base,
+        key: `${base}:${stage}`,
+        notifyStage: stage,
         kind: 'deadline',
-        severity: critical ? 'critical' : 'warning',
-        line: passed
-          ? `【締切不明・推定を過ぎた可能性】${name}は締切が分かりません。推定${formatShortJa(new Date(estMs), tz)}をもう過ぎているかもしれません。${est.checkWhere}ですぐ確認`
-          : `【締切不明・推定${critical ? '間近' : ''}】${name}は締切が分かりません。推定${formatShortJa(new Date(estMs), tz)}（あと${leftText(d.hoursLeft)}・${est.confidence === 'medium' ? 'これまでの例から' : '早めに見積もり'}）。${est.checkWhere}で確認`,
+        severity: STAGE_SEVERITY[stage],
+        line:
+          stage === 'overdue'
+            ? `【締切不明・推定を過ぎた可能性】${name}は締切が分かりません。推定${estText}をもう過ぎているかもしれません。${est.checkWhere}ですぐ確認`
+            : `【締切不明・推定${tag}】${name}は締切が分かりません。推定${estText}（あと${leftText(d.hoursLeft)}・${est.confidence === 'medium' ? 'これまでの例から' : '早めに見積もり'}）。${est.checkWhere}で確認`,
         course: d.course,
         at: est.at,
         link: d.link,
         citations: d.citations.slice(0, 2),
-        nextEscalationAt: passed ? undefined : critical ? est.at : iso(estMs - 6 * HOUR),
-        recommendedAction: `${est.checkWhere}で「${d.title}」の締切を確かめる（推定${formatShortJa(new Date(estMs), tz)}・根拠: ${est.basis}）`,
+        nextEscalationAt: nextAt === undefined ? undefined : iso(nextAt),
+        recommendedAction: `${est.checkWhere}で「${d.title}」の締切を確かめる（推定${estText}・根拠: ${est.basis}）`,
       });
       continue;
     }
-    if (!d.unsubmitted) continue;
-    const critical = d.hoursLeft <= 6;
-    const dueMs = Date.parse(d.dueAt);
     out.push({
       subject: `task:${d.taskId}`,
-      key: `deadline:${d.taskId}:${d.dueAt}`,
+      stageBase: base,
+      key: `${base}:${stage}`,
+      notifyStage: stage,
       kind: 'deadline',
-      severity: critical ? 'critical' : 'warning',
-      line: `【締切${critical ? '間近' : ''}】${d.course ? `${d.course}「${d.title}」` : `「${d.title}」`}が未提出です。締切${d.dueText}（あと${leftText(d.hoursLeft)}）`,
+      severity: STAGE_SEVERITY[stage],
+      line: `【締切${tag}】${name}が未提出です。締切${d.dueText}（あと${leftText(d.hoursLeft)}）`,
       course: d.course,
       at: d.dueAt,
       link: d.link,
       citations: d.citations.slice(0, 2),
-      nextEscalationAt: Number.isFinite(dueMs)
-        ? critical
-          ? d.dueAt
-          : iso(dueMs - 6 * HOUR)
-        : undefined,
+      nextEscalationAt: nextAt === undefined ? undefined : iso(nextAt),
       recommendedAction: `「${d.title}」を${d.link ? `${d.link.label ?? '提出先'}で` : ''}提出する（締切${d.dueText}）`,
+    });
+  }
+
+  // Passed, still unsubmitted, and the source does not rule late work out (it allows it, or says
+  // nothing): worth one more alert, with the step of finding out whether it is still accepted.
+  for (const t of host.openTasks()) {
+    if (t.taskKind !== 'assignment' || !t.dueAt) continue;
+    const dueMs = Date.parse(t.dueAt);
+    if (!Number.isFinite(dueMs) || dueMs >= nowMs || dueMs < overdueFrom) continue;
+    if (t.courseOfferingId && host.notTaken(t.courseOfferingId)) continue;
+    if (t.courseOfferingId && host.halfOver(t.courseOfferingId, todayDate)) continue;
+    const assignment = t.assignmentId ? host.assignment(t.assignmentId) : undefined;
+    const sub = t.assignmentId ? host.submission(t.assignmentId) : undefined;
+    if (sub && SUBMITTED.has(sub.status)) continue;
+    const extra = (assignment?.extra ?? {}) as Record<string, unknown>;
+    if (extra.allowLateSubmissions === false || extra.isCompleted === true) continue;
+    // A later cut-off still ahead is the deadline (the next actions list it under due soon).
+    const lateDue = LATE_DUE_KEYS.map((k) => extra[k]).find(
+      (v): v is string => typeof v === 'string' && Date.parse(v) > nowMs,
+    );
+    if (lateDue) continue;
+    const course = host.courseRef(t.courseOfferingId);
+    const citations = host.citations(t);
+    const url = assignment?.url ?? citations.find((c) => c.url)?.url;
+    const link =
+      url && /^https?:\/\//i.test(url)
+        ? { url, label: citations[0]?.sourceLabel ?? citations[0]?.sourceSystem }
+        : undefined;
+    const dueText = formatShortJa(new Date(dueMs), tz);
+    const base = `deadline:${t.id}:${t.dueAt}`;
+    out.push({
+      subject: `task:${t.id}`,
+      stageBase: base,
+      key: `${base}:overdue`,
+      notifyStage: 'overdue',
+      kind: 'deadline',
+      severity: STAGE_SEVERITY.overdue,
+      line: `【締切超過】${course ? `${course.title}「${t.title}」` : `「${t.title}」`}が未提出のままです。締切${dueText}を${leftText((nowMs - dueMs) / HOUR)}過ぎています。遅れて提出できるか確認`,
+      course: course?.title,
+      at: t.dueAt,
+      link,
+      citations: citations.slice(0, 2),
+      nextEscalationAt: undefined,
+      recommendedAction: `「${t.title}」の${link ? `${link.label ?? '課題'}ページ` : '課題ページ'}を開いて、遅れて提出できるか確認する（締切${dueText}を過ぎている）`,
     });
   }
 
@@ -876,7 +1003,7 @@ export interface AttentionOptions {
 
 /**
  * What needs telling the student now that this client has not told yet. Alerts that are still
- * true are repeated only when their severity rises (24 h → 6 h); `nothingImportant` lets an
+ * true are repeated only when their severity rises (a deadline: when its stage advances 24h → 6h → final → overdue); `nothingImportant` lets an
  * unattended task stay silent.
  */
 export function attentionRequired(
@@ -896,7 +1023,29 @@ export function attentionRequired(
   const nowIso = now.toISOString();
   const health = sourceHealthLookup(uc);
   const seen: NonNullable<ClientMark['seen']> = {};
-  const alerts: AttentionItem[] = drafts.map((d) => {
+  // The night rule is the client's; this only says until when an item that is not about to
+  // happen could wait (local 0:00-7:59).
+  const nowMs = now.getTime();
+  const hour = zonedParts(now, uc.timezone).hour;
+  const morning =
+    hour < QUIET_UNTIL_HOUR
+      ? parseZonedDate(zonedDateString(now, uc.timezone), uc.timezone).getTime() +
+        QUIET_UNTIL_HOUR * HOUR
+      : undefined;
+  const quietUntilOf = (at: string | undefined): string | undefined => {
+    if (morning === undefined) return undefined;
+    const t = at ? Date.parse(at) : Number.NaN;
+    return Number.isFinite(t) && Math.abs(t - nowMs) <= IMMINENT_HOURS * HOUR
+      ? undefined
+      : iso(morning);
+  };
+  // What the mark remembers per alert: a deadline's stage rank (under its key without the
+  // stage), anything else its severity rank.
+  const markKey = (d: Pick<Draft, 'key' | 'stageBase' | 'notifyStage'>): string =>
+    d.notifyStage && d.stageBase ? `${d.stageBase}#stage` : d.key;
+  const rankOf = (d: Pick<Draft, 'severity' | 'notifyStage'>): number =>
+    d.notifyStage ? STAGE_RANK[d.notifyStage] : SEVERITY_RANK[d.severity];
+  const alerts: { item: AttentionItem; mark: string; rank: number }[] = drafts.map((d) => {
     const attentionId = `attention:${sha256(d.subject).slice(0, 24)}`;
     const sig = `${d.key}|${d.severity}|${d.line}`;
     const prev = mark.seen?.[attentionId];
@@ -904,22 +1053,43 @@ export function attentionRequired(
       ? { first: prev.first, changed: prev.sig === sig ? prev.changed : nowIso, sig }
       : { first: nowIso, changed: nowIso, sig };
     seen[attentionId] = entry;
-    const { subject: _subject, sourceIds, ...rest } = d;
+    const { subject: _subject, sourceIds, stageBase: _base, ...rest } = d;
+    const quietUntil = quietUntilOf(d.at);
     return {
-      attentionId,
-      ...rest,
-      firstSeenAt: entry.first,
-      lastChangedAt: entry.changed,
-      sourceHealth: health(d.citations, sourceIds),
+      item: {
+        attentionId,
+        ...rest,
+        firstSeenAt: entry.first,
+        lastChangedAt: entry.changed,
+        ...(quietUntil ? { quietUntil } : {}),
+        sourceHealth: health(d.citations, sourceIds),
+      },
+      mark: markKey(d),
+      rank: rankOf(d),
     };
   });
-  const fresh = alerts.filter((a) => (mark.alerted[a.key] ?? 0) < SEVERITY_RANK[a.severity]);
+  const isFresh = (a: { mark: string; rank: number }): boolean =>
+    (mark.alerted[a.mark] ?? 0) < a.rank;
+  const fresh = alerts.filter(isFresh).map((a) => a.item);
+  const told = alerts.filter((a) => !isFresh(a));
   const alerted: Record<string, number> = {};
-  for (const a of alerts)
-    alerted[a.key] = Math.max(mark.alerted[a.key] ?? 0, SEVERITY_RANK[a.severity]);
+  // Remember the alerts that were given to the client, except those it is to hold until the
+  // morning (`quietUntil`): they are not told yet, so they come back as fresh on every call
+  // (still carrying quietUntil) and, from 08:00, without it, when the client sends them once.
+  let held = false;
+  for (const a of alerts) {
+    if (a.item.quietUntil && isFresh(a)) {
+      held = true;
+      if (mark.alerted[a.mark] !== undefined) alerted[a.mark] = mark.alerted[a.mark] as number;
+      continue;
+    }
+    alerted[a.mark] = Math.max(mark.alerted[a.mark] ?? 0, a.rank);
+  }
   const recorded = options.dryRun
     ? false
-    : store.set(clientId, scope, { lastCallAt: nowIso, alerted, seen }, nowIso);
+    : // While something is held for the morning, "since the last call" stays where it was, so
+      // news-type alerts (a cancellation, a notice) are still found when it is time to send them.
+      store.set(clientId, scope, { lastCallAt: held ? since : nowIso, alerted, seen }, nowIso);
   return {
     view: 'attention',
     generatedAt: now.toISOString(),
@@ -928,7 +1098,16 @@ export function attentionRequired(
     nothingImportant: fresh.length === 0,
     items: fresh,
     text: fresh.length ? joinText(fresh.map((a) => a.line)) : '',
-    alreadyTold: alerts.length - fresh.length,
+    alreadyTold: told.length,
+    pending: told.slice(0, PENDING_LIMIT).map(({ item: i }) => ({
+      attentionId: i.attentionId,
+      key: i.key,
+      ...(i.notifyStage ? { notifyStage: i.notifyStage } : {}),
+      severity: i.severity,
+      nextEscalationAt: i.nextEscalationAt,
+      line: i.line,
+      ...(i.quietUntil ? { quietUntil: i.quietUntil } : {}),
+    })),
     recorded,
   };
 }

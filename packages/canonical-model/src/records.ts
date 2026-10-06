@@ -103,6 +103,7 @@ export const ADDITION_TOOLS = [
   'add_task',
   'set_course_condition',
   'add_session_rule',
+  'record_task_progress',
 ] as const;
 export type AdditionTool = (typeof ADDITION_TOOLS)[number];
 export const ADDITION_KINDS = [
@@ -118,6 +119,8 @@ export const ADDITION_KINDS = [
   'condition',
   /** Dated meetings per group (a group schedule). */
   'session_rule',
+  /** The student's own word on how far a task has come (record_task_progress). */
+  'progress',
 ] as const;
 export type AdditionKind = (typeof ADDITION_KINDS)[number];
 /** unconfirmed → confirmed (owner, becomes user facts) | rejected (owner) | retracted (the client). */

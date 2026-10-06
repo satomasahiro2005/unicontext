@@ -235,7 +235,8 @@ describe('student state, attention and briefing', () => {
     expect(later?.attentionId).toBe(first?.attentionId);
     expect(later?.firstSeenAt).toBe('2026-10-05T10:00:00.000Z');
     expect(later?.lastChangedAt).toBe('2026-10-06T03:00:00.000Z');
-    expect(later?.nextEscalationAt).toBe('2026-10-06T08:00:00.000Z');
+    // The final stage starts two hours before the deadline (10/6 17:00 JST).
+    expect(later?.nextEscalationAt).toBe('2026-10-06T06:00:00.000Z');
     // Another client sees the same id.
     const [other] = attentionRequired(uc, 'claude-b', { dryRun: true }).items;
     expect(other?.attentionId).toBe(first?.attentionId);
@@ -273,7 +274,9 @@ describe('unknown deadlines: early estimates (推定)', () => {
 
   it('alerts on the estimate with 推定 wording and escalates like a deadline', () => {
     clock.set('2026-10-07T01:00:00.000Z'); // Wed 10:00, 14 hours before the estimate
-    const first = attentionRequired(uc, 'watcher').items.filter((i) => i.kind === 'deadline');
+    const first = attentionRequired(uc, 'watcher').items.filter((i) =>
+      i.key.startsWith('deadline-estimate:'),
+    );
     expect(first.map((i) => i.severity)).toEqual(['warning']);
     expect(first[0]?.line).toBe(
       '【締切不明・推定】情報倫理「小レポート2」は締切が分かりません。推定10/7 23:59（あと14時間・これまでの例から）。EdStemの課題ページで確認',
@@ -282,7 +285,9 @@ describe('unknown deadlines: early estimates (推定)', () => {
     expect(first[0]?.nextEscalationAt).toBe('2026-10-07T08:59:00.000Z');
 
     clock.set('2026-10-07T10:00:00.000Z'); // 19:00, 5 hours before
-    const second = attentionRequired(uc, 'watcher').items.filter((i) => i.kind === 'deadline');
+    const second = attentionRequired(uc, 'watcher').items.filter((i) =>
+      i.key.startsWith('deadline-estimate:'),
+    );
     expect(second.map((i) => i.severity)).toEqual(['critical']);
     expect(second[0]?.line).toContain('【締切不明・推定間近】');
   });
