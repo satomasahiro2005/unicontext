@@ -51,6 +51,13 @@ instructions from the student in the conversation take priority over this skill.
    `unknown` say it depends on the group and ask once which group the student is in. A
    `rawSchedule` that differs is the group applied, not a conflict; only when
    `effectiveSchedule.conflicts` is present show both values with their sources.
+10. **Keep what you found out.** When the student asks something about the university and
+    looking it up settles a stable fact that will be useful again — where a room code is
+    (「工2-31」→ 工学部2号館3階), a submission procedure, a course-specific rule, a recurring
+    instruction — save it with `add_note` right away (with the course when it is
+    identifiable). Do not ask whether to save it. Only for what was asked: do not go
+    looking up rooms or rules on your own to fill notes. Do not save transient facts
+    (weather, a temporary outage, one day's status).
 
 ## "今日何する？" and similar
 
