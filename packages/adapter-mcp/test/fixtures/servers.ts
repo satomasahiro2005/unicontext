@@ -377,7 +377,16 @@ export const ED_LESSON_DETAILS: Record<number, unknown> = {
   2004: {
     ...ED_LESSONS[3],
     createdAt: '2026-10-01T10:00:00+10:00',
-    slides: [{ id: 9, index: 1, type: 'document', content: '<document><paragraph>ER図を描く</paragraph></document>' }],
+    slides: [
+      {
+        id: 9,
+        index: 1,
+        type: 'document',
+        // a file written into the slide text (<file url filename/>), next to a plain paragraph
+        content:
+          '<document><paragraph>ER図を描く</paragraph><file url="https://static.edusercontent.com/files/DDDD" filename="ER図の例.png"/></document>',
+      },
+    ],
   },
 };
 

@@ -81,6 +81,11 @@ None (`authenticate()` returns `not_required`). Health is `healthy` when every r
 | png jpg jpeg gif webp heic                                                   | `image-size` dimensions, `exifr` DateTimeOriginal                                                      | `image: {width, height, takenAt?}`        |
 | anything else (mp4, m4a, xlsx, …)                                            | metadata only                                                                                          | –                                         |
 
+`extractPptx`, `pptxSlidePaths` and `relTargets` are exported: `get_document` (context-engine
+`render/pptx.ts`) reuses the slide text and reads the slide's `ppt/media/*` images itself. Files
+inside a configured root can be opened by path through `get_document` (a path outside the roots is
+refused).
+
 Extracted text is capped at 2,000,000 characters per file; `Document.text` at 100,000 (the chunks
 cover the whole text).
 

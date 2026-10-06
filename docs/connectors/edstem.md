@@ -189,6 +189,25 @@ text), lecture PDFs are `pdf` slides (`fileUrl`).
   where `myAnswer` is the student's own saved answer on Ed (`choices` 1-based). Answer keys are
   never returned. A lecture-material lesson (not an assignment) returns the stored lesson.
 
+## Attachments: files in lessons and threads, `get_document`
+
+- Files written into text (`<file url="…" filename="…"/>`) of a lesson slide (`get_lesson`
+  content), of a thread post or of any answer / comment (`get_thread`) become `document`s: title
+  = the file name, `url` = the file link, `mimeType` from the extension, path
+  `/Ed Lessons/<module>/<lesson>/<file>` or `/Ed Discussion/#<n> <thread>/<file>`, tied to the
+  course. A file linked from both a lesson and a thread is one document. The server (v0.7.2) has no
+  thread file list tool, so thread attachments come from the post text.
+- The mapping's `files:` section (`hostAllowlist: ['edusercontent.com', '*.edusercontent.com']`,
+  `credentials: none`, `maxBytes`) makes the Ed adapter a file downloader: on request
+  (`get_document`, `download_course_file`) the file is fetched by a plain HTTPS GET of its `url`.
+  Redirects are refused (a 3xx is a failure), the host must match the allowlist, no cookie, no
+  token, the body is streamed to `<files dir>/<source>/cache` under the byte cap. Nothing else of
+  Ed is contacted for files, and only GET is ever sent.
+- Every lesson / quiz question / lesson-file reference is labelled **Ed Lessons** in citations
+  (`sourceLabel`); threads keep **Ed Discussion**.
+- `get_document` on such an id returns the PDF's pages as text and images, a slide image or a
+  photo as an image; see ARCHITECTURE §3.11 "Documents and rendering".
+
 ## Mapping summary
 
 Courses: Ed's `year` is the academic year, and `session` is free text typed by the course admin.
@@ -219,8 +238,8 @@ never marked deleted.
 - Every sync relists 50 newest threads per active course; there is no incremental cursor.
 - Threads older than 30 days whose details were never fetched (e.g. before the first sync) appear
   as titles only.
-- Ed-hosted files are listed with their link (Ed's file links open without signing in) but are not
-  downloaded or text-extracted (`download_course_file` covers Teams / SharePoint / VPN files).
+- Ed-hosted files are downloaded only on request (`get_document`, `download_course_file`) and
+  are not text-indexed for search until then; only `edusercontent.com` hosts are fetched.
 - A saved answer the student deleted on Ed stays in UniContext until it is replaced (responses are
   read on request and never retired).
 - The once-a-day refresh lives in the daemon process; a restart reads every lesson once.

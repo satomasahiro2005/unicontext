@@ -19,6 +19,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.97",
     "@unicontext/core": "workspace:*",
     "@unicontext/canonical-model": "workspace:*",
     "@unicontext/database": "workspace:*",
@@ -28,6 +29,9 @@
     "@unicontext/task-engine": "workspace:*",
     "@unicontext/sync-engine": "workspace:*",
     "@unicontext/connector-sdk": "workspace:*",
+    "@unicontext/local-files": "workspace:*",
+    "jszip": "^3.10.2",
+    "unpdf": "^1.8.1",
     "zod": "^4.6.5"
   }
 }

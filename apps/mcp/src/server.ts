@@ -80,6 +80,7 @@ import {
   resolveAssignmentRef,
 } from './assignment-detail.js';
 import { listCourses, resolveCourse } from './courses.js';
+import { DOCUMENT_INSTRUCTION_JA, registerDocumentTools } from './document.js';
 import {
   attentionShape,
   BRIEFING_TOOL,
@@ -260,6 +261,7 @@ export const SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
+  DOCUMENT_INSTRUCTION_JA,
 ].join('\n');
 
 /** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */
@@ -278,6 +280,7 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   UNKNOWN_DEADLINE_POLICY_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
+  DOCUMENT_INSTRUCTION_JA,
 ].join('\n');
 
 /** Instructions of the remote surface when the grant includes unicontext.write. */
@@ -303,6 +306,7 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
+  DOCUMENT_INSTRUCTION_JA,
 ].join('\n');
 
 // ---------- shared plumbing ----------
@@ -996,9 +1000,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '授業ファイルのダウンロード',
       description:
-        '授業のTeams/SharePointのファイル（get_courseやsearchの結果のdocument:…のid、または「科目名/フォルダ/ファイル名」）を本人のPCにダウンロードし、保存先のパス・サイズ・更新日時と、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき）を返す。大学側には何も変更しない（読み取りのみ）。本文は検索（search）でも引けるようになる。 / Download a class file (document id or "<course>/<path>") to the student’s computer; returns the local path, metadata and the extracted text with page/slide markers. Read-only at the source; the text becomes searchable.',
+        '授業のTeams/SharePointのファイル（get_courseやsearchの結果のdocument:…のid、または「科目名/フォルダ/ファイル名」）を本人のPCにダウンロードし、保存先のパス・サイズ・更新日時と、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき）を返す。大学側には何も変更しない（読み取りのみ）。本文は検索（search）でも引けるようになる。画像・スキャンされたページ・スライドの図を見るときは get_document を使う。 / Download a class file (document id or "<course>/<path>") to the student’s computer; returns the local path, metadata and the extracted text with page/slide markers. Read-only at the source; the text becomes searchable. For images, scanned pages and slide pictures use get_document.',
       remoteDescription:
-        '授業のTeams/SharePointのファイル（get_courseやsearchの結果のdocument:…のid、または「科目名/フォルダ/ファイル名」）を取得し、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき、maxCharsで打ち切り）を返す。link=trueのときは、この接続（同じOAuthクライアント）だけが約10分間ダウンロードできるリンクも返す。大学側には何も変更しない。 / Fetch a class file and return its extracted text (page/slide markers, truncated at maxChars); link=true also returns a ~10-minute download link valid for this OAuth client only. Read-only at the source.',
+        '授業のTeams/SharePointのファイル（get_courseやsearchの結果のdocument:…のid、または「科目名/フォルダ/ファイル名」）を取得し、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき、maxCharsで打ち切り）を返す。link=trueのときは、この接続（同じOAuthクライアント）だけが約10分間ダウンロードできるリンクも返す。大学側には何も変更しない。画像・スキャンされたページは get_document で見る。 / Fetch a class file and return its extracted text (page/slide markers, truncated at maxChars); link=true also returns a ~10-minute download link valid for this OAuth client only. Read-only at the source. For images and scanned pages use get_document.',
     },
     {
       file: z
@@ -1067,6 +1071,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       };
     },
   );
+  registerDocumentTools(server, deps);
 
   // ----- VPN file share (Ivanti portal): browse / search / recent from the local index -----
 

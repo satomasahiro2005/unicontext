@@ -33,6 +33,9 @@
     },
     {
       "path": "../../packages/connector-sdk"
+    },
+    {
+      "path": "../../connectors/local-files"
     }
   ]
 }

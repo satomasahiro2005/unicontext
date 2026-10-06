@@ -754,6 +754,98 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
     expect(refs[0]).toMatchObject({ authority: 'lms' });
   });
 
+  it('maps files written into lesson text as attachment documents, and labels lessons "Ed Lessons"', async () => {
+    const adapter = adapterFor(
+      edSpec(),
+      inMemoryFactory(() => createEdServer()),
+    );
+    const { items } = await syncAll(adapter);
+    await adapter.dispose();
+    const { entities, outputs } = await normalizeAll(edSpec(), items);
+    expect(outputs.flatMap(({ out }) => out.warnings ?? [])).toEqual([]);
+    const course = entities.find((e) => e.kind === 'courseOffering');
+    const docs = entities.filter((e) => e.kind === 'document') as unknown as {
+      title: string;
+      url?: string;
+      path?: string;
+      mimeType?: string;
+      courseOfferingId?: string;
+      extra?: Record<string, unknown>;
+    }[];
+    const attachment = docs.find((d) => d.title === 'ER図の例.png');
+    expect(attachment).toMatchObject({
+      url: 'https://static.edusercontent.com/files/DDDD',
+      mimeType: 'image/png',
+      path: '/Ed Lessons/課題 (小レポート2)/ER図の例.png',
+      courseOfferingId: course?.id,
+      extra: { edKind: 'attachment', lessonId: 2004, slideId: 9 },
+    });
+    // every lesson / question / lesson-file ref says "Ed Lessons"; threads keep the source label
+    const lessonRefs = outputs
+      .filter((o) =>
+        ['edstem.lesson', 'edstem.lesson_detail', 'edstem.slide_question'].includes(
+          o.item.sourceType,
+        ),
+      )
+      .flatMap((o) => [...o.out.entities.map((e) => e.ref), ...(o.out.facts ?? []).map((f) => f.ref)]);
+    expect(lessonRefs.length).toBeGreaterThan(8);
+    expect(new Set(lessonRefs.map((r) => r?.sourceLabel))).toEqual(new Set(['Ed Lessons']));
+    const threadRefs = outputs
+      .filter((o) => o.item.sourceType === 'edstem.thread_detail')
+      .flatMap((o) => o.out.entities.map((e) => e.ref));
+    expect(threadRefs.every((r) => r?.sourceLabel === undefined)).toBe(true);
+  });
+
+  it('maps files written into thread posts and replies (once each)', async () => {
+    const adapter = adapterFor(
+      edSpec(),
+      inMemoryFactory(() => createEdServer()),
+    );
+    const thread = {
+      id: 1002,
+      number: 2,
+      courseId: 55,
+      title: 'How do I submit lab 1?',
+      type: 'question',
+      userId: 9,
+      document:
+        '<document><paragraph>See the sheet</paragraph><file url="https://static.edusercontent.com/files/EEEE?a=1&amp;b=2" filename="lab1-spec.pdf"/></document>',
+      users: {},
+      answers: [
+        {
+          id: 1,
+          userId: 8,
+          document:
+            '<document><file url="https://static.edusercontent.com/files/FFFF" filename="answer.png"/></document>',
+          comments: [
+            {
+              id: 2,
+              userId: 9,
+              document:
+                '<document><file url="https://static.edusercontent.com/files/FFFF" filename="answer.png"/></document>',
+            },
+          ],
+        },
+      ],
+    };
+    const { entities } = await normalizeAll(edSpec(), [
+      { sourceType: 'edstem.thread_detail', externalId: '1002', payload: thread },
+    ]);
+    const docs = entities.filter((e) => e.kind === 'document') as unknown as {
+      title: string;
+      url: string;
+      path: string;
+      mimeType: string;
+    }[];
+    expect(docs.map((d) => d.title).sort()).toEqual(['answer.png', 'lab1-spec.pdf']);
+    expect(docs.find((d) => d.title === 'lab1-spec.pdf')).toMatchObject({
+      url: 'https://static.edusercontent.com/files/EEEE?a=1&b=2',
+      mimeType: 'application/pdf',
+      path: '/Ed Discussion/#2 How do I submit lab 1?/lab1-spec.pdf',
+    });
+    await adapter.dispose();
+  });
+
   it('reads unchanged lessons at most once a day and the full lesson on request, read-only', async () => {
     const calls: { tool: string; args: unknown }[] = [];
     let now = Date.parse('2026-10-06T00:00:00Z');

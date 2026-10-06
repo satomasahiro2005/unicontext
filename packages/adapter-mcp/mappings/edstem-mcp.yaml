@@ -51,6 +51,12 @@
 # (pdf slide) a document with its link — all tied to the course and cited with the Ed lesson URL.
 # Answer keys (solution / explanation) are never mapped.
 #
+# Attachments: files written into text (<file url filename/>) of a lesson slide, of a thread post
+# or of any answer / comment become documents too (path /Ed Lessons/… or /Ed Discussion/#<n> …);
+# the pinned server has no thread file list tool, so text is where threads show their files.
+# Their bytes are fetched on demand through the `files:` section (get_document); Ed lesson / question
+# refs are labelled "Ed Lessons" in citations, threads keep "Ed Discussion".
+#
 # Region: Ed accounts live in one region. The API host is the source env EDSTEM_BASE_URL (the
 # server's default https://edstem.org/api/ is the AU region; US is https://us.edstem.org/api/) and
 # the web links below are https://edstem.org/<region>/courses/... with <region> from `vars.region`
@@ -82,12 +88,21 @@ id: edstem
 product: edstem
 sourceLabel: Ed Discussion
 description: EdStem discussion boards via the edstem-mcp server (courses, threads, answers, comments)
-version: '4'
+version: '5'
 testedVersion: 0.7.2
 defaultAuthority: discussion
 capabilities: [courses, announcements, messages, assignments]
 vars:
   region: au
+
+# Files Ed hosts (slide PDFs, images and documents attached in lesson / thread text) are fetched on
+# request (get_document, download_course_file) by a plain HTTPS GET of the document's url: only
+# these hosts, no cookie or token, no redirect, capped size. Nothing else of Ed is ever contacted
+# for a file (Ed file links open without signing in).
+files:
+  hostAllowlist: ['edusercontent.com', '*.edusercontent.com']
+  credentials: none
+  maxBytes: 52428800
 
 resources:
   - name: courses
@@ -326,6 +341,40 @@ entities:
             or byStaff = true) ? "instructor-announcement" : "discussion"
         location: { messageId: '$string(id)' }
 
+    # Files written into the text of the post or of any answer / comment (<file url filename/>).
+    - kind: document
+      forEach: >-
+        ($all := function($c) { $c ? $append($c, $all($c.comments)) : [] };
+        $docs := $append(document ? document : [],
+        $all($append(answers ? answers : [], comments ? comments : [])).document);
+        $distinct($docs.$match($, /<file\s[^>]*>/).match).(
+        $u := $replace($match($, /url="([^"]*)"/).groups[0], "&amp;", "&");
+        $f := $match($, /filename="([^"]*)"/).groups[0];
+        $u ? {"url": $u, "filename": $f ? $replace($f, "&amp;", "&") : $replace($u, /^.*\//, "")}))
+      key: '"att:" & url'
+      fields:
+        title: filename
+        url: url
+        mimeType: &attachmentMime >-
+          $lookup({"pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg",
+          "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "txt": "text/plain",
+          "csv": "text/csv", "zip": "application/zip",
+          "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+          $lowercase($match(filename, /\.([A-Za-z0-9]+)$/).groups[0]))
+        path: >-
+          "/Ed Discussion/#" & $root.number & " " & $replace($root.title, "/", "／") & "/" &
+          $replace(filename, "/", "／")
+        courseOfferingId: { ref: courseOffering, key: '$string($root.courseId)' }
+      extra:
+        platform: '"edstem"'
+        edKind: '"attachment"'
+        threadId: $root.id
+      ref:
+        url: '"https://edstem.org/" & $vars.region & "/courses/" & $root.courseId & "/discussion/" & $root.id'
+        authority: discussion
+
   edstem.lesson:
     - kind: assignment
       when: >-
@@ -342,6 +391,7 @@ entities:
       extra: { module: moduleName, lessonStatus: status, state: state }
       ref:
         url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+        sourceLabel: Ed Lessons
         authority: submission-system
     - kind: submission
       when: >-
@@ -354,6 +404,7 @@ entities:
       extra: { lessonStatus: status }
       ref:
         url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+        sourceLabel: Ed Lessons
         authority: submission-system
 
   # The lesson's text (every slide in order) for search and get_course.
@@ -381,6 +432,7 @@ entities:
         slideCount: '$count(slides)'
       ref:
         url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+        sourceLabel: Ed Lessons
         authority: lms
     # Ed-hosted slide files (pdf slides): name and link; Ed's file links open without signing in.
     - kind: document
@@ -403,6 +455,36 @@ entities:
         url: >-
           "https://edstem.org/" & $vars.region & "/courses/" & $root.courseId & "/lessons/" &
           $root.id & "/slides/" & id
+        sourceLabel: Ed Lessons
+        authority: lms
+    # Files written into a slide's text (<file url filename/>): images, PDFs and documents of the
+    # lesson, one document each, fetched on request through `files:` above.
+    - kind: document
+      forEach: >-
+        slides[$exists(content)].($s := $; $match(content, /<file\s[^>]*>/).(
+        $u := $replace($match(match, /url="([^"]*)"/).groups[0], "&amp;", "&");
+        $f := $match(match, /filename="([^"]*)"/).groups[0];
+        $u ? {"url": $u, "filename": $f ? $replace($f, "&amp;", "&") : $replace($u, /^.*\//, ""),
+        "slideId": $s.id, "slideTitle": $s.title}))
+      key: '"att:" & url'
+      fields:
+        title: filename
+        url: url
+        mimeType: *attachmentMime
+        path: >-
+          "/Ed Lessons/" & ($root._parent.moduleName ? $replace($root._parent.moduleName, "/", "／") &
+          "/" : "") & $replace($root.title, "/", "／") & "/" & $replace(filename, "/", "／")
+        courseOfferingId: { ref: courseOffering, key: '$string($root.courseId)' }
+      extra:
+        platform: '"edstem"'
+        edKind: '"attachment"'
+        lessonId: $root.id
+        slideId: slideId
+      ref:
+        url: >-
+          "https://edstem.org/" & $vars.region & "/courses/" & $root.courseId & "/lessons/" &
+          $root.id & "/slides/" & slideId
+        sourceLabel: Ed Lessons
         authority: lms
 
   # One quiz question: 「<lesson> 質問<n>」 with its prompt and choices (never the answer key).
@@ -434,6 +516,7 @@ entities:
         url: >-
           "https://edstem.org/" & $vars.region & "/courses/" & _parent.courseId & "/lessons/" &
           _parent.lessonId & "/slides/" & slideId
+        sourceLabel: Ed Lessons
         authority: lms
 
 facts:
@@ -454,6 +537,7 @@ facts:
     observedAt: 'updatedAt ? updatedAt : createdAt'
     ref:
       url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+      sourceLabel: Ed Lessons
       authority: submission-system
   # Ed's hard close (lockedAt: no submissions after it) is the due date when nothing else states one.
   - sourceType: edstem.lesson_detail
@@ -467,6 +551,7 @@ facts:
     evidence: '"Ed lesson locks at " & lockedAt'
     ref:
       url: '"https://edstem.org/" & $vars.region & "/courses/" & courseId & "/lessons/" & id'
+      sourceLabel: Ed Lessons
       authority: submission-system
 
 drift:

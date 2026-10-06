@@ -27,8 +27,11 @@ export {
 export {
   decodeText,
   extractContent,
+  extractPptx,
   htmlToText,
   mimeTypeFor,
+  pptxSlidePaths,
+  relTargets,
   type ExtractedContent,
 } from './extract.js';
 export { compileGlobs, globToRegExp, matchesExclude, matchesInclude } from './glob.js';

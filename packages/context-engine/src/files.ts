@@ -290,9 +290,32 @@ function targetOf(
     }
     if (!supportsFileDownloads(adapter) || !adapter.fileSourceTypes.includes(raw.sourceType))
       continue;
-    const info = adapter.describeFile(raw);
+    // The document goes along: one raw item can hold several files (the text of an Ed lesson),
+    // and an adapter that knows only the raw item cannot tell which one is meant.
+    const info = adapter.describeFile({
+      sourceType: raw.sourceType,
+      externalId: raw.externalId,
+      payload: raw.payload,
+      document: {
+        url: document.url,
+        title: document.title,
+        path: document.path,
+        mimeType: document.mimeType,
+        sizeBytes: document.sizeBytes,
+        modifiedAt: document.modifiedAt,
+      },
+    } as Parameters<typeof adapter.describeFile>[0]);
     if (!info) continue;
-    return { documentId, ref, document, raw, adapter, info };
+    // An adapter may name a file by something other than its raw item (the file's own url): that
+    // id keys the cache, so two files of one raw item never share an entry.
+    return {
+      documentId,
+      ref,
+      document,
+      raw: info.externalId === raw.externalId ? raw : { ...raw, externalId: info.externalId },
+      adapter,
+      info,
+    };
   }
   return { ...base, status: 'unsupported' };
 }
@@ -542,6 +565,11 @@ export function localFile(
       return { path: p, name: t.info.name, mimeType: t.info.mimeType ?? c?.mimeType, bytes };
   }
   return undefined;
+}
+
+/** Some registered source can fetch this document's bytes (downloadCourseFiles would try). */
+export function canDownloadFile(uc: UniContext, documentId: string): boolean {
+  return 'raw' in targetOf(uc, documentId, documentId);
 }
 
 // ---------------------------------------------------------------------------------------------
