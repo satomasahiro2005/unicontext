@@ -175,19 +175,40 @@ export class IdentityResolver {
       return toCandidate(o, sourceId, this.codeScheme(sourceId));
     });
     const report: ResolveReport = { linked: [], suggested: [], removed: 0 };
-    const pairs: { a: OfferingCandidate; b: OfferingCandidate; m: MatchResult }[] = [];
+    // Every pair of offerings from different sources is scored: with a catalog source (syllabus,
+    // VPN folders) that is ~10^6 pairs. The existing links are therefore read once, not queried per
+    // pair (each drizzle query prepares a better-sqlite3 statement whose ~9 KB of native memory V8
+    // does not see, so a million of them ran the process into gigabytes before a GC freed them),
+    // and only pairs that match or have a link to remove are kept.
+    const existingLinks = new Map<string, IdentityLink>();
+    for (const row of this.db.orm
+      .select()
+      .from(identityLinks)
+      .where(eq(identityLinks.entityKind, 'courseOffering'))
+      .all())
+      existingLinks.set(`${row.leftId}|${row.rightId}`, rowToLink(row));
+    const existingLink = (a: string, b: string): IdentityLink | undefined =>
+      existingLinks.get(ordered(a, b).join('|'));
+    const pairs: {
+      a: OfferingCandidate;
+      b: OfferingCandidate;
+      m: MatchResult;
+      existing: IdentityLink | undefined;
+    }[] = [];
     for (let i = 0; i < offerings.length; i++) {
       for (let j = i + 1; j < offerings.length; j++) {
         const a = offerings[i];
         const b = offerings[j];
         if (!a || !b || (a.sourceId && a.sourceId === b.sourceId)) continue;
-        if (this.getLink(a.id, b.id)?.decidedBy === 'user') continue;
-        pairs.push({ a, b, m: scoreOfferingMatch(a, b, { thresholds: this.thresholds }) });
+        const existing = existingLink(a.id, b.id);
+        if (existing?.decidedBy === 'user') continue;
+        const m = scoreOfferingMatch(a, b, { thresholds: this.thresholds });
+        if (m.decision === 'none' && !existing) continue;
+        pairs.push({ a, b, m, existing });
       }
     }
     this.demoteAmbiguousTitleOnly(pairs);
-    for (const { a, b, m } of pairs) {
-      const existing = this.getLink(a.id, b.id);
+    for (const { a, b, m, existing } of pairs) {
       if (m.decision === 'none') {
         if (existing) {
           this.db.orm.delete(identityLinks).where(eq(identityLinks.id, existing.id)).run();

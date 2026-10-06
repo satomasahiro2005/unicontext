@@ -193,6 +193,60 @@ describe('IdentityResolver', () => {
     db.close();
     db2.close();
   });
+
+  it('scores a large catalog without a query per pair and removes links that stopped matching', () => {
+    // Two catalog-sized sources (the syllabus, VPN folders) make ~10^6 pairs in practice; a
+    // database query per pair ran the daemon into gigabytes of native statement memory.
+    const db = openDatabase();
+    const entities = new EntityStore(db);
+    const n = 60;
+    for (let i = 0; i < n; i++) {
+      entities.upsert(
+        offering(stableId('courseOffering', 'syllabus', String(i)), {
+          title: `科目${i}特別講義`,
+          academicYear: 2026,
+          courseCode: `C${i}`,
+          instructorNames: [`教員${i}`],
+        }),
+        { sourceId: 'syllabus' },
+      );
+      entities.upsert(
+        offering(stableId('courseOffering', 'files', String(i)), {
+          title: `フォルダ${i}`,
+          academicYear: 2026,
+        }),
+        { sourceId: 'files' },
+      );
+    }
+    const folder = stableId('courseOffering', 'files', 'match');
+    const course = stableId('courseOffering', 'syllabus', '7');
+    entities.upsert(offering(folder, { title: '科目7特別講義', academicYear: 2026 }), {
+      sourceId: 'files',
+    });
+    const r = new IdentityResolver(db);
+    const stale = [
+      stableId('courseOffering', 'files', '1'),
+      stableId('courseOffering', 'syllabus', '2'),
+    ] as const;
+    r.link(stale[0], stale[1], { status: 'auto', score: 0.8, method: 'old', decidedBy: 'system' });
+
+    let prepares = 0;
+    const prepare = db.sqlite.prepare.bind(db.sqlite);
+    db.sqlite.prepare = ((source: string) => {
+      prepares++;
+      return prepare(source);
+    }) as typeof db.sqlite.prepare;
+    const report = r.resolveCourseOfferings();
+    expect(report.removed).toBe(1);
+    expect(r.getLink(stale[0], stale[1])).toBeUndefined();
+    expect(report.linked.map((l) => [l.leftId, l.rightId].sort())).toEqual([
+      [course, folder].sort(),
+    ]);
+    // n * (n + 1) cross-source pairs; the queries grow with the offerings (one lookup of each
+    // one's source) and the links written, not with the pairs.
+    expect(prepares).toBeLessThan(4 * n);
+    db.close();
+  });
 });
 
 describe('discussion platform courses (EdStem) against the academic system', () => {

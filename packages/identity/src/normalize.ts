@@ -113,10 +113,28 @@ function bigrams(s: string): string[] {
   return out;
 }
 
+/**
+ * normalizeCourseTitle with the default glossary, memoized: the resolver compares every pair of
+ * offerings, so each title is otherwise normalized (~30 regex passes) once per pair.
+ */
+const defaultTitleKeys = new Map<string, string>();
+const MAX_MEMOIZED_TITLES = 20_000;
+
+function titleKey(title: string, options: TitleNormalizeOptions): string {
+  if (options.glossary) return normalizeCourseTitle(title, options);
+  let key = defaultTitleKeys.get(title);
+  if (key === undefined) {
+    if (defaultTitleKeys.size >= MAX_MEMOIZED_TITLES) defaultTitleKeys.clear();
+    key = normalizeCourseTitle(title);
+    defaultTitleKeys.set(title, key);
+  }
+  return key;
+}
+
 /** Dice coefficient on character bigrams of normalized titles, with containment boost. 0..1. */
 export function titleSimilarity(a: string, b: string, options: TitleNormalizeOptions = {}): number {
-  const x = normalizeCourseTitle(a, options);
-  const y = normalizeCourseTitle(b, options);
+  const x = titleKey(a, options);
+  const y = titleKey(b, options);
   if (!x || !y) return 0;
   if (x === y) return 1;
   const [short, long] = x.length <= y.length ? [x, y] : [y, x];
