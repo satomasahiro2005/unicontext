@@ -80,6 +80,7 @@ import {
   resolveAssignmentRef,
 } from './assignment-detail.js';
 import { listCourses, resolveCourse } from './courses.js';
+import { registerRecordTools } from './external-signal.js';
 import {
   attentionShape,
   BRIEFING_TOOL,
@@ -989,6 +990,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
     (a) => getCreditSummary(uc, a),
   );
 
+  registerRecordTools({ uc, caller, courseId, tool, writeTool });
+
   // ----- class files (Teams/SharePoint): download on request -----
 
   tool(
@@ -1174,12 +1177,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
       limit: z.number().int().positive().max(50).optional(),
       courseOfferingId: courseIdField.optional(),
     },
-    async (a) => ({
-      data: await uc.search.search(
+    async (a) => {
+      const found = await uc.search.search(
         a.query,
         opt({ limit: a.limit, courseOfferingId: courseId(a.courseOfferingId) }),
-      ),
-    }),
+      );
+      // Hits of an earlier year's offering of a course the student takes now are labelled.
+      return { data: { ...found, hits: uc.context.labelPriorYearHits(found.hits) } };
+    },
   );
 
   tool(

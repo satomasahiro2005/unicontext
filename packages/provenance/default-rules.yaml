@@ -30,9 +30,18 @@ predicates:
       academic-system,
       transcript,
       student-statement,
+      external-signal,
     ]
   submission_status: [submission-system]
-  exam_at: [academic-system, instructor-announcement, syllabus, transcript, student-statement]
+  exam_at:
+    [
+      academic-system,
+      instructor-announcement,
+      syllabus,
+      transcript,
+      student-statement,
+      external-signal,
+    ]
   deadline:
     [
       submission-system,
@@ -43,6 +52,7 @@ predicates:
       discussion,
       transcript,
       student-statement,
+      external-signal,
     ]
   # The student's group / 班 in a course. A chat or recording never outranks the university or an
   # instructor's document; a newer, different value from them opens a Conflict instead.
@@ -59,7 +69,7 @@ predicates:
   # Whether the student takes a course at all, as the student says it (dropped / rejected although
   # the academic system still lists it). Only the student declares it; the academic system's own
   # word is the enrollment record itself, never a fact of this predicate.
-  'condition:enrollment': [transcript, student-statement]
+  'condition:enrollment': [transcript, student-statement, external-signal]
 # Predicates whose facts are separate items rather than competing values for one slot (a lecture
 # can name several things to prepare): they are never turned into Conflicts.
 multiValued: [todo, session_rule]
@@ -81,4 +91,5 @@ default:
     transcript,
     student-statement,
     local-file,
+    external-signal,
   ]

@@ -18,3 +18,6 @@ export * from './personal-schedule.js';
 export * from './estimate.js';
 export * from './detail-fetch.js';
 export * from './syllabus-priority.js';
+export * from './attendance.js';
+export * from './external-signals.js';
+export * from './lineage.js';

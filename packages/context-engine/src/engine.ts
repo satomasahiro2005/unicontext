@@ -7,6 +7,7 @@ import {
   type ClassSession,
   type Conflict,
   type CourseOffering,
+  type EntityId,
   type Enrollment,
   entityLabel,
   type Document,
@@ -18,6 +19,7 @@ import {
   type Message,
   type Submission,
   type Task,
+  stableId,
   type Thread,
 } from '@unicontext/canonical-model';
 import {
@@ -31,6 +33,7 @@ import {
   ValidationError,
   parseZonedDate,
   startOfZonedDay,
+  stableStringify,
   startOfZonedWeek,
   systemClock,
   termPartLabel,
@@ -50,6 +53,7 @@ import {
 import type { IdentityResolver } from '@unicontext/identity';
 import {
   buildDeadlineCoverage,
+  coverageHealth,
   type CoverageCourse,
   type CoverageSourceInput,
   type CoverageUndated,
@@ -57,6 +61,7 @@ import {
 } from './coverage.js';
 import {
   type ConflictResolver,
+  factId,
   type Resolution,
   toCitation,
   uniqueCitations,
@@ -76,6 +81,25 @@ import {
   weekStartOfDue,
 } from '@unicontext/task-engine';
 import { additionViaOfAuthority } from './additions.js';
+import {
+  ATTENDANCE_PREDICATE,
+  type AttendanceCourseItem,
+  type AttendanceOverview,
+  type CourseAttendance,
+  readAttendance,
+} from './attendance.js';
+import { EXTERNAL_SIGNAL_LABELS } from './external-signals.js';
+import {
+  computeLineage,
+  type CourseLineageView,
+  HISTORICAL_RESOURCE_LIMIT,
+  type HistoricalResource,
+  LINEAGE_PREDICATE,
+  type LineageOffering,
+  type LineageValue,
+  parseLineageValue,
+  priorYearLabel,
+} from './lineage.js';
 import { readAnnouncementExtra } from './announcements.js';
 import { candidateDue, type EstimatedDue, estimateDue, type EstimateHost } from './estimate.js';
 import {
@@ -345,11 +369,20 @@ export class ContextEngine {
         const ref = this.courseRef(o.offering.offering.id);
         const title = ref?.title ?? o.offering.offering.title;
         const d = o.declaration;
-        const label = d.provenance === 'recording' ? '録音から・未確認' : 'チャットで登録・未確認';
+        const label =
+          d.provenance === 'recording'
+            ? '録音から・未確認'
+            : d.provenance === 'external'
+              ? `${d.source}・未確認`
+              : 'チャットで登録・未確認';
         const what =
-          d.value === 'not_taking'
-            ? '学務では履修中、本人は履修していないと登録'
-            : '学務では履修していない、本人は履修中と登録';
+          d.provenance === 'external'
+            ? d.value === 'not_taking'
+              ? `学務では履修中、${d.source}では履修していない（取消・不許可など）との連絡`
+              : `学務では履修していない、${d.source}では履修中との連絡`
+            : d.value === 'not_taking'
+              ? '学務では履修中、本人は履修していないと登録'
+              : '学務では履修していない、本人は履修中と登録';
         const shown =
           d.value === 'not_taking' ? '表示から外しています' : '本人の授業として表示しています';
         const source = this.refs.get(d.sourceReferenceId);
@@ -760,8 +793,14 @@ export class ContextEngine {
     const item = rec.source.sourceItemId;
     const hash = item.lastIndexOf('#');
     const via = additionViaOfAuthority(rec.source.authority);
+    // A finding in the student's mail / calendar is labelled with where it was found.
+    const external =
+      rec.source.authority === 'external-signal'
+        ? (Object.values(EXTERNAL_SIGNAL_LABELS).find((l) => l === rec.source?.sourceLabel) ??
+          EXTERNAL_SIGNAL_LABELS.gmail)
+        : undefined;
     return {
-      label: via === 'chat' ? 'チャットで登録' : '録音から',
+      label: external ?? (via === 'chat' ? 'チャットで登録' : '録音から'),
       via,
       additionId: hash >= 0 ? item.slice(hash + 1) : undefined,
       source: rec.source.sourceLabel ?? rec.source.sourceSystem,
@@ -780,7 +819,7 @@ export class ContextEngine {
     const recorded = this.recordedMarker(t);
     const origin = recorded
       ? recorded.via === 'chat'
-        ? '（チャットで登録）'
+        ? `（${recorded.label === 'チャットで登録' ? 'チャットで登録' : `${recorded.label}・未確認`}）`
         : '（録音から・未確認）'
       : t.origin === 'extracted'
         ? '（文章から抽出）'
@@ -1912,7 +1951,8 @@ export class ContextEngine {
     };
   }
 
-  course(courseOfferingId: string): CourseContext {
+  /** The course view before the records of stream F (attendance, lineage) are added: see course(). */
+  private courseBase(courseOfferingId: string): CourseContext {
     const c = this.requireCourse(courseOfferingId);
     const now = this.now();
     const ids = c.linkedIds;
@@ -2622,6 +2662,313 @@ export class ContextEngine {
   /** Day-of-week helper for callers rendering timetables. */
   weekdayOf(date: string): number {
     return zonedParts(parseZonedDate(date, this.timezone), this.timezone).weekday;
+  }
+
+  // --- records (stream F) ---
+
+  /**
+   * The course view with the records of stream F added after it is built: the academic system's
+   * attendance counts, and — when earlier years' offerings of the course exist — the lineage and
+   * their lessons / documents / threads as labelled study material (`historicalResources`).
+   */
+  course(courseOfferingId: string): CourseContext {
+    const view = this.courseBase(courseOfferingId);
+    const attendance = this.attendanceOf(view.course.linkedIds);
+    if (attendance) view.attendance = attendance;
+    const lineage = this.lineageView(view.course.id);
+    if (lineage) {
+      view.lineage = lineage;
+      view.historicalResources = this.historicalResources(lineage);
+    }
+    return view;
+  }
+
+  /** The academic system's attendance row of a course (any linked offering), as stated. */
+  attendanceOf(courseIds: readonly string[]): CourseAttendance | undefined {
+    const facts = this.resolver.facts;
+    return readAttendance(
+      facts.withSources(facts.active({ subjects: courseIds, predicate: ATTENDANCE_PREDICATE })),
+      this.timezone,
+    );
+  }
+
+  /**
+   * Attendance of every course of the current term, or of one course: raw counts with citations,
+   * and how fresh the academic system's data is (a course without a row says why).
+   */
+  attendanceOverview(options: { courseOfferingId?: string } = {}): AttendanceOverview {
+    const now = this.now();
+    const refs: CourseRef[] = options.courseOfferingId
+      ? [this.requireCourse(options.courseOfferingId)]
+      : this.currentTermOfferings().flatMap((e) => {
+          const ref = this.courseRef(e.offering.id);
+          return ref ? [ref] : [];
+        });
+    const courses: AttendanceCourseItem[] = refs.map((ref) => ({
+      course: { id: ref.id, title: ref.title },
+      attendance: this.attendanceOf(ref.linkedIds),
+    }));
+    const sources = this.coverageSources()
+      .filter((s) => s.authority === 'academic-system' && !s.referenceOnly)
+      .map((s) => ({
+        sourceId: s.sourceId,
+        label: s.label,
+        health: coverageHealth(s, now),
+        lastSuccessAt: s.lastSuccessAt,
+      }));
+    const missing = courses.filter((c) => !c.attendance).length;
+    const lastSuccess = sources
+      .map((s) => s.lastSuccessAt)
+      .filter((x): x is string => x !== undefined)
+      .sort()
+      .at(-1);
+    const unhealthy = sources.filter((s) => s.health !== 'ok');
+    const synced = lastSuccess
+      ? `学務情報システムの最終同期は${formatShortJa(new Date(lastSuccess), this.timezone)}`
+      : '学務情報システムはまだ一度も同期できていません';
+    const parts: string[] = [];
+    if (courses.length === 0) parts.push('対象の科目がありません');
+    else if (missing === courses.length)
+      parts.push(
+        `出欠はまだ取り込めていません（${synced}）。回数は分かりません。出欠の状況を推測で答えないでください`,
+      );
+    else {
+      parts.push(`数値は学務情報システムが公開している回数そのままです（${synced}）`);
+      if (missing > 0) parts.push(`${missing}科目は出欠の行がありません（未公開か対象外）`);
+    }
+    for (const s of unhealthy)
+      parts.push(
+        `${s.label}は${s.health === 'never_synced' ? '未取得' : '最新ではありません'}（${s.health}）`,
+      );
+    if (courses.length !== missing)
+      for (const c of courses)
+        if (!c.attendance)
+          c.note = '学務情報システムに出欠の行がありません（未公開か、出欠の対象外）';
+    return {
+      view: 'attendance',
+      generatedAt: now.toISOString(),
+      timezone: this.timezone,
+      courses,
+      coverage: {
+        complete: courses.length > 0 && missing === 0 && unhealthy.length === 0,
+        missing,
+        sources,
+        note: parts.join('。'),
+      },
+    };
+  }
+
+  private lineageOffering(o: CourseOffering): LineageOffering {
+    return {
+      id: o.id,
+      title: o.title,
+      academicYear: o.academicYear,
+      courseCode: o.courseCode,
+    };
+  }
+
+  private lineageOfferingsOf(ids: readonly string[]): LineageOffering[] {
+    return ids.flatMap((id) => {
+      const o = this.entities.getOfKind('courseOffering', id);
+      return o ? [this.lineageOffering(o)] : [];
+    });
+  }
+
+  /**
+   * Derive `course:lineage` for every offering of the current term (run by the pipeline's derive
+   * step): a system fact (origin inferred, producer rule) on the canonical offering naming the
+   * earlier years' offerings of the same course — same normalized title or course code, another
+   * academic year, any source. Recomputed every run (a changed value retracts the old fact,
+   * courses without an earlier offering carry none). Never creates an identity link.
+   */
+  deriveLineage(): { written: number; retracted: number } {
+    const now = this.now().toISOString();
+    const all = this.entities.list('courseOffering').map((o) => this.lineageOffering(o));
+    const facts = this.resolver.facts;
+    let written = 0;
+    let retracted = 0;
+    for (const e of this.currentTermOfferings()) {
+      const canonical = this.identity.canonical(e.offering.id);
+      const value = computeLineage(
+        this.lineageOfferingsOf(this.linkedIdsOf(canonical)),
+        all,
+        (id) => this.identity.canonical(id),
+      );
+      const wanted = value ? stableStringify(value as unknown as JsonValue) : undefined;
+      let kept = false;
+      const stale: string[] = [];
+      for (const f of facts.active({ subjects: [canonical], predicate: LINEAGE_PREDICATE })) {
+        if (!kept && wanted !== undefined && stableStringify(f.value) === wanted) kept = true;
+        else stale.push(f.id);
+      }
+      retracted += facts.retract(stale, now);
+      if (!value || kept) continue;
+      const ref = this.refs.upsert({
+        id: stableId('sourceReference', 'unicontext', 'course-lineage', canonical),
+        sourceSystem: 'unicontext',
+        sourceLabel: 'UniContext（科目の自動判定）',
+        authority: 'unknown',
+        sourceItemId: `lineage:${canonical}`,
+        retrievedAt: now,
+        entityId: canonical as EntityId,
+      });
+      const years = value.priorOfferingIds
+        .map((id) => this.entities.getOfKind('courseOffering', id)?.academicYear)
+        .filter((y): y is number => y !== undefined);
+      facts.put({
+        id: factId(ref.id, canonical, LINEAGE_PREDICATE, value as unknown as JsonValue),
+        subject: canonical as EntityId,
+        predicate: LINEAGE_PREDICATE,
+        value: value as unknown as JsonValue,
+        origin: 'inferred',
+        confidence: 0.8,
+        observedAt: now,
+        sourceReferenceId: ref.id,
+        producer: { type: 'rule', id: 'course-lineage' },
+        evidence: `同じ科目の前年度以前の開講（${[...new Set(years)].sort((a, b) => b - a).join('・')}年度）: 科目名または科目コードが同じ`,
+      });
+      written++;
+    }
+    return { written, retracted };
+  }
+
+  /** The stored lineage of a course, else computed now (before the first derive run). */
+  private lineageValueOf(courseId: string): LineageValue | undefined {
+    const ids = this.linkedIdsOf(courseId);
+    const stored = this.resolver.facts
+      .active({ subjects: ids, predicate: LINEAGE_PREDICATE })
+      .sort((a, b) => b.observedAt.localeCompare(a.observedAt))[0];
+    const parsed = stored ? parseLineageValue(stored.value) : undefined;
+    if (parsed) return parsed;
+    return computeLineage(
+      this.lineageOfferingsOf(ids),
+      this.entities.list('courseOffering').map((o) => this.lineageOffering(o)),
+      (id) => this.identity.canonical(id),
+    );
+  }
+
+  /** The earlier offerings of a course (newest year first), or undefined when it has none. */
+  lineageView(courseId: string): CourseLineageView | undefined {
+    const value = this.lineageValueOf(courseId);
+    if (!value) return undefined;
+    const priorOfferings = value.priorOfferingIds.flatMap((id) => {
+      const linked = this.linkedIdsOf(id);
+      const offerings = linked.flatMap((l) => {
+        const o = this.entities.getOfKind('courseOffering', l);
+        return o ? [o] : [];
+      });
+      const o = offerings.find((x) => x.id === id) ?? offerings[0];
+      if (!o) return [];
+      const years = offerings
+        .map((x) => x.academicYear)
+        .filter((y): y is number => y !== undefined);
+      return [
+        {
+          id,
+          year: years.length ? Math.max(...years) : undefined,
+          title: o.title,
+          sources: [
+            ...new Set(
+              linked.map((l) => this.entities.meta(l)?.sourceId).filter((s): s is string => !!s),
+            ),
+          ],
+          basis: value.basis[id] ?? [],
+        },
+      ];
+    });
+    return priorOfferings.length > 0 ? { priorOfferings } : undefined;
+  }
+
+  /**
+   * Documents (Ed lessons and slides, Teams files) and threads of the earlier offerings, newest
+   * year first, at most {@link HISTORICAL_RESOURCE_LIMIT}: study material labelled 「前年度（2025）の
+   * 参考資料」. Lesson-level documents come before slides inside a year; a few threads are
+   * reserved so questions and answers are not crowded out. Nothing here is a deadline.
+   */
+  historicalResources(lineage: CourseLineageView): HistoricalResource[] {
+    const THREAD_SHARE = 5;
+    const priors = [...lineage.priorOfferings].sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+    const docs: HistoricalResource[] = [];
+    const threads: HistoricalResource[] = [];
+    const depth = (path: string | undefined): number =>
+      (path ?? '').split('/').filter(Boolean).length;
+    for (const p of priors) {
+      const ids = this.linkedIdsOf(p.id);
+      const course = { id: p.id, title: p.title };
+      const label = p.year !== undefined ? priorYearLabel(p.year) : '前年度以前の参考資料';
+      const yearDocs = this.entities
+        .list('document', { where: { courseOfferingId: ids } })
+        .sort(
+          (a, b) =>
+            depth(a.path) - depth(b.path) ||
+            (a.path ?? '').localeCompare(b.path ?? '', 'ja', { numeric: true }) ||
+            a.title.localeCompare(b.title, 'ja', { numeric: true }),
+        );
+      for (const d of yearDocs)
+        docs.push({
+          id: d.id,
+          kind: 'document',
+          title: d.title,
+          academicYear: p.year,
+          label,
+          course,
+          ...(d.path ? { path: d.path } : {}),
+          ...(d.url ? { url: d.url } : {}),
+          ...(d.text ? { snippet: truncate(d.text.replace(/\s+/gu, ' ').trim(), 160) } : {}),
+          citations: this.citationsFor([d.id]),
+        });
+      const yearThreads = this.entities
+        .list('thread', { where: { courseOfferingId: ids } })
+        .sort((a, b) =>
+          (this.entities.meta(b.id)?.updatedAt ?? '').localeCompare(
+            this.entities.meta(a.id)?.updatedAt ?? '',
+          ),
+        );
+      for (const t of yearThreads)
+        threads.push({
+          id: t.id,
+          kind: 'thread',
+          title: t.title,
+          academicYear: p.year,
+          label,
+          course,
+          ...(t.url ? { url: t.url } : {}),
+          citations: this.citationsFor([t.id]),
+        });
+    }
+    const limit = HISTORICAL_RESOURCE_LIMIT;
+    const takeThreads = Math.min(threads.length, Math.max(THREAD_SHARE, limit - docs.length));
+    const takeDocs = Math.min(docs.length, limit - takeThreads);
+    // Newest year first across both kinds (stable: documents stay before threads inside a year).
+    return [...docs.slice(0, takeDocs), ...threads.slice(0, takeThreads)].sort(
+      (a, b) => (b.academicYear ?? 0) - (a.academicYear ?? 0),
+    );
+  }
+
+  /**
+   * Offerings that are an earlier year of a course the student takes now, with their year: search
+   * hits from them are labelled 「前年度（2025）の参考資料」.
+   */
+  priorYearOfferings(): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const e of this.currentTermOfferings()) {
+      const lineage = this.lineageView(this.identity.canonical(e.offering.id));
+      for (const p of lineage?.priorOfferings ?? [])
+        if (p.year !== undefined) for (const id of this.linkedIdsOf(p.id)) out.set(id, p.year);
+    }
+    return out;
+  }
+
+  /** Search hits of earlier years' offerings get `priorYear` and the 「前年度（…）の参考資料」 label. */
+  labelPriorYearHits<H extends { courseOfferingId: string | undefined }>(
+    hits: readonly H[],
+  ): (H & { priorYear?: number; label?: string })[] {
+    const prior = this.priorYearOfferings();
+    if (prior.size === 0) return [...hits];
+    return hits.map((h) => {
+      const year = h.courseOfferingId ? prior.get(h.courseOfferingId) : undefined;
+      return year === undefined ? h : { ...h, priorYear: year, label: priorYearLabel(year) };
+    });
   }
 }
 

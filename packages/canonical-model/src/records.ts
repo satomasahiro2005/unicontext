@@ -100,6 +100,7 @@ export const ADDITION_TOOLS = [
   'record_lecture',
   'add_deadline',
   'add_note',
+  'ingest_external_signal',
   'add_task',
   'set_course_condition',
   'add_session_rule',
@@ -113,6 +114,7 @@ export const ADDITION_KINDS = [
   'exam',
   'prep',
   'note',
+  'external_signal',
   'task',
   /** A personal condition in a course (group B). */
   'condition',

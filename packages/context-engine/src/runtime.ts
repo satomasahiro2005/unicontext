@@ -263,6 +263,8 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
     for (const c of opened) await conflictEvent('conflict_detected', c);
     for (const c of resolved) await conflictEvent('conflict_resolved', c);
     const t = tasks.derive();
+    // Earlier years' offerings of each current course (a derived pointer, never an identity link).
+    context.deriveLineage();
     return {
       linked: ids.linked.length,
       suggested: ids.suggested.length,

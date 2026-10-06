@@ -75,8 +75,32 @@ describe('authority rules (§12)', () => {
       'academic-system',
       'transcript',
       'student-statement',
+      'external-signal',
     ]);
     expect(r.multiValued).toEqual(['todo', 'session_rule']);
+  });
+  it('ranks external signals (mail, calendar) below every university source', () => {
+    const r = loadDefaultAuthorityRules();
+    const university = [
+      'academic-system',
+      'submission-system',
+      'instructor-announcement',
+      'syllabus',
+      'lms',
+    ];
+    for (const predicate of [
+      'assignment_due',
+      'exam_at',
+      'deadline',
+      'condition:enrollment',
+      'default',
+    ]) {
+      const order = predicate === 'default' ? r.default : (r.predicates[predicate] ?? []);
+      expect(order.at(-1), predicate).toBe('external-signal');
+      for (const u of university)
+        if (order.includes(u))
+          expect(order.indexOf(u)).toBeLessThan(order.indexOf('external-signal'));
+    }
   });
   it('parses and merges overrides', () => {
     const r = mergeAuthorityRules(loadDefaultAuthorityRules(), {
