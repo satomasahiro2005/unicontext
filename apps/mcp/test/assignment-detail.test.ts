@@ -105,8 +105,10 @@ describe('get_assignment (Ed lesson)', () => {
       'get_assignment',
       { id: report?.taskId },
     );
-    // read on request: the lesson, its quiz questions, the saved answers and the file list
+    // read on request: the progress, the lesson, its quiz questions, the saved answers and the
+    // file list
     expect(calls.slice(before).map((c) => c.tool)).toEqual([
+      'list_lessons',
       'get_lesson',
       'list_slide_questions',
       'list_slide_responses',

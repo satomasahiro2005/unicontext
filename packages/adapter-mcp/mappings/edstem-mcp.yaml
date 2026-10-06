@@ -44,7 +44,9 @@
 # Lessons: get_lesson for unfinished assignment lessons on every sync (their deadline is often only
 # in the text); every other lesson, and the questions of each quiz slide, at most once a day per
 # daemon process (forEach.refreshAfter). The student's saved answers and the lesson file list are
-# read only on request (get_assignment -> `details`), never by a sync.
+# read only on request (get_assignment / verify_submission -> `details`), never by a sync. A request
+# also lists the course's lessons again (list_lessons, one call), so the lesson's progress, which is
+# the submission state, is current right after the student submits.
 #
 # Lesson text for search: each lesson becomes a document (its slides' text in order), each quiz
 # question a document titled 「<lesson> 質問<n>」 (with its choices), each Ed-hosted slide file
@@ -56,6 +58,11 @@
 # the pinned server has no thread file list tool, so text is where threads show their files.
 # Their bytes are fetched on demand through the `files:` section (get_document); Ed lesson / question
 # refs are labelled "Ed Lessons" in citations, threads keep "Ed Discussion".
+#
+# The student's own submitted files: files and images put into a saved answer (<file url
+# filename/> and <image src/> in the response document) become documents too (edKind
+# response-file, path /Ed Lessons/…/<lesson>/提出/…), only when the answers are read on request.
+# Their bytes are fetched only when get_document opens one.
 #
 # Region: Ed accounts live in one region. The API host is the source env EDSTEM_BASE_URL (the
 # server's default https://edstem.org/api/ is the AU region; US is https://us.edstem.org/api/) and
@@ -88,7 +95,7 @@ id: edstem
 product: edstem
 sourceLabel: Ed Discussion
 description: EdStem discussion boards via the edstem-mcp server (courses, threads, answers, comments)
-version: '5'
+version: '6'
 testedVersion: 0.7.2
 defaultAuthority: discussion
 capabilities: [courses, announcements, messages, assignments]
@@ -149,6 +156,20 @@ resources:
     call:
       tool: list_lessons
       args: { courseId: '{{course.id}}' }
+    select: '$'
+    sourceType: edstem.lesson
+    externalId: '$string(id)'
+    optional: true
+    capability: assignments
+
+  # On request only (get_assignment / verify_submission): the lessons of the requested lesson's
+  # course again, so its progress (= the submission state) is current. Metadata only, one call.
+  - name: lesson_status
+    onRequest: true
+    forEach: { resource: lessons, as: lesson }
+    call:
+      tool: list_lessons
+      args: { courseId: '{{lesson.courseId}}' }
     select: '$'
     sourceType: edstem.lesson
     externalId: '$string(id)'
@@ -238,12 +259,13 @@ resources:
     optional: true
     capability: assignments
 
-# get_assignment on an Ed lesson assignment: read that lesson now, with its quiz questions, the
-# student's saved answers and its files (read-only calls, only when asked).
+# get_assignment / verify_submission on an Ed lesson assignment: read that lesson now, with its
+# progress, its quiz questions, the student's saved answers and its file list (read-only calls,
+# only when asked; no file is downloaded here).
 details:
   - sourceType: edstem.lesson
     resource: lessons
-    run: [lesson_details, slide_questions, slide_responses, lesson_files]
+    run: [lesson_status, lesson_details, slide_questions, slide_responses, lesson_files]
 
 entities:
   edstem.course:
@@ -518,6 +540,46 @@ entities:
           _parent.lessonId & "/slides/" & slideId
         sourceLabel: Ed Lessons
         authority: lms
+
+  # Files and images in the student's own saved answer (<file url filename/>, <image src/>): one
+  # document each, opened on request through `files:` (get_document, verify_submission). Never
+  # fetched by a sync: the answers themselves are only read on request.
+  edstem.slide_response:
+    - kind: document
+      forEach: >-
+        ($doc := $type(data) = "string" ? data : data.content;
+        $type($doc) = "string" ? $append(
+        $match($doc, /<file\s[^>]*>/).(
+        $u := $replace($match(match, /url="([^"]*)"/).groups[0], "&amp;", "&");
+        $f := $match(match, /filename="([^"]*)"/).groups[0];
+        $u ? {"url": $u, "filename": $f ? $replace($f, "&amp;", "&") : $replace($u, /^.*\//, "")}),
+        $match($doc, /<image\s[^>]*>/).(
+        $u := $replace($match(match, /src="([^"]*)"/).groups[0], "&amp;", "&");
+        $u ? {"url": $u, "filename": "画像 " & $replace($u, /^.*\//, "")})))
+      key: '"resp:" & url'
+      fields:
+        title: filename
+        url: url
+        # pasted images have no extension in their name: the type comes from the bytes later
+        mimeType: *attachmentMime
+        path: >-
+          "/Ed Lessons/" & ($root._parent.moduleName ? $replace($root._parent.moduleName, "/", "／") &
+          "/" : "") & $replace($root._parent.lessonTitle, "/", "／") & "/提出/" &
+          $replace(filename, "/", "／")
+        courseOfferingId: { ref: courseOffering, key: '$string($root._parent.courseId)' }
+      extra:
+        platform: '"edstem"'
+        edKind: '"response-file"'
+        lessonId: $root._parent.lessonId
+        slideId: $root._parent.slideId
+        questionId: $root.questionId
+        savedAt: $root.createdAt
+      ref:
+        url: >-
+          "https://edstem.org/" & $vars.region & "/courses/" & $root._parent.courseId & "/lessons/" &
+          $root._parent.lessonId & "/slides/" & $root._parent.slideId
+        sourceLabel: Ed Lessons
+        authority: submission-system
 
 facts:
   # 「提出期限: 10月6日 17:00PM」 in the lesson text, when Ed itself has no due date.

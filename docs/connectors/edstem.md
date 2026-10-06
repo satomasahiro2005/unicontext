@@ -25,7 +25,8 @@ server reports its version in `unicontext sources` (column バージョン) so a
 ### What UniContext calls
 
 Eight tools, all `readOnlyHint: true` in the server (`src/mcp/server.ts`); the last two only on the
-student's request (`get_assignment`), never in a sync:
+student's request (`get_assignment`, `verify_submission`), never in a sync (a request also calls
+`list_lessons` for that one course, see "Checking a submission"):
 
 | Tool                   | Arguments                            | Returns (one JSON text block)                                                                                                                                                           |
 | ---------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -188,6 +189,32 @@ text), lecture PDFs are `pdf` slides (`fileUrl`).
   in order: text, file `{name, url}`, and `questions[]` `{number, prompt, choices?, myAnswer?}`
   where `myAnswer` is the student's own saved answer on Ed (`choices` 1-based). Answer keys are
   never returned. A lecture-material lesson (not an assignment) returns the stored lesson.
+- A request (`get_assignment`, `verify_submission`) also runs `list_lessons` for the lesson's
+  course once (`lesson_status`, on request only): the lesson's progress is the submission state,
+  and a sync that just ran (or is still within its freshness budget) would otherwise show the
+  progress from before the student submitted.
+
+## Checking a submission: `verify_submission`
+
+Right after the student says they handed a lesson in, `verify_submission({id})` (MCP) re-reads
+that one lesson through the same `details` rule, at most once per assignment every 30 s (a repeat
+answers with that read; nothing else is rate-limited away by freshness), and returns:
+
+- `submission`: `status` / `submitted` (lesson progress `completed` → submitted), `sourceStatus`
+  (Ed's progress), `answeredQuestions` (questions with a saved answer / all quiz questions),
+  `lastAnswerAt` (the newest saved answer; Ed returns no lesson submission time) and `checkedAt`.
+- `answers[]`: each saved answer with its 質問 number, a short prompt, the text or the chosen
+  options with their text.
+- `files[]`: the files and images the student put into their answers (`<file url filename/>`,
+  `<image src/>` in the response document). The mapping turns them into `document`s
+  (`edKind: response-file`, path `/Ed Lessons/<module>/<lesson>/提出/<file>`, authority
+  `submission-system`) only when the answers are read on request; `files[].documentId` opens one
+  with `get_document`, which is the only time its bytes are fetched (the `files:` rules above).
+- `limits`: what Ed does not tell (no submission time; code / SQL slide submissions are not
+  readable through the pinned server).
+
+A sync never reads the saved answers or the file list and never fetches a file body (test
+`verify_submission (Ed lesson)` in apps/mcp).
 
 ## Attachments: files in lessons and threads, `get_document`
 

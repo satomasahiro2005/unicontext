@@ -450,7 +450,11 @@ export const ED_SLIDE_RESPONSES: Record<number, unknown[]> = {
       questionId: 404981,
       userId: 7,
       createdAt: '2026-10-05T20:00:00+11:00',
-      data: { content: '<document version="2.0"><paragraph>下書き: 会員・DVD・貸出</paragraph></document>' },
+      // the student pasted their ER diagram and attached a note (Ed answer document)
+      data: {
+        content:
+          '<document version="2.0"><paragraph>下書き: 会員・DVD・貸出</paragraph><figure><image src="https://static.edusercontent.com/files/ERIMG1" width="640" height="480"/></figure><file url="https://static.edusercontent.com/files/NOTE2" filename="ER図の説明.txt"/></document>',
+      },
     },
   ],
   7001: [{ questionId: 5001, userId: 7, correct: true, data: { choices: [0] } }],

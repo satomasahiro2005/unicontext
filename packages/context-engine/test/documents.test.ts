@@ -271,6 +271,14 @@ describe('Word and image files', () => {
     expect(read.images[0]?.height).toBe(882);
   });
 
+  it('an image whose name has no extension is recognised from its bytes', async () => {
+    // e.g. an image pasted into an Ed answer: its file name is a bare id
+    const id = await indexLocalFile('情報科学/画像 pbQ1hoAm7hMY', makePng(320, 200));
+    const read = await readDocument(resolveDocument(uc, id), { ocr: false });
+    expect(read.kind).toBe('image');
+    expect(read.images).toHaveLength(1);
+  });
+
   it('HEIC that the canvas cannot decode is reported, not guessed at', async () => {
     const id = await indexLocalFile('情報科学/IMG_0001.heic', Buffer.from('not really heic data'));
     const read = await readDocument(resolveDocument(uc, id), { ocr: false });

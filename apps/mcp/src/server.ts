@@ -112,6 +112,12 @@ import {
 import { HIGH_RISK_SUBJECT_KINDS, isHighRiskPredicate, type ProposalStore } from './proposals.js';
 import { registerRefreshTools, type SyncStarter } from './refresh.js';
 import {
+  registerVerifySubmissionTool,
+  SUBMISSION_STATE_ONLY_TYPES,
+  VERIFY_SUBMISSION_INSTRUCTION_EN,
+  VERIFY_SUBMISSION_INSTRUCTION_JA,
+} from './verify-submission.js';
+import {
   CREDIT_SUMMARY_DESCRIPTION,
   CREDIT_SUMMARY_TITLE,
   creditSummaryShape,
@@ -297,6 +303,7 @@ export const SERVER_INSTRUCTIONS = [
   EXTERNAL_SIGNAL_INSTRUCTION_JA,
   ATTENDANCE_INSTRUCTION_JA,
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
+  VERIFY_SUBMISSION_INSTRUCTION_JA,
   ANNOUNCEMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   OPEN_LINK_INSTRUCTION_JA,
@@ -308,6 +315,7 @@ export const SERVER_INSTRUCTIONS = [
   EXTERNAL_SIGNAL_INSTRUCTION_EN,
   ATTENDANCE_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
+  VERIFY_SUBMISSION_INSTRUCTION_EN,
   ANNOUNCEMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
   OPEN_LINK_INSTRUCTION_EN,
@@ -327,6 +335,7 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
   ATTENDANCE_INSTRUCTION_JA,
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
+  VERIFY_SUBMISSION_INSTRUCTION_JA,
   ANNOUNCEMENT_CONTENT_INSTRUCTION_READONLY_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   OPEN_LINK_INSTRUCTION_JA,
@@ -335,6 +344,7 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   UNKNOWN_DEADLINE_POLICY_EN,
   ATTENDANCE_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
+  VERIFY_SUBMISSION_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
   OPEN_LINK_INSTRUCTION_EN,
   DOCUMENT_INSTRUCTION_JA,
@@ -357,6 +367,7 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   `保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」、メール・予定から見つけたものは「${EXTERNAL_SIGNAL_LABELS.gmail}」「${EXTERNAL_SIGNAL_LABELS.calendar}」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。`,
   ATTENDANCE_INSTRUCTION_JA,
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
+  VERIFY_SUBMISSION_INSTRUCTION_JA,
   ANNOUNCEMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   OPEN_LINK_INSTRUCTION_JA,
@@ -368,6 +379,7 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   EXTERNAL_SIGNAL_INSTRUCTION_EN,
   ATTENDANCE_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
+  VERIFY_SUBMISSION_INSTRUCTION_EN,
   ANNOUNCEMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
   OPEN_LINK_INSTRUCTION_EN,
@@ -897,7 +909,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '課題一覧',
       description:
-        '課題・レポート・提出物の一覧（締切順）。既定は未完了のみで、includeCompleted=true で提出済み・完了も含める。status "submitted" は提出システムが確認した場合にのみ付く（AI は提出済みにできない）。課題を解く・設問を見るときは assignmentId（または taskId）で get_assignment を呼ぶ。終了した学期の未提出課題（expired_past_term）は既定で出さず、includePast=true で含める。 / Assignments sorted by due date. Default: open only, without unfinished work of ended terms (includePast=true adds it). Task status `submitted` can only come from the submission system. To work on one, call get_assignment with its assignmentId / taskId (full prompts, choices, files, saved answers).',
+        '課題・レポート・提出物の一覧（締切順）。既定は未完了のみで、includeCompleted=true で提出済み・完了も含める。status "submitted" は提出システムが確認した場合にのみ付く（AI は提出済みにできない）。課題を解く・設問を見るときは assignmentId（または taskId）で get_assignment を呼ぶ。提出した直後に提出できたかを確かめるときは verify_submission を呼ぶ。終了した学期の未提出課題（expired_past_term）は既定で出さず、includePast=true で含める。 / Assignments sorted by due date. Default: open only, without unfinished work of ended terms (includePast=true adds it). Task status `submitted` can only come from the submission system. To work on one, call get_assignment with its assignmentId / taskId (full prompts, choices, files, saved answers); right after the student submits, confirm it with verify_submission.',
     },
     {
       courseOfferingId: courseIdField.optional(),
@@ -955,7 +967,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
         return { data: { task, note: 'この項目は課題に結びついていません（中身はありません）。' } };
       }
       let fetch: { status: string; error?: string } | undefined;
-      if (a.refresh !== false) {
+      // A source whose on-request read is only the submission state (LiveCampusU, Teams) has no
+      // content to read here; verify_submission reads that state.
+      const stateOnly = uc.sync.stores.sourceRefs.forEntity(assignmentId).some((r) => {
+        const raw = r.rawItemId ? uc.sync.stores.raw.get(r.rawItemId) : undefined;
+        return raw !== undefined && SUBMISSION_STATE_ONLY_TYPES.has(raw.sourceType);
+      });
+      if (a.refresh !== false && !stateOnly) {
         const run = deps.fetchDetails ?? ((ids: string[]) => fetchDetailsOnRequest(uc, ids));
         const running = run([assignmentId]);
         running.catch(() => undefined);
@@ -1279,6 +1297,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
   );
 
   registerRefreshTools(tool, { uc, startSync: deps.startSync });
+  registerVerifySubmissionTool(tool, {
+    uc,
+    fetchDetails: deps.fetchDetails ?? ((ids) => fetchDetailsOnRequest(uc, ids)),
+  });
 
   tool(
     'get_conflicts',

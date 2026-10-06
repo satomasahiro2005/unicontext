@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import type { Capability, HealthStatus } from '@unicontext/canonical-model';
 import type {
   AuthResult,
+  DetailFetchAdapter,
+  DetailFetchResult,
   DownloadableFile,
   FileDownloadAdapter,
   FileDownloadOutcome,
@@ -320,7 +322,7 @@ interface RunOutput {
  * received, and SharePoint's documented drive API from a page on the team site. Read-only.
  */
 export class TeamsWebAdapter
-  implements InteractiveAuthAdapter, FileDownloadAdapter, LinkResolvingAdapter
+  implements InteractiveAuthAdapter, FileDownloadAdapter, LinkResolvingAdapter, DetailFetchAdapter
 {
   readonly id: string;
   readonly fileSourceTypes = ['teamsweb.driveItem', LINK_ITEM_TYPE] as const;
@@ -812,6 +814,76 @@ export class TeamsWebAdapter
       pause: (ms) => this.pause(ms),
       logger: this.options.logger,
     });
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // On-request submission state (DetailFetchAdapter)
+
+  /**
+   * Re-read single assignments' submission state on the student's request (verify_submission right
+   * after turning in): the Assignments app lists the student's work again (`edu/me/work`, what the
+   * sync reads) and only the requested assignments are returned. Nothing is opened (opening an
+   * assignment records a view), nothing is downloaded, and the read-only route stays in place.
+   */
+  async fetchDetails(
+    requests: readonly { externalId: string; sourceType?: string; previousPayload?: unknown }[],
+    _options: { signal?: AbortSignal } = {},
+  ): Promise<DetailFetchResult> {
+    const out: DetailFetchResult = { items: [], results: [], warnings: [] };
+    const wanted = requests.filter((r) => {
+      if (r.sourceType === undefined || r.sourceType === 'teamsweb.assignment') return true;
+      out.results.push({
+        externalId: r.externalId,
+        status: 'failed',
+        error: `no on-request read for ${r.sourceType}`,
+      });
+      return false;
+    });
+    if (wanted.length === 0) return out;
+    if (!this.options.config.assignments) {
+      for (const r of wanted)
+        out.results.push({
+          externalId: r.externalId,
+          status: 'failed',
+          error: 'reading Assignments is turned off (sources.teams-web.assignments)',
+        });
+      return out;
+    }
+    const res = await this.options.withClient(async (client) => {
+      await client.open();
+      return client.assignments();
+    });
+    if ('auth' in res)
+      throw new AuthRequiredError(res.auth.message ?? 'Microsoft sign-in required');
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const raw of res.result.items) {
+      const id = str(raw.id);
+      if (id) byId.set(id, raw);
+    }
+    for (const r of wanted) {
+      const raw = byId.get(r.externalId);
+      if (!raw) {
+        out.results.push(
+          res.result.complete
+            ? { externalId: r.externalId, status: 'notFound' }
+            : {
+                externalId: r.externalId,
+                status: 'failed',
+                error: 'the Assignments app did not list it this time',
+              },
+        );
+        continue;
+      }
+      const a = scrubSecrets(raw);
+      out.items.push({
+        sourceType: 'teamsweb.assignment',
+        externalId: r.externalId,
+        payload: a,
+        ...(str(a.lastModifiedDateTime) ? { sourceUpdatedAt: str(a.lastModifiedDateTime) } : {}),
+      });
+      out.results.push({ externalId: r.externalId, status: 'fetched' });
+    }
+    return out;
   }
 
   // -------------------------------------------------------------------------------------------

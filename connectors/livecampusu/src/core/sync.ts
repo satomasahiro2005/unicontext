@@ -12,7 +12,7 @@ import {
   zonedParts,
 } from '@unicontext/core';
 import type { ContactKind, LcuDeploymentProfile } from './deployment.js';
-import { parseAssignmentList } from './parsers/assignments.js';
+import { type AssignmentRow, parseAssignmentList } from './parsers/assignments.js';
 import { parseCalendarEvents } from './parsers/calendar.js';
 import {
   type NoticeListRow,
@@ -44,6 +44,7 @@ import {
   type TimetableEntry,
 } from './parsers/timetable.js';
 import {
+  type AssignmentPayload,
   type ClassSubject,
   type CoursePayload,
   type ImportantNotice,
@@ -413,12 +414,7 @@ async function runLcuSyncSteps(ctx: LcuSyncContext, input: SyncInput): Promise<L
   await step('assignments', async () => {
     subjectLists.clear();
     subjectListsOk = false;
-    const listPage = await session.open(d.screens.assignmentList);
-    const fields = d.forms.assignmentSearch.map(
-      ([k, v]) => [k, v.replaceAll('{year}', String(o.academicYear))] as const,
-    );
-    const page = fields.length ? await session.post(d.actions.assignmentSearch, fields) : listPage;
-    assignmentRows = parseAssignmentList(page.html);
+    assignmentRows = await readAssignmentRows(session, d, o.academicYear);
     const f = d.forms.classSubjectList;
     for (const sem of o.semesters) {
       const v = await session.postJson(d.endpoints.classSubjectList, {
@@ -452,26 +448,14 @@ async function runLcuSyncSteps(ctx: LcuSyncContext, input: SyncInput): Promise<L
 
   for (const r of assignmentRows) {
     const off = index.resolveSubjectText(r.subjectText);
-    add({
-      sourceType: RAW_TYPES.assignment,
-      externalId: r.submissionSeq,
-      payload: {
-        submissionSeq: r.submissionSeq,
-        year: o.academicYear,
-        submissionType: r.submissionType,
-        subjectText: r.subjectText,
-        title: r.title,
-        statusName: r.statusName,
-        statusCode: r.statusCode,
-        submittalTerm: r.submittalTerm,
-        submittalStatus: r.submittalStatus,
-        context: off ? { offeringKey: off.key, offeringTitle: off.title } : {},
-        source: {
-          screen: d.screens.assignmentList,
-          selector: `tr[submissionSeq=${r.submissionSeq}]`,
-        },
-      },
-    });
+    add(
+      assignmentItem(
+        d,
+        o.academicYear,
+        r,
+        off ? { offeringKey: off.key, offeringTitle: off.title } : {},
+      ),
+    );
   }
 
   for (const ev of calendar) {
@@ -1232,6 +1216,96 @@ export async function openNoticesOnDemand(
     if (list.screenId !== d.screens.noticeList) list = await session.open(d.screens.noticeList);
   }
   return { items, results, warnings };
+}
+
+/**
+ * 課題・アンケートリスト of one academic year (the list screen and its search post; nothing else).
+ * The same read the sync makes; the 課題提出 screen itself is never opened (policy).
+ */
+export async function readAssignmentRows(
+  session: LcuSession,
+  d: LcuDeploymentProfile,
+  year: number,
+): Promise<AssignmentRow[]> {
+  const listPage = await session.open(d.screens.assignmentList);
+  const fields = d.forms.assignmentSearch.map(
+    ([k, v]) => [k, v.replaceAll('{year}', String(year))] as const,
+  );
+  const page = fields.length ? await session.post(d.actions.assignmentSearch, fields) : listPage;
+  return parseAssignmentList(page.html);
+}
+
+/** The `lcu.assignment` raw item of one list row. */
+export function assignmentItem(
+  d: LcuDeploymentProfile,
+  year: number,
+  r: AssignmentRow,
+  context: AssignmentPayload['context'],
+): RawItem {
+  const payload: AssignmentPayload = {
+    submissionSeq: r.submissionSeq,
+    year,
+    submissionType: r.submissionType,
+    subjectText: r.subjectText,
+    title: r.title,
+    statusName: r.statusName,
+    statusCode: r.statusCode,
+    submittalTerm: r.submittalTerm,
+    submittalStatus: r.submittalStatus,
+    context,
+    source: {
+      screen: d.screens.assignmentList,
+      selector: `tr[submissionSeq=${r.submissionSeq}]`,
+    },
+  };
+  return { sourceType: RAW_TYPES.assignment, externalId: r.submissionSeq, payload };
+}
+
+export interface OnDemandAssignmentRequest {
+  submissionSeq: string;
+  /** The stored payload (its year and course context are kept). */
+  previous?: AssignmentPayload | undefined;
+}
+
+export interface OnDemandAssignmentOutcome {
+  items: RawItem[];
+  results: { submissionSeq: string; status: 'fetched' | 'notFound' }[];
+}
+
+/**
+ * Re-read the submission state (提出済 / 未提出) of these assignments now, on the student's request
+ * (verify_submission right after submitting): the 課題・アンケートリスト of each one's year, and only
+ * the requested rows are returned. Read-only like the sync step; file bodies are never touched
+ * (LiveCampusU downloads stay denied) and the 課題提出 screen is never opened.
+ */
+export async function readAssignmentsOnDemand(
+  ctx: LcuSyncContext,
+  requests: readonly OnDemandAssignmentRequest[],
+  signal?: AbortSignal,
+): Promise<OnDemandAssignmentOutcome> {
+  const { session, deployment: d } = ctx;
+  const items: RawItem[] = [];
+  const results: OnDemandAssignmentOutcome['results'] = [];
+  const byYear = new Map<number, OnDemandAssignmentRequest[]>();
+  for (const r of requests) {
+    const year = r.previous?.year ?? ctx.options.academicYear;
+    byYear.set(year, [...(byYear.get(year) ?? []), r]);
+  }
+  session.beginRun(signal);
+  await session.bootstrap();
+  for (const [year, wanted] of byYear) {
+    const rows = await readAssignmentRows(session, d, year);
+    for (const w of wanted) {
+      const row = rows.find((r) => r.submissionSeq === w.submissionSeq);
+      if (!row) {
+        results.push({ submissionSeq: w.submissionSeq, status: 'notFound' });
+        continue;
+      }
+      items.push(assignmentItem(d, year, row, w.previous?.context ?? {}));
+      results.push({ submissionSeq: w.submissionSeq, status: 'fetched' });
+    }
+  }
+  return { items, results };
 }
 
 export { VERSION_PRODUCT };

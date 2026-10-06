@@ -1204,6 +1204,19 @@ own inference. Output `{taskId, title, previousStatus, status, steps, percent?, 
   `document:` of an Ed lesson, re-reads it through `fetchDetailsOnRequest` (the source's `DetailFetchAdapter`; for
   mapped adapters the mapping's `details` rule), and returns the deadline/status plus, for an Ed lesson, every slide
   with its text, quiz questions (prompt, choices, the student's saved answer) and files; never answer keys.
+  It reads live only where there is content (an Ed lesson); for sources whose on-request read is just
+  the submission state (`lcu.assignment`, `teamsweb.assignment`) it answers from what is stored.
+  `verify_submission` (`verify-submission.ts`) is the check right after the student says they handed
+  something in: it re-reads that ONE assignment through the same `fetchDetailsOnRequest` path
+  (Ed: the `details` rule incl. `list_lessons` for the lesson's progress; LiveCampusU: the
+  assignment list row; Teams: the Assignments app's work list), bypassing freshness budgets and the
+  schedule, at most once per assignment per 30 s (in-process; a repeat answers with that read,
+  concurrent calls share one read), waits up to 45 s, and returns `submission` (status, submitted,
+  submittedAt where the source has it, sourceStatus, checkedAt), Ed's saved `answers[]`, the
+  submitted `files[]` (Ed: documents mapped from the files/images in the student's answers, opened
+  only by `get_document`) and `limits` (what the source cannot confirm). Syncs stay metadata-only for
+  files: saved answers and file lists are read only on request and bytes only by `get_document` /
+  `download_course_file`.
 - `@unicontext/daemon` (apps/daemon): `createRuntime` (config + profile + dynamic connector loading + secrets, shared by
   the CLI and MCP stdio), `startDaemon` (lock file, scheduler, notifications, Fastify on 127.0.0.1: REST `/api/v1`, Web
   UI static files, `/mcp`), `DaemonClient`, service install helpers and `api-types` (wire types, type-only subpath).

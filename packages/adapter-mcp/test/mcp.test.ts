@@ -502,7 +502,7 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
       'list_slide_questions',
       'list_threads',
     ];
-    // + two read tools only called on the student's request (get_assignment)
+    // + two read tools only called on the student's request (get_assignment, verify_submission)
     expect(adapter.mappedTools().sort()).toEqual(
       [...syncTools, 'list_lesson_files', 'list_slide_responses'].sort(),
     );
@@ -886,12 +886,19 @@ describe('EdStem through edstem-mcp (bunizao/edstem-cli)', () => {
     expect(res.results).toEqual([{ externalId: '2002', status: 'fetched' }]);
     expect(res.warnings).toEqual([]);
     expect(calls.slice(start).map((c) => c.tool)).toEqual([
+      'list_lessons',
       'get_lesson',
       'list_slide_questions',
       'list_slide_responses',
       'list_lesson_files',
     ]);
+    // the course's lesson list again (the progress = submission state), metadata only
+    expect(calls.slice(start)[0]?.args).toEqual({ courseId: 55 });
     expect(res.items.map((i) => `${i.sourceType}:${i.externalId}`).sort()).toEqual([
+      'edstem.lesson:2001',
+      'edstem.lesson:2002',
+      'edstem.lesson:2003',
+      'edstem.lesson:2004',
       'edstem.lesson_detail:2002',
       'edstem.slide_question:404981',
       'edstem.slide_question:423710',

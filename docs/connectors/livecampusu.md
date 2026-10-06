@@ -204,6 +204,17 @@ complete (at Shizuoka it held the 祝日 of 2025–2027 and a few 行事), so `l
 "complete". 祝日 (`listType: Holiday`) stop generated weekly classes (see ARCHITECTURE §3.10
 `ClassSchedule`). The whole run is one page (a few dozen requests).
 
+**Submission state on request** (`fetchDetails`, MCP `verify_submission`): right after the student
+says they handed an assignment in, the adapter re-reads the 課題・アンケートリスト of that
+assignment's year (landing page, `SC_14002B00_01` `init` + `search`, the same requests as step 4)
+and returns only the requested `lcu.assignment` rows (their stored course context is kept). It is
+serialized with `sync()`, refused in the maintenance window, and never opens a row, the 課題提出
+screen (`SC_14002B00_03`) or a file. What it can confirm is 提出済 / 未提出 (and 受付中 / 締切 with
+the 提出期間); the list has no submission time, and the submitted text or files are only on the
+submission screen, which the policy denies (as it denies every LiveCampusU download). Showing the
+student their own submitted file would need a read-only GET of that screen or its file, which
+CONNECTOR_POLICY does not allow today; it is not done.
+
 **Nightly maintenance**: inside `maintenanceWindow` (profile timezone) `sync()` throws
 `OfflineError` without any request and `health()` reports `offline`. The Shizuoka window
 `01:00-06:00` is a conservative guess (the FAQ gives no time).

@@ -56,10 +56,13 @@ products:
 `);
 
 /** Rows of lcu-kadai-list-rows-SC_14002B00_01.json rendered like the server's DataTables HTML. */
-export function kadaiListHtml(): string {
+export function kadaiListHtml(submitted: ReadonlySet<string> = new Set()): string {
   const data = jsonFixture<{ rows: { _index: string; cells: string[] }[] }>(
     'lcu-kadai-list-rows-SC_14002B00_01.json',
   );
+  for (const r of data.rows)
+    if (r.cells[1] !== undefined && submitted.has(r.cells[1]))
+      r.cells[7] = '<span class="c-status-done"> 提出済 </span>';
   const ids = [
     ['submissionTypeName', true],
     ['submissionSeq', false],
@@ -157,6 +160,8 @@ export class FakeLcuServer {
   submissionInformation: unknown[];
   warningNotice: unknown[];
   detailBody = '（本文）';
+  /** Assignments (submissionSeq) the list shows as 提出済 (the student handed them in). */
+  submittedSeqs = new Set<string>();
   /** Files the detail's fileUpload/load call lists. */
   attachments: { name: string; size: number; deleted?: boolean }[] = [
     { name: '資料.pdf', size: 12345 },
@@ -386,7 +391,7 @@ ${body}</body></html>`;
           '試験時間割',
         );
       case 'GET SC_14002B00_01':
-        return this.html(kadaiListHtml(), '課題・アンケートリスト');
+        return this.html(kadaiListHtml(this.submittedSeqs), '課題・アンケートリスト');
       case 'POST SC_14002B00_01/search':
         // URL rewriting as seen when cookies are not trusted: ;jsessionid= in the Location.
         return new Response(null, {

@@ -155,6 +155,18 @@ expose other members' roles). Class teams join the academic system's offerings t
 resolver (same normalized title and year, teacher when known); unclear matches wait for
 confirmation (`unicontext confirm --list`, the Web UI's 紐付けの確認).
 
+### Submission state on request (`verify_submission`)
+
+`fetchDetails` (DetailFetchAdapter) takes `teamsweb.assignment` items: right after the student
+turns an assignment in, it boots the client, opens the Assignments app and lets it list the
+student's work (`edu/me/work`, the same responses step 1 of a sync reads), and returns only the
+requested assignments. No channel is visited, no library listed, no assignment opened (that would
+record a view for the teacher) and nothing downloaded; the read-only route stays installed. An
+assignment the app did not list is `notFound` when the listing was complete and `failed`
+otherwise. The list gives the status (`submitted`, `returned`, …) and `submittedDateTime`, but not
+the submitted files (`resourcesFolderUrl` is empty there), so UniContext cannot show them; the
+student checks them on the assignment in Teams.
+
 ## Config (`sources.teams-web`)
 
 | Key                                               | Default                                                         |

@@ -4,6 +4,8 @@ import type { Capability, HealthStatus } from '@unicontext/canonical-model';
 import type {
   AuthResult,
   ConnectorContext,
+  DetailFetchAdapter,
+  DetailFetchResult,
   InteractiveAuthAdapter,
   InteractiveLoginOptions,
   OpenAnnouncementsAdapter,
@@ -30,12 +32,13 @@ import {
   resolveDeployment,
 } from './core/deployment.js';
 import { LcuSession } from './core/session.js';
-import { NoticePayloadSchema } from './core/schemas.js';
+import { AssignmentPayloadSchema, NoticePayloadSchema, RAW_TYPES } from './core/schemas.js';
 import {
   type LcuCursorExtra,
   type LcuSyncContext,
   type NoticeCacheEntry,
   openNoticesOnDemand,
+  readAssignmentsOnDemand,
   runLcuSync,
   type VersionState,
 } from './core/sync.js';
@@ -86,7 +89,11 @@ export function currentAcademicYear(now: Date, tz: string): number {
  * Implements VersionAwareAdapter (§72) and InteractiveAuthAdapter (login/logout via the strategy).
  */
 export class LiveCampusUAdapter
-  implements VersionAwareAdapter, InteractiveAuthAdapter, OpenAnnouncementsAdapter
+  implements
+    VersionAwareAdapter,
+    InteractiveAuthAdapter,
+    OpenAnnouncementsAdapter,
+    DetailFetchAdapter
 {
   readonly id: string;
   readonly version = metadata.version;
@@ -277,6 +284,47 @@ export class LiveCampusUAdapter
         })),
         warnings: outcome.warnings,
       };
+    });
+  }
+
+  /**
+   * Re-read the submission state (提出済 / 未提出) of single assignments on the student's request
+   * (verify_submission). Only `lcu.assignment` items: the 課題・アンケートリスト is read again and the
+   * requested rows are returned. Serialized with sync(); never opens the 課題提出 screen and never
+   * downloads anything.
+   */
+  fetchDetails(
+    requests: readonly { externalId: string; sourceType?: string; previousPayload?: unknown }[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<DetailFetchResult> {
+    return this.exclusive(async () => {
+      const out: DetailFetchResult = { items: [], results: [], warnings: [] };
+      const wanted = requests.filter((r) => {
+        if (r.sourceType === undefined || r.sourceType === RAW_TYPES.assignment) return true;
+        out.results.push({
+          externalId: r.externalId,
+          status: 'failed',
+          error: `no on-request read for ${r.sourceType}`,
+        });
+        return false;
+      });
+      if (wanted.length === 0) return out;
+      if (this.inMaintenance())
+        throw new OfflineError(
+          `LiveCampusU nightly maintenance window (${this.deployment.maintenanceWindow ?? ''})`,
+        );
+      const outcome = await readAssignmentsOnDemand(
+        this.syncContext(this.ctx.clock.now()),
+        wanted.map((r) => {
+          const prev = AssignmentPayloadSchema.safeParse(r.previousPayload);
+          return { submissionSeq: r.externalId, ...(prev.success ? { previous: prev.data } : {}) };
+        }),
+        options.signal,
+      );
+      out.items.push(...outcome.items);
+      for (const r of outcome.results)
+        out.results.push({ externalId: r.submissionSeq, status: r.status });
+      return out;
     });
   }
 

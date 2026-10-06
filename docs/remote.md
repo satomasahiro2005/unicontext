@@ -26,7 +26,8 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
 - **Tools**: the read tools (`get_today`, `get_week`, `get_course`, `get_deadlines`,
   `get_assignments`, `get_tasks`, `get_notes`, `search`, `get_source`, `get_conflicts`,
   `prepare_for_class`, `review_class`, `get_recent_changes`, `get_announcements`,
-  `get_announcement`, `search_syllabus`, `get_syllabus`, `get_credit_summary`, …), each with
+  `get_announcement`, `search_syllabus`, `get_syllabus`, `get_credit_summary`,
+  `verify_submission`, …), each with
   `readOnlyHint: true` and an output schema. Results are kept small for ChatGPT (see
   [Result size](#result-size)).
   With the `unicontext.write` scope only, also the record tools `ingest_lecture`,

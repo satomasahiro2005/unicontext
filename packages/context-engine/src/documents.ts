@@ -11,7 +11,7 @@ import {
   downloadCourseFiles,
   resolveFileRef,
 } from './files.js';
-import { type DocumentImage, renderImageFile } from './render/image.js';
+import { type DocumentImage, renderImageFile, sniffImageMime } from './render/image.js';
 import { renderPdf } from './render/pdf.js';
 import { renderDocx, renderPptx } from './render/pptx.js';
 import {
@@ -558,6 +558,10 @@ function kindOfFile(name: string, mime: string | undefined, bytes: Uint8Array): 
   if (m.includes('wordprocessingml')) return 'docx';
   if (m.startsWith('image/')) return m.slice(6).replace('jpeg', 'jpg');
   if (m.startsWith('text/')) return 'txt';
+  // A name without an extension and no useful type (an image pasted into an Ed answer is served
+  // as a bare file id): the bytes tell.
+  const sniffed = sniffImageMime(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+  if (sniffed) return sniffed.slice(6).replace('jpeg', 'jpg');
   return '';
 }
 
