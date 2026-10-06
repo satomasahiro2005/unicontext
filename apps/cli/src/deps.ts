@@ -158,9 +158,11 @@ export function defaultPrompt(question: string): Promise<string> {
   // the prompt goes to stderr so stdout stays clean for pipes
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   return new Promise((resolve) => {
+    // Resolve before close(): close() emits 'close' synchronously, and that handler's '' would
+    // otherwise win over the typed answer.
     rl.question(question, (answer) => {
-      rl.close();
       resolve(answer);
+      rl.close();
     });
     rl.once('close', () => resolve(''));
   });
