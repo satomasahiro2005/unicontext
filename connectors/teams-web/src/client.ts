@@ -20,6 +20,7 @@ import {
   READ_REPLY_CHAINS,
   SCROLL_TO_END,
 } from './page-scripts.js';
+import { LINK_GET_JSON } from './link-resolver.js';
 import { ASSIGNMENTS_APP_ID } from './parse.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -82,6 +83,22 @@ export interface TeamsWebClient {
     request: StreamFileRequest,
     onChunk: (chunk: Uint8Array) => Promise<void>,
   ): Promise<StreamFileResult>;
+  /**
+   * Same-origin GET of a JSON resource from a page on `siteUrl`'s host (open_link: SharePoint /
+   * OneDrive links). `redeemSharingLink` sends `Prefer: redeemSharingLinkIfNecessary`.
+   */
+  getJson?(
+    siteUrl: string,
+    url: string,
+    options?: { redeemSharingLink?: boolean },
+  ): Promise<JsonGetResult>;
+}
+
+export interface JsonGetResult {
+  status: number;
+  body?: unknown;
+  retryAfter?: string | null;
+  error?: string;
 }
 
 export interface StreamFileRequest {
@@ -541,6 +558,17 @@ export class PlaywrightTeamsClient implements TeamsWebClient {
       await page.evaluate(call(DOWNLOAD_CLOSE, { key })).catch(() => undefined);
     }
     return { ok: true, bytes, contentType: opened.contentType || undefined };
+  }
+
+  async getJson(
+    siteUrl: string,
+    url: string,
+    options: { redeemSharingLink?: boolean } = {},
+  ): Promise<JsonGetResult> {
+    const page = await this.sharepointPage(siteUrl);
+    return (await page.evaluate(
+      call(LINK_GET_JSON, { url, redeem: options.redeemSharingLink === true }),
+    )) as JsonGetResult;
   }
 
   async close(): Promise<void> {

@@ -524,7 +524,8 @@ export function createTeamsWebNormalizer(): Normalizer {
             ? { ...normalizeCard(r.data, ctx), drift: findings }
             : fail(r.error.message);
         }
-        case 'teamsweb.driveItem': {
+        case 'teamsweb.driveItem':
+        case 'teamsweb.linkItem': {
           const r = DriveItemPayloadSchema.safeParse(item.payload);
           return r.success
             ? { ...normalizeDriveItem(r.data, ctx), drift: findings }

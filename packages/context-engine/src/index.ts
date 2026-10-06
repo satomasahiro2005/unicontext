@@ -10,6 +10,7 @@ export * from './announcements.js';
 export * from './announcement-open.js';
 export * from './discussion.js';
 export * from './files.js';
+export * from './open-link.js';
 export * from './vpn-files.js';
 export * from './change-digest.js';
 export * from './next-action.js';

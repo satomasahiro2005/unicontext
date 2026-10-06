@@ -1,4 +1,5 @@
 export * from './adapter.js';
+export * from './links.js';
 export * from './metadata.js';
 export * from './normalizer.js';
 export * from './connector.js';

@@ -4,6 +4,8 @@ import {
   MAX_DOWNLOADS_PER_REQUEST,
   mirrorFiles,
   type MirrorReport,
+  openLink,
+  type OpenLinkReport,
 } from '@unicontext/context-engine';
 import type { Command } from 'commander';
 import type { CliContext } from '../context.js';
@@ -63,6 +65,22 @@ async function mirrorVia(ctx: CliContext, sourceId: string | undefined): Promise
   return mirrorFiles(rt.uc, { filesDir: rt.filesDir, ...(sourceId ? { sourceId } : {}) });
 }
 
+async function openLinkVia(
+  ctx: CliContext,
+  url: string,
+  extract: boolean,
+): Promise<OpenLinkReport> {
+  const daemon = await ctx.daemon();
+  if (daemon)
+    return daemon.post<OpenLinkReport>(
+      '/api/v1/files/open-link',
+      { url, extract },
+      { timeoutMs: TIMEOUT_MS },
+    );
+  const rt = await ctx.runtime();
+  return openLink(rt.uc, url, { filesDir: rt.filesDir, extract });
+}
+
 export function registerFiles(program: Command, h: Harness): void {
   const files = program
     .command('files')
@@ -109,6 +127,40 @@ export function registerFiles(program: Command, h: Harness): void {
           for (const w of all.warnings) ctx.err(ctx.style.dim(`  ${w}`));
         }
         return all.results.some((r) => r.status === 'failed' || r.status === 'notFound') ? 1 : 0;
+      }),
+    );
+
+  files
+    .command('open')
+    .description(
+      'SharePoint / OneDriveのリンク（メールの共有リンクなど）を開く：ファイルはダウンロードして本文を検索できるように、フォルダーは中身を一覧（大学側は読み取りのみ） / Open a SharePoint or OneDrive link',
+    )
+    .argument('<url>', 'SharePoint / OneDriveのURL')
+    .option('--no-text', '本文を抽出しない / do not extract text')
+    .action(
+      action<{ text?: boolean }>(h, async (ctx, { args, opts }) => {
+        const url = typeof args[0] === 'string' ? args[0] : '';
+        if (!url) throw new UsageError('開くリンクを指定してください');
+        const r = await openLinkVia(ctx, url, opts.text !== false);
+        if (ctx.json) ctx.printJson(r);
+        else if (r.status === 'file' && r.file) {
+          const f = r.file;
+          ctx.out(`${ctx.text(f.title ?? '')}  ${f.id}`);
+          ctx.out(
+            `  ${STATUS_LABELS[f.status]}  ${formatBytes(f.bytes ?? f.sizeBytes)}${f.text ? `  本文${f.text.chunks}チャンク` : ''}${f.course ? `  ${ctx.text(f.course.title)}` : ''}`,
+          );
+          if (f.path ?? f.error) ctx.out(`  ${f.path ?? f.error}`);
+        } else if (r.status === 'folder') {
+          ctx.out(
+            `${ctx.text(r.folder?.name ?? '')}/${r.folder?.course ? `  ${ctx.text(r.folder.course.title)}` : ''}`,
+          );
+          for (const d of r.folders ?? []) ctx.out(`  ${ctx.text(d.name)}/  ${d.url ?? ''}`);
+          for (const f of r.files ?? [])
+            ctx.out(`  ${ctx.text(f.name)}  ${formatBytes(f.sizeBytes)}  ${f.id}`);
+          if (r.truncated) ctx.out('  …（一部だけ表示）');
+        } else ctx.out(`${r.status}: ${r.reason ?? ''}`);
+        for (const w of r.warnings) ctx.err(ctx.style.dim(`  ${w}`));
+        return r.status === 'file' || r.status === 'folder' ? 0 : 1;
       }),
     );
 

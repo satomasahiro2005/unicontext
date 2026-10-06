@@ -11,6 +11,9 @@ import type {
   FileDownloadSettings,
   InteractiveAuthAdapter,
   InteractiveLoginOptions,
+  LinkContext,
+  LinkResolution,
+  LinkResolvingAdapter,
   RawDeletion,
   RawItem,
   SyncInput,
@@ -34,6 +37,7 @@ import {
   type TeamsWebClient,
 } from './client.js';
 import type { TeamsWebConfig } from './config.js';
+import { isMicrosoftFileHost, LINK_ITEM_TYPE, resolveSharePointLink } from './link-resolver.js';
 import { PRODUCT } from './metadata.js';
 import {
   ASSIGNMENTS_BOT_MRI,
@@ -315,9 +319,12 @@ interface RunOutput {
  * §6): the client's own cache after it loaded each channel, the Assignments responses the client
  * received, and SharePoint's documented drive API from a page on the team site. Read-only.
  */
-export class TeamsWebAdapter implements InteractiveAuthAdapter, FileDownloadAdapter {
+export class TeamsWebAdapter
+  implements InteractiveAuthAdapter, FileDownloadAdapter, LinkResolvingAdapter
+{
   readonly id: string;
-  readonly fileSourceTypes = ['teamsweb.driveItem'] as const;
+  readonly fileSourceTypes = ['teamsweb.driveItem', LINK_ITEM_TYPE] as const;
+  readonly linkContextSourceTypes = ['teamsweb.team', 'teamsweb.driveItem'] as const;
   readonly fileTextSourceTypes = ['teamsweb.fileText'] as const;
   readonly version = '1.0.0';
   private healthState: HealthStatus;
@@ -793,6 +800,21 @@ export class TeamsWebAdapter implements InteractiveAuthAdapter, FileDownloadAdap
   }
 
   // -------------------------------------------------------------------------------------------
+  // SharePoint / OneDrive links (LinkResolvingAdapter, see link-resolver.ts)
+
+  canOpenLink(url: string): boolean {
+    return isMicrosoftFileHost(url);
+  }
+
+  resolveLink(url: string, context: LinkContext): Promise<LinkResolution> {
+    return resolveSharePointLink(url, context, {
+      withClient: this.options.withClient,
+      pause: (ms) => this.pause(ms),
+      logger: this.options.logger,
+    });
+  }
+
+  // -------------------------------------------------------------------------------------------
   // On-demand downloads and the mirror (FileDownloadAdapter)
 
   fileSettings(): FileDownloadSettings {
@@ -816,7 +838,8 @@ export class TeamsWebAdapter implements InteractiveAuthAdapter, FileDownloadAdap
     externalId: string;
     payload: unknown;
   }): DownloadableFile | undefined {
-    if (item.sourceType !== 'teamsweb.driveItem') return undefined;
+    if (item.sourceType !== 'teamsweb.driveItem' && item.sourceType !== LINK_ITEM_TYPE)
+      return undefined;
     const r = DriveItemPayloadSchema.safeParse(item.payload);
     if (!r.success) return undefined;
     const p = r.data;
@@ -827,7 +850,8 @@ export class TeamsWebAdapter implements InteractiveAuthAdapter, FileDownloadAdap
       name: it.name,
       container: p.teamName,
       containerId: p.teamGroupId,
-      isClass: p.spaceType === 'class',
+      // Files opened through a link are not part of a class library (never mirrored).
+      isClass: p.spaceType === 'class' && item.sourceType === 'teamsweb.driveItem',
       folder: driveFolder(it.parentReference?.path),
       version: versionOf(it),
       sizeBytes: typeof it.size === 'number' ? it.size : undefined,

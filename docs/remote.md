@@ -43,7 +43,10 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
   it), bound to the calling OAuth client — a request that carries another client's bearer token is
   refused (403); the link itself is the capability, since ChatGPT or the user's browser fetch it
   without the MCP token. Minting (`file_link`) and every fetch (`file_fetch`, ok/status, bytes) are
-  audited with a hash tag of the token, never the token. The propose-only tools (`correct_fact`,
+  audited with a hash tag of the token, never the token. `open_link` (read-only) opens a
+  SharePoint / OneDrive link from an email or a message through the Teams session and answers like
+  `download_course_file` (text, optional `link`) for a file, or with the files (document ids) and
+  subfolders of a folder; a link it cannot open returns `status` and `reason`. The propose-only tools (`correct_fact`,
   `propose_pace_slot`) are **never registered** on this surface, so a call to them fails as an
   unknown tool. `get_source` returns the citation and the facts it supports, but no raw source
   payloads.

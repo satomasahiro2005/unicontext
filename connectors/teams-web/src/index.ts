@@ -2,6 +2,7 @@ export * from './adapter.js';
 export * from './client.js';
 export * from './config.js';
 export * from './connector.js';
+export * from './link-resolver.js';
 export * from './metadata.js';
 export * from './normalizer.js';
 export * from './parse.js';
