@@ -13,8 +13,9 @@ import type { EnvelopeOptions } from './envelope.js';
  * `refresh_sources`: bring the sources behind an answer up to date when a view says its
  * information is older than its use allows (the answer hint names it). Read-only toward the
  * university (each source is read the way its scheduled sync reads it, never written to), and
- * rate-limited by the scheduler: a source is not read again within 10 minutes of its last
- * forced or successful run, one that needs a login or is backing off is skipped, and all
+ * rate-limited by the scheduler: a source still within its freshness budget is not read (it only
+ * replaces a missed scheduled run), a reference-only source never is, a source is not read again
+ * within 10 minutes (or its schedule interval) of its last forced or successful run, one that needs a login or is backing off is skipped, and all
  * forced runs together are capped per hour. The daemon enforces this for its REST endpoint too.
  */
 
@@ -22,7 +23,7 @@ export const REFRESH_MAX_WAIT_MS = 60_000;
 export const REFRESH_TOOL = {
   title: '情報源を更新',
   description:
-    '回答の根拠になっている情報源を今すぐ読み直す。get_today などの answerHint に「◯◯ は N分前の情報です。refresh_sources で更新できます」とあるとき、学生に確認を頼まず、先にこれを呼ぶ。course（科目）・capabilities（schedule=休講・教室 / deadlines・assignments=課題・締切 / announcements / messages / materials / calendar / grades / attendance）・sources（情報源の id）で対象を絞る（省略すると全部）。10分以内に取得済み・要ログイン・失敗が続いて待機中の情報源は読み直さず skipped に理由を返す。同じ情報源は10分に1回、全体で1時間に6回まで。大学の画面には何も送信しない（読むだけ）。wait=true で最大60秒まで終わるのを待つ（省略時は開始だけ）。freshnessBefore は更新前の古さ。更新後は get_today などを呼び直す。 / Re-read the sources behind an answer now. Call it yourself (never ask the student to check) when an answerHint says a source’s information is N minutes old. Narrow with course, capabilities (schedule = cancellations/rooms, deadlines/assignments, announcements, messages, materials, calendar, grades, attendance) or sources (ids); omit to refresh all. Sources read within 10 minutes, needing a login, or backing off are skipped with a reason; at most one run per source per 10 minutes and 6 per hour overall. Read-only at the university. wait=true waits up to 60 s. Then call the view again.',
+    '回答の根拠になっている情報源を今すぐ読み直す。get_today などの answerHint に「◯◯ は N分前の情報です。refresh_sources で更新できます」とあるとき、学生に確認を頼まず、先にこれを呼ぶ。hint に情報源の id があればその id だけを sources で指定して呼ぶ（全部を指定・省略はしない）。course（科目）・capabilities（schedule=休講・教室 / deadlines・assignments=課題・締切 / announcements / messages / materials / calendar / grades / attendance）・sources（情報源の id）で対象を絞る。許容の古さ以内の情報源・自動の周期より早い情報源・シラバスなど参照用の情報源・要ログイン・失敗が続いて待機中の情報源は読み直さず skipped に理由（fresh, reference_only など）を返す（呼んでも全部は読み直さない）。同じ情報源は10分に1回、全体で1時間に6回まで。大学の画面には何も送信しない（読むだけ）。wait=true で最大60秒まで終わるのを待つ（省略時は開始だけ）。freshnessBefore は更新前の古さ。更新後は get_today などを呼び直す。 / Re-read the sources behind an answer now. Call it yourself (never ask the student to check) when an answerHint says a source’s information is N minutes old. Narrow with course, capabilities (schedule = cancellations/rooms, deadlines/assignments, announcements, messages, materials, calendar, grades, attendance) or sources (ids); if the hint lists source ids pass exactly those in sources. Sources still within the freshness budget of their use, read more recently than their own schedule interval, reference-only (syllabus catalog), needing a login, or backing off are skipped with a reason (fresh, reference_only, ...), so an unfiltered call does not re-read everything; at most one run per source per 10 minutes and 6 per hour overall. Read-only at the university. wait=true waits up to 60 s. Then call the view again.',
 } as const;
 
 export const refreshShape = {
@@ -84,6 +85,8 @@ export function inProcessSyncStarter(uc: UniContext): SyncStarter {
 export type RefreshSkipReason =
   | 'unknown_source'
   | 'not_loaded'
+  | 'reference_only'
+  | 'fresh'
   | 'auth_required'
   | 'backoff'
   | 'recently_forced'
@@ -137,6 +140,8 @@ function view(s: SourceFreshness): RefreshSourceView {
 }
 
 const REFUSALS = new Set<RefreshSkipReason>([
+  'reference_only',
+  'fresh',
   'auth_required',
   'backoff',
   'recently_forced',
@@ -197,7 +202,14 @@ export async function refreshSources(
       });
       continue;
     }
-    const verdict = uc.scheduler.checkOnDemand(t.sourceId);
+    // A forced run only replaces a scheduled run that was missed: a source still within the
+    // budget of what it is used for (the uses asked for, else all it serves) is not read, and
+    // none is read again sooner than its own schedule (CONNECTOR_POLICY: never poll faster than
+    // the defaults unless the user asks; the AI calling this on its own is not the user asking).
+    const verdict = uc.scheduler.checkOnDemand(t.sourceId, {
+      maxAgeMs: t.budgetMinutes * 60_000,
+      respectSchedule: true,
+    });
     if (!verdict.ok && verdict.reason) {
       result.skipped.push({
         sourceId: t.sourceId,
@@ -268,10 +280,12 @@ function hintFor(r: RefreshResult, wait: boolean): string {
       `${login.map((s) => s.sourceId).join('、')}は要ログインのため更新できませんでした。そこの情報は古い可能性があると伝えてください（ログインし直せるのは本人だけです）。`,
     );
   const recent = r.skipped.filter(
-    (s) => s.reason === 'recently_synced' || s.reason === 'recently_forced',
+    (s) => s.reason === 'recently_synced' || s.reason === 'recently_forced' || s.reason === 'fresh',
   );
   if (recent.length > 0)
-    parts.push('直近に取得済みの情報源は読み直していません（その内容が最新です）。');
+    parts.push(
+      '取得済みで古くない情報源は読み直していません（その内容が最新です。決まった周期で自動に読み直されます）。',
+    );
   if (r.started.length === 0 && r.skipped.length === 0)
     parts.push(
       '対象の情報源がありませんでした。course・capabilities・sources を確認してください。',

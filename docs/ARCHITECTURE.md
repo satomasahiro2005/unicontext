@@ -815,11 +815,15 @@ ageMinutes, budgetMinutes}]}` (over the budget or never read, oldest first).
   use = the evaluation + `budgetMinutes`, worst `freshness`, `sourceCount`); `CourseContext
 .capabilityCoverage` has one coverage per capability above. MCP answer hints add
   「<label> は <n>分前の情報です。refresh_sources で更新できます」 for the uses the view depends on
-  when one is over budget (not `prefer-live` on every read tool).
+  when one is over budget, with the stale source ids (`refresh_sources {sources:[…]}`; not
+  `prefer-live` on every read tool).
 - `refresh_sources {course?, capabilities?, sources?, wait?}` (read-only toward the university):
   maps course + capabilities to sources (`context.sourceFreshness`), skips (with a reason) sources
-  needing a login, backing off (retry-after, or two failures in a row), read less than 10 minutes
-  ago, forced less than 10 minutes ago, or beyond 6 forced runs an hour; answers `{started: [{sourceId,
+  needing a login, backing off (retry-after, or two failures in a row), reference-only
+  (`reference_only`: the syllabus catalog is never forced), still within the freshness budget of
+  the uses asked for or all it serves (`fresh`: a forced run only replaces a missed scheduled run,
+  so an unfiltered call with everything fresh starts nothing), read less than 10 minutes or its
+  schedule interval ago, forced less than 10 minutes ago, or beyond 6 forced runs an hour; answers `{started: [{sourceId,
 jobId}], skipped: [{sourceId, reason}], freshnessBefore}` (+ `finished`, `freshnessAfter` with
   `wait`, at most 60 s). The limits live in the scheduler (`trigger(sourceId, {reason:
 'on-demand', minIntervalMs})`, `checkOnDemand`; refusal = `OnDemandRefusedError`, a

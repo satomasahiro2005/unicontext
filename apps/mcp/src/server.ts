@@ -271,7 +271,7 @@ export const SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
-  'answerHint に「◯◯ は N分前の情報です。refresh_sources で更新できます」とあるときは、学生に確認を頼まず先に refresh_sources を呼んで読み直してから答えてください（大学には読みに行くだけで、何も送信しません）。',
+  'answerHint に「◯◯ は N分前の情報です。refresh_sources で更新できます」とあるときは、学生に確認を頼まず先に refresh_sources を呼んで読み直してから答えてください（hint にある情報源の id だけを sources に指定する。全部を読み直さない。大学には読みに行くだけで、何も送信しません）。',
 ].join('\n');
 
 /** Instructions of the read-only remote surface (ChatGPT / claude.ai through the tunnel). */

@@ -146,3 +146,72 @@ describe('SyncScheduler on-demand runs (refresh_sources, REST ?reason=on-demand)
     expect(sched.checkOnDemand('lms', { minIntervalMs: 30 * MIN }).reason).toBe('recently_synced');
   });
 });
+
+describe('SyncScheduler.checkOnDemand: fresh, schedule floor and reference-only sources', () => {
+  const setOk = (sourceId: string, minutesAgo: number): void => {
+    const now = clock.now().getTime();
+    engine.stores.health.set(sourceId, {
+      state: 'healthy',
+      checkedAt: new Date(now).toISOString(),
+      lastSuccessAt: new Date(now - minutesAgo * MIN).toISOString(),
+      consecutiveFailures: 0,
+    });
+  };
+
+  it('refuses a source still within maxAgeMs as fresh, and allows it once older', () => {
+    const sched = new SyncScheduler(engine, { clock });
+    setOk('lms', 30);
+    expect(sched.checkOnDemand('lms', { maxAgeMs: 45 * MIN })).toMatchObject({
+      ok: false,
+      reason: 'fresh',
+      retryAfterMs: 15 * MIN,
+    });
+    setOk('lms', 50);
+    expect(sched.checkOnDemand('lms', { maxAgeMs: 45 * MIN }).ok).toBe(true);
+    // a source never read successfully is not fresh
+    clock.set('2026-10-02T00:00:00Z');
+    engine.stores.health.set('lms', {
+      state: 'healthy',
+      checkedAt: clock.now().toISOString(),
+      consecutiveFailures: 0,
+    });
+    expect(sched.checkOnDemand('lms', { maxAgeMs: 45 * MIN }).ok).toBe(true);
+  });
+
+  it('with respectSchedule never reads before the source schedule interval has passed', () => {
+    const sched = new SyncScheduler(engine, { clock, schedules: { lms: '1h' } });
+    setOk('lms', 50);
+    expect(sched.checkOnDemand('lms', { respectSchedule: true })).toMatchObject({
+      ok: false,
+      reason: 'recently_synced',
+      retryAfterMs: 10 * MIN,
+    });
+    // without it only the 10-minute floor applies
+    expect(sched.checkOnDemand('lms').ok).toBe(true);
+    setOk('lms', 61);
+    expect(sched.checkOnDemand('lms', { respectSchedule: true }).ok).toBe(true);
+  });
+
+  it('never forces a reference-only source', async () => {
+    const fake = createFakeConnector({
+      product: 'fake-syllabus',
+      authority: 'syllabus',
+      referenceOnly: true,
+    });
+    engine.register({
+      sourceId: 'syllabus',
+      adapter: fake.adapter,
+      normalizer: fake.normalizer,
+      metadata: fake.metadata,
+    });
+    const sched = new SyncScheduler(engine, { clock });
+    expect(sched.checkOnDemand('syllabus')).toMatchObject({ ok: false, reason: 'reference_only' });
+    const err = await sched.trigger('syllabus', { reason: 'on-demand' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OnDemandRefusedError);
+    expect((err as OnDemandRefusedError).reason).toBe('reference_only');
+    expect(fake.adapter.syncCalls.length).toBe(0);
+    // a plain run (CLI sync, schedule) still works
+    await sched.trigger('syllabus');
+    expect(fake.adapter.syncCalls.length).toBeGreaterThan(0);
+  });
+});

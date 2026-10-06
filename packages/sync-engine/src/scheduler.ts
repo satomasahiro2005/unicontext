@@ -49,7 +49,30 @@ export interface TriggerOptions {
 }
 
 export type OnDemandRefusal =
-  'auth_required' | 'backoff' | 'recently_forced' | 'recently_synced' | 'hourly_cap';
+  | 'reference_only'
+  | 'fresh'
+  | 'auth_required'
+  | 'backoff'
+  | 'recently_forced'
+  | 'recently_synced'
+  | 'hourly_cap';
+
+/** What a caller may ask checkOnDemand to enforce beyond the always-on limits. */
+export interface OnDemandOptions {
+  /** Minimum time since this source's last forced or successful run (default 10 minutes). */
+  minIntervalMs?: number;
+  /**
+   * Refuse ('fresh') when the last successful read is not older than this: the information is
+   * still within what its use allows, so a forced run would only poll faster than the schedule.
+   */
+  maxAgeMs?: number;
+  /**
+   * Never read a source again sooner than its own schedule interval after its last successful
+   * read ('recently_synced'): a forced run then only replaces a scheduled run that was missed
+   * (CONNECTOR_POLICY: never poll more often than the default schedules unless the user asks).
+   */
+  respectSchedule?: boolean;
+}
 
 export interface OnDemandVerdict {
   ok: boolean;
@@ -139,17 +162,26 @@ export class SyncScheduler {
   }
 
   /**
-   * Whether a forced run may start now: not when the source needs a login or is backing off, not
+   * Whether a forced run may start now: never for a reference-only source, not when the source
+   * needs a login or is backing off, not when `maxAgeMs` says it is still fresh, not
    * within `minIntervalMs` of its last forced or successful run, and not beyond the hourly cap
    * over all sources. Health is read from the store, so a daemon's runs count for an MCP process
    * next to it; the forced-run counters are this scheduler's own.
    */
-  checkOnDemand(sourceId: string, options: { minIntervalMs?: number } = {}): OnDemandVerdict {
+  checkOnDemand(sourceId: string, options: OnDemandOptions = {}): OnDemandVerdict {
     const now = this.clock.now().getTime();
     const minInterval =
       options.minIntervalMs ?? this.options.onDemand?.minIntervalMs ?? ON_DEMAND_MIN_INTERVAL_MS;
     const min = Math.round(minInterval / 60_000);
     const health = this.engine.health(sourceId);
+    // The syllabus catalog and the like are reference data, crawled on their own long schedule.
+    if (this.engine.sources().find((x) => x.sourceId === sourceId)?.metadata.referenceOnly === true)
+      return {
+        ok: false,
+        reason: 'reference_only',
+        detail: '参照用の情報源（シラバスなど）は強制更新しません（決まった周期で読みます）',
+      };
+    const lastOk = health?.lastSuccessAt ? Date.parse(health.lastSuccessAt) : undefined;
     if (health?.state === 'auth_required')
       return {
         ok: false,
@@ -172,13 +204,22 @@ export class SyncScheduler {
         retryAfterMs: minInterval - (now - last),
         detail: `強制更新は1つの情報源につき${min}分に1回までです`,
       };
-    const ok = health?.lastSuccessAt ? Date.parse(health.lastSuccessAt) : undefined;
-    if (ok !== undefined && now - ok < minInterval)
+    if (options.maxAgeMs !== undefined && lastOk !== undefined && now - lastOk <= options.maxAgeMs)
+      return {
+        ok: false,
+        reason: 'fresh',
+        retryAfterMs: Math.max(0, options.maxAgeMs - (now - lastOk)),
+        detail: `${Math.max(0, Math.round((now - lastOk) / 60_000))}分前に取得済みで、まだ更新は要りません`,
+      };
+    const syncedFloor = options.respectSchedule
+      ? Math.max(minInterval, this.intervalOf(sourceId) ?? 0)
+      : minInterval;
+    if (lastOk !== undefined && now - lastOk < syncedFloor)
       return {
         ok: false,
         reason: 'recently_synced',
-        retryAfterMs: minInterval - (now - ok),
-        detail: `${Math.max(0, Math.round((now - ok) / 60_000))}分前に取得済みです`,
+        retryAfterMs: syncedFloor - (now - lastOk),
+        detail: `${Math.max(0, Math.round((now - lastOk) / 60_000))}分前に取得済みです`,
       };
     const cap = this.options.onDemand?.maxPerHour ?? ON_DEMAND_MAX_PER_HOUR;
     const recent = this.forcedLog.filter((t) => now - t < HOUR_MS);
@@ -194,7 +235,7 @@ export class SyncScheduler {
   }
 
   /** Throws an OnDemandRefusedError unless checkOnDemand allows a forced run now. */
-  assertOnDemand(sourceId: string, options: { minIntervalMs?: number } = {}): void {
+  assertOnDemand(sourceId: string, options: OnDemandOptions = {}): void {
     const verdict = this.checkOnDemand(sourceId, options);
     if (!verdict.ok && verdict.reason)
       throw new OnDemandRefusedError(

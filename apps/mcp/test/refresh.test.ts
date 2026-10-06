@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createFakeConnector } from '../../../packages/connector-sdk/src/index.js';
 import type { UniContext } from '@unicontext/context-engine';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -162,7 +163,65 @@ describe('refresh_sources', () => {
     await seeded.clock.advance(30 * MIN);
     await seeded.uc.sync.sync('teams');
     const recent = await refresh(client, { sources: ['teams'] });
-    expect(recent.skipped).toMatchObject([{ sourceId: 'teams', reason: 'recently_synced' }]);
+    // within its freshness budget: nothing to replace
+    expect(recent.skipped).toMatchObject([{ sourceId: 'teams', reason: 'fresh' }]);
+    expect(recent.started).toEqual([]);
+  });
+
+  it('an unfiltered call with every source within its budget starts nothing', async () => {
+    const client = await connect(seeded.uc);
+    nowAt(30);
+    const before = seeded.uc.sync.sources().map((s) => [s.sourceId, syncCalls(s.sourceId)]);
+    const env = await call(client, 'refresh_sources', {});
+    const r = env.data as unknown as RefreshResult;
+    expect(r.started).toEqual([]);
+    expect(r.skipped.length).toBeGreaterThan(0);
+    for (const s of r.skipped) expect(s.reason, s.sourceId).toBe('fresh');
+    for (const [id, n] of before) expect(syncCalls(id as string), String(id)).toBe(n);
+    expect(env.answerHint).toContain('読み直していません');
+  });
+
+  it('an unfiltered call reads only the sources over their budget', async () => {
+    const client = await connect(seeded.uc);
+    nowAt(100);
+    await seeded.uc.sync.sync('lms'); // read just now by its schedule
+    const r = await refresh(client, {});
+    const over = new Set(
+      r.freshnessBefore
+        .filter((s) => (s.ageMinutes ?? Infinity) > s.budgetMinutes)
+        .map((s) => s.sourceId),
+    );
+    expect(over.size).toBeGreaterThan(0);
+    expect(over.size).toBeLessThan(r.freshnessBefore.length);
+    for (const s of r.started) expect(over.has(s.sourceId), s.sourceId).toBe(true);
+    for (const s of r.skipped.filter((x) => !over.has(x.sourceId)))
+      expect(s.reason, s.sourceId).toBe('fresh');
+  });
+
+  it('never reads a reference-only source (the syllabus catalog), even when named', async () => {
+    const fake = createFakeConnector({
+      product: 'syllabus-catalog',
+      authority: 'syllabus',
+      capabilities: ['courses'],
+      referenceOnly: true,
+    });
+    seeded.uc.sync.register({
+      sourceId: 'syllabus-test',
+      adapter: fake.adapter,
+      normalizer: fake.normalizer,
+      metadata: fake.metadata,
+    });
+    await seeded.uc.sync.sync('syllabus-test');
+    const calls = syncCalls('syllabus-test');
+    const client = await connect(seeded.uc);
+    nowAt(24 * 60 * 3);
+    const r = await refresh(client, { sources: ['syllabus-test'], wait: true });
+    expect(r.started).toEqual([]);
+    expect(r.skipped).toMatchObject([{ sourceId: 'syllabus-test', reason: 'reference_only' }]);
+    expect(syncCalls('syllabus-test')).toBe(calls);
+    // an unfiltered call does not target it at all
+    const all = await refresh(client, {});
+    expect(all.freshnessBefore.map((s) => s.sourceId)).not.toContain('syllabus-test');
   });
 
   it('skips a source that needs a login, with the reason, and starts nothing', async () => {

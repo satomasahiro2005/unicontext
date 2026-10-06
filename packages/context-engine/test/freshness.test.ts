@@ -147,6 +147,8 @@ describe('freshness hint', () => {
     });
     const hint = freshnessHint({ view: 'today', freshness: f });
     expect(hint).toContain('学務情報システム は 100分前の情報です。refresh_sources で更新できます');
+    // it names the stale sources so the AI does not refresh everything
+    expect(hint).toContain('refresh_sources {sources:["lcu"]}');
     // a view that does not use the stale uses gets no hint
     expect(freshnessHint({ view: 'teams-activity', freshness: f })).toBeUndefined();
     expect(freshnessHint({ view: 'today' })).toBeUndefined();

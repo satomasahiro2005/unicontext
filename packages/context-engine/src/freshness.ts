@@ -264,10 +264,13 @@ export function freshnessHint(data: unknown): string | undefined {
   }
   if (stale.size === 0) return undefined;
   const list = [...stale.values()].sort((a, b) => (b.ageMinutes ?? 0) - (a.ageMinutes ?? 0));
+  const ids = JSON.stringify(list.slice(0, 10).map((s) => s.sourceId));
   return `${list
     .slice(0, 3)
     .map((s) => `${s.label} は ${s.ageMinutes}分前の情報です`)
-    .join('。')}。refresh_sources で更新できます。`;
+    .join(
+      '。',
+    )}。refresh_sources で更新できます（古い情報源だけを指定: refresh_sources {sources:${ids}}。省略して全部は読み直さない）。`;
 }
 
 /** A source with its age against the budget of what it serves (refresh_sources). */
