@@ -256,3 +256,38 @@ browser profile 流用の read-only connector。teams-web のダウンロード/
   プロファイル内に残ることをローカルの検証サーバで確認した（既定では消える）。
 - daemon の同期が使っているプロファイルを CLI が開くと、Chrome は既存プロセスへ引き継いで
   終了コード 21 で落ち、Playwright は「No browser could be launched」と誤報していた。
+
+### 9.1 セッションファイルで分かったこと（2026-10-06 昼、サインインしたはずなのに「未ログイン」のまま）
+
+本人の実機の `%LOCALAPPDATA%\unicontext` を**複製して**読んだ（稼働中の daemon・プロファイルには触れていない）。
+
+- **サインインのタブは `/dana-na/auth/url_3/login.cgi` で止まっていた**（Chrome のセッションファイル）。
+  ポータルのサインイン後の遷移がこのタブでは完了せず、URL は `/dana-na/` 配下のまま。旧実装は
+  「ポータル host で `/dana-na/` の外」でなければ `landing-page` を確かめにも行かなかったため、
+  セッションが生きていても login が確認できず、窓を開けたまま待ち続けた。
+  → 確認は **ポータル host のどのページでも** `landing-page` を同一オリジン GET で行う（URL は近道にだけ使う）。
+  サインイン後の確認が `url_3/login.cgi` に 200・HTML で返る形も想定し、2 本目として
+  `list-shares`（なければ root の fb list）に `files`/`shares` の配列が JSON で返るかも見る。
+- **walk の状態が毒されていた**。`sync_state`（`shizuoka-vpn-files`）の中身は
+  `roots["fs-share"] = { frontier: [], folders: {}, backoff: { "": { failures: 1, nextAttemptAt: 02:37Z } }, seededAt: 02:34Z }`。
+  未ログインの間に root 一覧が 404（ポータルの 404 ページ）で一度失敗し、frontier が空のまま
+  `folders` に OK が 1 件もなく、`rewalkAfterHours`（72h）まで root が二度と一覧されない状態だった。
+  → OK の一覧が一度も無く frontier が空の root は、backoff が許す時点（上限 30 分）で `[startDir]` を
+  再投入する。既存の状態は 1 回だけの移行で、OK の一覧が無い root の root backoff を消す
+  （403 の placeholder が付いた root は本物の 403 なので残す）。
+- **marker が空振りの同期に書かれていた**。`portal-session.json` は `verifiedAt: 03:17:31Z`、
+  `sync_state.updated_at` も `03:17:31.279Z`、`last_mode: incremental`。リクエストを 1 本も出さない
+  同期（frontier 空・全て backoff 中）が `markVerified()` を呼び、セッションが生きている証拠が無いのに
+  「検証済み」の時刻を更新していた。→ marker は、その実行で OK / 空 / 403 の一覧応答が 1 件でもあった
+  ときだけ更新する。リクエスト 0 件で marker が古いときは `landing-page` を 1 回だけ確かめる。
+- 窓には復元された複数のタブが残りうる（`--restore-last-session`）。interactive な login は最初に 1 枚を
+  残して閉じてから開く。
+
+#### TODO（実機の観測が要る）
+Ivanti のサインイン直後の遷移（`login.cgi` が次に向かう先）は**まだ fixture に取れていない**。
+`routeDecision` は、その遷移が `/dana-na/` 配下のサインイン手順だと分かるまで広げない。
+次に本人がサインインするとき、login の窓から次を控える（クエリは載せない）:
+- サインイン送信後に各タブが通った URL のパス列（`login.cgi` の次の 1 手）
+- そのとき UniContext が止めた非 GET のメソッドとパス（`login` の出力の「ブロックした通信 N件」と
+  daemon ログの info 行 `blocked non-read request during sign-in`）
+- 画面に出ていたボタンの `name`（「他のセッションが進行中」画面なら `btnContinue` / `FormDataStr`）
