@@ -1,4 +1,10 @@
-import { type Clock, parseDuration, systemClock, type TimerHandle } from '@unicontext/core';
+import {
+  type Clock,
+  parseDuration,
+  RateLimitedError,
+  systemClock,
+  type TimerHandle,
+} from '@unicontext/core';
 import type { SyncEngine } from './engine.js';
 import type { SyncRunReport } from './events.js';
 
@@ -16,6 +22,78 @@ export interface SchedulerOptions {
   random?: () => number;
   /** Delay before the first run after start(). Default 0. */
   initialDelayMs?: number;
+  /** Limits for runs forced on request (trigger with reason 'on-demand'). */
+  onDemand?: {
+    /** At most one forced run per source in this time. Default 10 min. */
+    minIntervalMs?: number;
+    /** At most this many forced runs per hour over all sources. Default 6. */
+    maxPerHour?: number;
+  };
+}
+
+export const ON_DEMAND_MIN_INTERVAL_MS = 10 * 60_000;
+export const ON_DEMAND_MAX_PER_HOUR = 6;
+const HOUR_MS = 3_600_000;
+
+/**
+ * 'on-demand': a forced run because an answer needs fresher data (MCP refresh_sources, the REST
+ * endpoint with `reason=on-demand`); it is rate-limited. Other triggers (CLI sync, change
+ * notifications, file events) run unconditionally.
+ */
+export type TriggerReason = 'manual' | 'on-demand';
+
+export interface TriggerOptions {
+  reason?: TriggerReason;
+  /** On-demand: minimum time since this source's last forced or successful run. */
+  minIntervalMs?: number;
+}
+
+export type OnDemandRefusal =
+  | 'reference_only'
+  | 'fresh'
+  | 'auth_required'
+  | 'backoff'
+  | 'recently_forced'
+  | 'recently_synced'
+  | 'hourly_cap';
+
+/** What a caller may ask checkOnDemand to enforce beyond the always-on limits. */
+export interface OnDemandOptions {
+  /** Minimum time since this source's last forced or successful run (default 10 minutes). */
+  minIntervalMs?: number;
+  /**
+   * Refuse ('fresh') when the last successful read is not older than this: the information is
+   * still within what its use allows, so a forced run would only poll faster than the schedule.
+   */
+  maxAgeMs?: number;
+  /**
+   * Never read a source again sooner than its own schedule interval after its last successful
+   * read ('recently_synced'): a forced run then only replaces a scheduled run that was missed
+   * (CONNECTOR_POLICY: never poll more often than the default schedules unless the user asks).
+   */
+  respectSchedule?: boolean;
+}
+
+export interface OnDemandVerdict {
+  ok: boolean;
+  reason?: OnDemandRefusal;
+  /** When it may be asked again. */
+  retryAfterMs?: number;
+  detail?: string;
+}
+
+/** A forced run was refused (HTTP 429 over REST); `reason` says which limit. */
+export class OnDemandRefusedError extends RateLimitedError {
+  constructor(
+    readonly reason: OnDemandRefusal,
+    detail: string,
+    retryAfterMs?: number,
+  ) {
+    super(`on-demand sync refused (${reason}): ${detail}`, {
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      details: { reason },
+    });
+  }
 }
 
 export interface ScheduledSource {
@@ -33,6 +111,8 @@ export class SyncScheduler {
   private readonly clock: Clock;
   private readonly timers = new Map<string, TimerHandle>();
   private readonly next = new Map<string, Date>();
+  private readonly forced = new Map<string, number>();
+  private forcedLog: number[] = [];
   private started = false;
 
   constructor(
@@ -81,8 +161,105 @@ export class SyncScheduler {
     }));
   }
 
-  /** Run now (e.g. Graph change notification, file event, CLI `sync`). Re-arms the periodic timer. */
-  async trigger(sourceId: string): Promise<SyncRunReport> {
+  /**
+   * Whether a forced run may start now: never for a reference-only source, not when the source
+   * needs a login or is backing off, not when `maxAgeMs` says it is still fresh, not
+   * within `minIntervalMs` of its last forced or successful run, and not beyond the hourly cap
+   * over all sources. Health is read from the store, so a daemon's runs count for an MCP process
+   * next to it; the forced-run counters are this scheduler's own.
+   */
+  checkOnDemand(sourceId: string, options: OnDemandOptions = {}): OnDemandVerdict {
+    const now = this.clock.now().getTime();
+    const minInterval =
+      options.minIntervalMs ?? this.options.onDemand?.minIntervalMs ?? ON_DEMAND_MIN_INTERVAL_MS;
+    const min = Math.round(minInterval / 60_000);
+    const health = this.engine.health(sourceId);
+    // The syllabus catalog and the like are reference data, crawled on their own long schedule.
+    if (this.engine.sources().find((x) => x.sourceId === sourceId)?.metadata.referenceOnly === true)
+      return {
+        ok: false,
+        reason: 'reference_only',
+        detail: '参照用の情報源（シラバスなど）は強制更新しません（決まった周期で読みます）',
+      };
+    const lastOk = health?.lastSuccessAt ? Date.parse(health.lastSuccessAt) : undefined;
+    if (health?.state === 'auth_required')
+      return {
+        ok: false,
+        reason: 'auth_required',
+        detail: 'ログインが必要なため更新できません（本人がログインし直す必要があります）',
+      };
+    const retryAt = health?.retryAfter ? Date.parse(health.retryAfter) : undefined;
+    if ((retryAt !== undefined && retryAt > now) || (health?.consecutiveFailures ?? 0) >= 2)
+      return {
+        ok: false,
+        reason: 'backoff',
+        ...(retryAt !== undefined && retryAt > now ? { retryAfterMs: retryAt - now } : {}),
+        detail: '失敗が続いて待機中のため更新できません',
+      };
+    const last = this.forced.get(sourceId);
+    if (last !== undefined && now - last < minInterval)
+      return {
+        ok: false,
+        reason: 'recently_forced',
+        retryAfterMs: minInterval - (now - last),
+        detail: `強制更新は1つの情報源につき${min}分に1回までです`,
+      };
+    if (options.maxAgeMs !== undefined && lastOk !== undefined && now - lastOk <= options.maxAgeMs)
+      return {
+        ok: false,
+        reason: 'fresh',
+        retryAfterMs: Math.max(0, options.maxAgeMs - (now - lastOk)),
+        detail: `${Math.max(0, Math.round((now - lastOk) / 60_000))}分前に取得済みで、まだ更新は要りません`,
+      };
+    const syncedFloor = options.respectSchedule
+      ? Math.max(minInterval, this.intervalOf(sourceId) ?? 0)
+      : minInterval;
+    if (lastOk !== undefined && now - lastOk < syncedFloor)
+      return {
+        ok: false,
+        reason: 'recently_synced',
+        retryAfterMs: syncedFloor - (now - lastOk),
+        detail: `${Math.max(0, Math.round((now - lastOk) / 60_000))}分前に取得済みです`,
+      };
+    const cap = this.options.onDemand?.maxPerHour ?? ON_DEMAND_MAX_PER_HOUR;
+    const recent = this.forcedLog.filter((t) => now - t < HOUR_MS);
+    const oldest = recent[0];
+    if (recent.length >= cap && oldest !== undefined)
+      return {
+        ok: false,
+        reason: 'hourly_cap',
+        retryAfterMs: HOUR_MS - (now - oldest),
+        detail: `強制更新は全体で1時間に${cap}回までです`,
+      };
+    return { ok: true };
+  }
+
+  /** Throws an OnDemandRefusedError unless checkOnDemand allows a forced run now. */
+  assertOnDemand(sourceId: string, options: OnDemandOptions = {}): void {
+    const verdict = this.checkOnDemand(sourceId, options);
+    if (!verdict.ok && verdict.reason)
+      throw new OnDemandRefusedError(
+        verdict.reason,
+        verdict.detail ?? verdict.reason,
+        verdict.retryAfterMs,
+      );
+  }
+
+  /**
+   * Run now (e.g. Graph change notification, file event, CLI `sync`). Re-arms the periodic timer.
+   * With `reason: 'on-demand'` the run is rate-limited (checkOnDemand) and refused with an
+   * OnDemandRefusedError instead of started.
+   */
+  async trigger(sourceId: string, options: TriggerOptions = {}): Promise<SyncRunReport> {
+    if (options.reason === 'on-demand') {
+      this.assertOnDemand(
+        sourceId,
+        options.minIntervalMs !== undefined ? { minIntervalMs: options.minIntervalMs } : {},
+      );
+      const now = this.clock.now().getTime();
+      this.forced.set(sourceId, now);
+      this.forcedLog = [...this.forcedLog.filter((t) => now - t < HOUR_MS), now];
+    }
     const t = this.timers.get(sourceId);
     if (t) this.clock.clearTimeout(t);
     this.timers.delete(sourceId);

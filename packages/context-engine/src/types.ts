@@ -9,8 +9,9 @@ import type {
   TaskStatus,
 } from '@unicontext/canonical-model';
 import type { Citation } from '@unicontext/provenance';
-import type { DeadlineCoverage } from './coverage.js';
+import type { CapabilityCoverage, CoverageCapability, DeadlineCoverage } from './coverage.js';
 import type { EstimatedDue } from './estimate.js';
+import type { ViewFreshness } from './freshness.js';
 import type { NextActionSummary } from './next-action.js';
 
 export type { Citation } from '@unicontext/provenance';
@@ -483,6 +484,9 @@ export interface BundleBase<V extends string> {
   view: V;
   generatedAt: string;
   timezone: string;
+  // stream E
+  /** How old the information behind this view is against what it is used for (freshness.ts). */
+  freshness?: ViewFreshness | undefined;
 }
 
 export interface DayContext<V extends 'today' | 'tomorrow'> extends BundleBase<V> {
@@ -649,6 +653,9 @@ export interface CourseContext extends BundleBase<'course'> {
   changesOmitted?: number | undefined;
   conflicts: ConflictItem[];
   pendingLinks: IdentityLink[];
+  // stream E
+  /** Which sources read each kind of information for this course, and what is missing. */
+  capabilityCoverage?: Record<CoverageCapability, CapabilityCoverage> | undefined;
 }
 
 export interface TeamsActivityContext extends BundleBase<'teams-activity'> {

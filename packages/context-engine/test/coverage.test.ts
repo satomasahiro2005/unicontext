@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildDeadlineCoverage, type CoverageSourceInput } from '../src/index.js';
+import {
+  buildCapabilityCoverage,
+  buildDeadlineCoverage,
+  type CoverageSourceInput,
+} from '../src/index.js';
 
 const now = new Date('2026-10-05T03:00:00Z');
 const HOUR = 60 * 60 * 1000;
@@ -121,5 +125,117 @@ describe('deadline coverage', () => {
     expect(c.gaps[1]?.detail).toContain('すぐ締切が来る可能性');
     // course scope: only the course's own sources
     expect(c.sources.map((s) => s.sourceId)).toEqual(['livecampusu', 'microsoft365']);
+  });
+});
+
+describe('capability coverage', () => {
+  const fmt = (iso: string): string => iso.slice(5, 16);
+  const teams = src({
+    sourceId: 'teams-web',
+    label: 'Teams',
+    authority: 'collaboration',
+    capabilities: ['courses', 'announcements', 'messages', 'materials', 'assignments'],
+    lastSuccessAt: new Date(now.getTime() - 30 * 60_000).toISOString(),
+    intervalMs: 30 * 60_000,
+  });
+  const localFiles = src({
+    sourceId: 'local-files',
+    label: 'ローカルファイル',
+    authority: 'local-file',
+    capabilities: ['files', 'materials'],
+  });
+  const lcu = src({
+    sourceId: 'livecampusu',
+    label: '学務情報システム',
+    authority: 'academic-system',
+    capabilities: [
+      'courses',
+      'enrollments',
+      'timetable',
+      'assignments',
+      'exams',
+      'announcements',
+      'grades',
+      'calendar',
+    ],
+  });
+  const input = (sourceIds: string[], courseScoped = true) => ({
+    now,
+    sources: [teams, localFiles, lcu],
+    courses: [{ id: 'courseOffering:db', title: 'データベースシステム論', sourceIds }],
+    courseScoped,
+    formatTime: fmt,
+  });
+
+  it('lists the sources that read materials, with age and freshness', () => {
+    const c = buildCapabilityCoverage(
+      'materials',
+      input(['teams-web', 'local-files', 'livecampusu']),
+    );
+    expect(c.capability).toBe('materials');
+    expect(c.complete).toBe(true);
+    expect(c.gaps).toEqual([]);
+    expect(c.sources.map((s) => s.sourceId)).toEqual(['teams-web', 'local-files']);
+    expect(c.sources[0]).toMatchObject({
+      health: 'ok',
+      ageMinutes: 30,
+      intervalMinutes: 30,
+      freshness: 'fresh', // 30 min against the 24 h budget of materials
+      covers: ['資料'],
+    });
+    expect(c.sources[0]?.lastSuccessAt).toBeDefined();
+  });
+
+  it('a course without a materials source has a gap', () => {
+    const c = buildCapabilityCoverage('materials', input(['livecampusu']));
+    expect(c.complete).toBe(false);
+    expect(c.sources).toEqual([]);
+    expect(c.gaps).toEqual([
+      expect.objectContaining({
+        kind: 'no_source',
+        capability: 'materials',
+        course: { id: 'courseOffering:db', title: 'データベースシステム論' },
+      }),
+    ]);
+    expect(c.gaps[0]?.detail).toContain('資料を取得できる情報源がありません');
+  });
+
+  it('reports an unhealthy source as a gap, and age is freshness (not completeness)', () => {
+    const down = buildCapabilityCoverage('assignments', {
+      ...input(['teams-web', 'livecampusu']),
+      sources: [{ ...teams, state: 'auth_required' }, lcu],
+    });
+    expect(down.complete).toBe(false);
+    expect(down.gaps).toMatchObject([
+      { kind: 'source_unhealthy', sourceId: 'teams-web', health: 'auth_required' },
+    ]);
+    const old = buildCapabilityCoverage('assignments', {
+      ...input(['livecampusu']),
+      sources: [
+        {
+          ...lcu,
+          lastSuccessAt: new Date(now.getTime() - 200 * 60_000).toISOString(),
+          intervalMs: 15 * 60_000,
+        },
+      ],
+    });
+    // healthy (200 min < 6 h) but over twice the 90-minute budget: stale freshness, still complete
+    expect(old.sources[0]).toMatchObject({ health: 'ok', freshness: 'stale', ageMinutes: 200 });
+    expect(old.complete).toBe(true);
+  });
+
+  it('calendar and attendance belong to the student, not to a course', () => {
+    const c = buildCapabilityCoverage('calendar', input(['teams-web']));
+    expect(c.sources.map((s) => s.sourceId)).toEqual(['livecampusu']);
+    const a = buildCapabilityCoverage('attendance', input(['teams-web']));
+    expect(a.sources.map((s) => s.sourceId)).toEqual(['livecampusu']); // read by the academic system
+    const g = buildCapabilityCoverage('grades', input(['teams-web']));
+    expect(g.complete).toBe(false); // grades are per course: this course has no grades source
+  });
+
+  it('keeps the deadline coverage and adds age to its sources', () => {
+    const d = build([lcu]);
+    expect(d.sources[0]).toMatchObject({ sourceId: 'livecampusu', health: 'ok', ageMinutes: 60 });
+    expect(d.sources[0]?.freshness).toBe('fresh');
   });
 });

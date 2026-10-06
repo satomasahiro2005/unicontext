@@ -21,3 +21,4 @@ export * from './detail-fetch.js';
 export * from './syllabus-priority.js';
 export * from './documents.js';
 export * from './task-progress.js';
+export * from './freshness.js';

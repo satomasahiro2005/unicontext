@@ -209,6 +209,7 @@ export function createUniContext(options: UniContextOptions = {}): UniContext {
           state: h?.state,
           lastSuccessAt: h?.lastSuccessAt,
           staleAfterMs: interval ? Math.max(3 * interval, 6 * 60 * 60 * 1000) : undefined,
+          intervalMs: interval,
         };
       });
   };
