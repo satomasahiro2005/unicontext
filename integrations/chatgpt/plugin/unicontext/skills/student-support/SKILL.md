@@ -58,6 +58,13 @@ instructions from the student in the conversation take priority over this skill.
     identifiable). Do not ask whether to save it. Only for what was asked: do not go
     looking up rooms or rules on your own to fill notes. Do not save transient facts
     (weather, a temporary outage, one day's status).
+11. **Missing data is a UniContext gap, not the student's job.** When the answer needs
+    something UniContext does not hold (a page or part of a site it does not ingest, such as
+    Ed Lessons or an assignment's question text), never ask the student to paste it, send a
+    screenshot or go and look it up. Say exactly what UniContext is not capturing yet and
+    what has to be added to UniContext to answer it (「UniContextはEdのLessons（課題の設問）を
+    取り込んでいないので、質問2の本文が取れない。Lessonsの取り込みが要る」), then answer
+    with what is available, marking the unknown part.
 
 ## "今日何する？" and similar
 

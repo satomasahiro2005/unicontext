@@ -235,6 +235,7 @@ export const SERVER_INSTRUCTIONS = [
   '書き込みは propose-only です。correct_fact は提案を作るだけで、ユーザー本人が確認するまで何も変更されません。課題の提出・履修登録や削除・成績に関わる操作はできません（提出済み status は提出システムからのみ反映されます）。',
   'ユーザーが会話の中で言った締切・試験の日程・やること・覚えておきたいこと（例「レポートの締切10/20って登録しといて」）や、ユーザーと一緒に決めた勉強のTODOは add_deadline / add_task / add_note で、UniContextに登録できます。登録した内容は他の会話・クライアントからも get_today・get_week・get_deadlines・get_tasks・get_notes で見えます（大学のシステムには送られず、「チャットで登録」「録音から」と表示され、大学側の値は上書きしません）。',
   '大学について聞かれて調べた結果、また使う安定した事実（教室コードの場所、提出方法、科目固有のルールなど）が分かったら、確かめずに add_note で保存してください。聞かれていないことを自分から調べて保存はしません。一時的な情報は保存しません。',
+  'UniContextが取り込んでいない情報（例: EdのLessonsにある課題の設問）が答えに要るときは、本人に貼り付け・スクリーンショット・自分で確認を求めないでください。UniContextの何が取り込めていないか、何を追加すれば答えられるかをそのまま伝え、分かる範囲で答えます。',
   EXISTING_ITEM_RULE_JA,
   RECORDING_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
