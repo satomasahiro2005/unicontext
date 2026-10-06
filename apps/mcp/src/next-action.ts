@@ -49,7 +49,15 @@ export const STUDENT_STATE_TOOL = {
 export const ATTENTION_TOOL = {
   title: '今知らせるべきこと',
   description:
-    '毎時など無人で実行される見守りタスク用。この接続（クライアント）に前回伝えて以降、今学生に知らせるべきことだけを返す: 24時間以内・6時間以内になった未提出の締切（締切不明なら推定締切で。line に「推定」と出る）、60分以内に始まる授業（教室つき）、新しい休講・教室変更・重要なお知らせ、ペースの遅れ、ログイン切れの情報源。各項目に重要度（severity）と、そのまま送れる短い日本語（line）がつき、text は約300字以内の通知文。同じことは重要度が上がらない限り繰り返さない。nothingImportant が true なら何も通知しない。 / For an hourly unattended watcher: only what to tell the student now since this client’s last call (≤24h / ≤6h unsubmitted deadlines, unknown ones by their estimate and labelled 推定, a class within 60 min with its room, new cancellations / room changes / important notices, falling behind, expired logins), each with severity and a ready-to-send line; `text` is a ≤300-character notification. Repeats only when severity rises. Stay silent when nothingImportant is true.',
+    '毎時など無人で実行される見守りタスク用。この接続（クライアント）がまだ伝えていない、今学生に知らせるべきことだけを items に返す: 未提出の締切（締切不明なら推定締切で。line に「推定」と出る）、60分以内に始まる授業（教室つき）、新しい休講・教室変更・重要なお知らせ、ペースの遅れ、ログイン切れの情報源。各項目に重要度（severity）と、そのまま送れる短い日本語（line）がつく。' +
+    '締切は notifyStage が変わるたびに1回ずつ知らせる: 24h（24時間以内）→ 6h（6時間以内、critical）→ final（締切の2時間前から。23:59締切なら21:59以降）→ overdue（締切を過ぎても未提出で、遅れての提出を大学の情報源が禁じていない。締切から7日間）。同じ段階は繰り返さない。nextEscalationAt は次の段階が始まる時刻。' +
+    'pending は、まだ有効だがこの段階では伝え済みの項目（最大20件）。再送しない（nextEscalationAt にその次の段階として items に戻る）。alreadyTold はその件数。' +
+    'quietUntil が付いた項目は、その時刻（現地8:00）まで通知を待つ（0:00〜7:59で3時間以内に迫らない項目。まだ伝え済みとは数えないので、その時刻を過ぎると quietUntil なしで items に出る）。' +
+    'text は items の約300字以内の通知文。nothingImportant が true なら何も通知しない。 / For an hourly unattended watcher: `items` holds only what this client has not told yet (unsubmitted deadlines, unknown ones by their estimate and labelled 推定, a class within 60 min with its room, new cancellations / room changes / important notices, falling behind, expired logins), each with severity and a ready-to-send `line`. ' +
+    'A deadline is told once per notifyStage change: 24h → 6h (critical) → final (last 2 hours; for a 23:59 deadline from 21:59) → overdue (past due, still unsubmitted, and the source does not rule late work out; flagged for 7 days). The same stage is never repeated; `nextEscalationAt` is when the next stage starts. ' +
+    '`pending` lists (max 20) alerts that are still true but already told at their stage: do not resend them (they return in `items` at their next stage, around nextEscalationAt); `alreadyTold` is their count. ' +
+    'An item with `quietUntil` (local 08:00) is to be held until then (0:00–7:59 and not within 3 h of its time); it is not counted as told, so it appears again in `items` without quietUntil once that time has passed. ' +
+    '`text` is a ≤300-character notification of `items`. Stay silent when nothingImportant is true.',
 } as const;
 
 export const attentionShape = {
@@ -117,8 +125,12 @@ export function runAttention(
     data,
     options: {
       hint: data.nothingImportant
-        ? 'nothingImportant が true です。何も通知しないでください。'
-        : 'text をそのまま（または短く整えて）通知してください。',
+        ? 'nothingImportant が true です。何も通知しないでください。pending は伝え済みなので再送しません。'
+        : data.items.some(
+              (i) => i.quietUntil && Date.parse(i.quietUntil) > uc.clock.now().getTime(),
+            )
+          ? 'quietUntil が付いた項目は、その時刻まで通知せず待ってください（text にも含まれています。時刻を過ぎると quietUntil なしで届きます）。それ以外の項目は text から通知します。pending は伝え済みなので再送しません。'
+          : 'text をそのまま（または短く整えて）通知してください。pending は伝え済みなので再送しません。',
     },
   };
 }

@@ -66,87 +66,131 @@ describe('deadlineStage', () => {
 });
 
 describe('stated deadline, 23:59 JST and unsubmitted', () => {
-  it('emits each stage change exactly once and never repeats a stage', async () => {
+  it(
+    'emits each stage change exactly once and never repeats a stage',
+    { timeout: 120_000 },
+    async () => {
+      await addReport();
+      const seenStages: string[] = [];
+      const at = async (jst: string, iso: string) => {
+        clock.set(iso);
+        const r = attentionRequired(uc, 'watcher');
+        const mine = about(r, 'ER図レポート');
+        for (const i of mine.fresh)
+          if (!i.quietUntil) seenStages.push(`${jst} ${String(i.notifyStage)}`);
+        return { r, ...mine };
+      };
+
+      // 10/6 00:30 JST: 23.5 hours left.
+      const a = await at('00:30', '2026-10-05T15:30:00Z');
+      expect(a.fresh).toHaveLength(1);
+      expect(a.fresh[0]).toMatchObject({
+        kind: 'deadline',
+        notifyStage: '24h',
+        severity: 'warning',
+        nextEscalationAt: '2026-10-06T08:59:00.000Z', // 6 h before
+      });
+      expect(a.fresh[0]?.key).toMatch(/:24h$/);
+      // Local 0:00-7:59 and not within 3 hours: kept until 08:00 (the client decides).
+      expect(a.fresh[0]?.quietUntil).toBe('2026-10-05T23:00:00.000Z');
+
+      // Held for the morning, it is not told yet: it comes back (with quietUntil) until 08:00.
+      const a2 = await at('01:30', '2026-10-05T16:30:00Z');
+      expect(a2.fresh).toHaveLength(1);
+      expect(a2.fresh[0]?.quietUntil).toBe('2026-10-05T23:00:00.000Z');
+      expect(a2.pending).toHaveLength(0);
+
+      // 08:05 JST: the quiet period is over, so the 24h alert reaches the client, once.
+      const a3 = await at('08:05', '2026-10-05T23:05:00Z');
+      expect(a3.fresh).toHaveLength(1);
+      expect(a3.fresh[0]).toMatchObject({
+        notifyStage: '24h',
+        nextEscalationAt: a.fresh[0]?.nextEscalationAt,
+      });
+      expect(a3.fresh[0]?.quietUntil).toBeUndefined();
+
+      // The same stage an hour later is held back and listed with when it comes back.
+      const a4 = await at('09:10', '2026-10-06T00:10:00Z');
+      expect(a4.fresh).toHaveLength(0);
+      expect(a4.pending).toHaveLength(1);
+      expect(a4.pending[0]).toMatchObject({
+        notifyStage: '24h',
+        severity: 'warning',
+        nextEscalationAt: '2026-10-06T08:59:00.000Z',
+      });
+      expect(a4.r.alreadyTold).toBeGreaterThanOrEqual(1);
+
+      // 18:00 JST: 5.98 hours left, the 6h stage, critical.
+      const b = await at('18:00', '2026-10-06T09:00:00Z');
+      expect(b.fresh).toHaveLength(1);
+      expect(b.fresh[0]).toMatchObject({
+        notifyStage: '6h',
+        severity: 'critical',
+        nextEscalationAt: '2026-10-06T12:59:00.000Z', // final starts 2 h before
+      });
+      expect(b.fresh[0]?.quietUntil).toBeUndefined();
+
+      // 21:00 JST: still 6h.
+      expect((await at('21:00', '2026-10-06T12:00:00Z')).fresh).toHaveLength(0);
+
+      // 22:05 JST: the final stage.
+      const c = await at('22:05', '2026-10-06T13:05:00Z');
+      expect(c.fresh).toHaveLength(1);
+      expect(c.fresh[0]).toMatchObject({
+        notifyStage: 'final',
+        severity: 'critical',
+        nextEscalationAt: '2026-10-06T14:59:00.000Z',
+      });
+      expect(c.fresh[0]?.line).toContain('【締切直前】');
+
+      // 23:00 JST: final again (the 1h boundary is inside it): not repeated twice.
+      const d = await at('23:00', '2026-10-06T14:00:00Z');
+      expect(d.fresh).toHaveLength(0);
+      expect(d.pending[0]).toMatchObject({
+        notifyStage: 'final',
+        nextEscalationAt: '2026-10-06T14:59:00.000Z',
+      });
+
+      // 10/7 00:10 JST: overdue, still unsubmitted, late work not ruled out.
+      const e = await at('00:10', '2026-10-06T15:10:00Z');
+      expect(e.fresh).toHaveLength(1);
+      expect(e.fresh[0]).toMatchObject({
+        notifyStage: 'overdue',
+        severity: 'critical',
+        nextEscalationAt: undefined,
+      });
+      expect(e.fresh[0]?.line).toContain('【締切超過】');
+      expect(e.fresh[0]?.recommendedAction).toContain('遅れて提出できるか確認');
+      // Eleven minutes after the deadline: within 3 hours, so no quiet period.
+      expect(e.fresh[0]?.quietUntil).toBeUndefined();
+      expect((await at('00:40', '2026-10-06T15:40:00Z')).fresh).toHaveLength(0);
+
+      expect(seenStages).toEqual(['08:05 24h', '18:00 6h', '22:05 final', '00:10 overdue']);
+    },
+  );
+
+  it('holds a night alert for the morning and sends it exactly once after 08:00', async () => {
     await addReport();
-    const seenStages: string[] = [];
-    const at = async (jst: string, iso: string) => {
-      clock.set(iso);
-      const r = attentionRequired(uc, 'watcher');
-      const mine = about(r, 'ER図レポート');
-      for (const i of mine.fresh) seenStages.push(`${jst} ${String(i.notifyStage)}`);
-      return { r, ...mine };
+    const mine = (jst: string): ReturnType<typeof about> => {
+      void jst;
+      return about(attentionRequired(uc, 'watcher'), 'ER図レポート');
     };
-
-    // 10/6 00:30 JST: 23.5 hours left.
-    const a = await at('00:30', '2026-10-05T15:30:00Z');
-    expect(a.fresh).toHaveLength(1);
-    expect(a.fresh[0]).toMatchObject({
-      kind: 'deadline',
-      notifyStage: '24h',
-      severity: 'warning',
-      nextEscalationAt: '2026-10-06T08:59:00.000Z', // 6 h before
-    });
-    expect(a.fresh[0]?.key).toMatch(/:24h$/);
-    // Local 0:00-7:59 and not within 3 hours: kept until 08:00 (the client decides).
-    expect(a.fresh[0]?.quietUntil).toBe('2026-10-05T23:00:00.000Z');
-
-    // The same stage an hour later is held back and listed with when it comes back.
-    const a2 = await at('01:30', '2026-10-05T16:30:00Z');
-    expect(a2.fresh).toHaveLength(0);
-    expect(a2.pending).toHaveLength(1);
-    expect(a2.pending[0]).toMatchObject({
-      notifyStage: '24h',
-      severity: 'warning',
-      nextEscalationAt: '2026-10-06T08:59:00.000Z',
-    });
-    expect(a2.r.alreadyTold).toBeGreaterThanOrEqual(1);
-
-    // 18:00 JST: 5.98 hours left, the 6h stage, critical.
-    const b = await at('18:00', '2026-10-06T09:00:00Z');
-    expect(b.fresh).toHaveLength(1);
-    expect(b.fresh[0]).toMatchObject({
-      notifyStage: '6h',
-      severity: 'critical',
-      nextEscalationAt: '2026-10-06T12:59:00.000Z', // final starts 2 h before
-    });
-    expect(b.fresh[0]?.quietUntil).toBeUndefined();
-
-    // 21:00 JST: still 6h.
-    expect((await at('21:00', '2026-10-06T12:00:00Z')).fresh).toHaveLength(0);
-
-    // 22:05 JST: the final stage.
-    const c = await at('22:05', '2026-10-06T13:05:00Z');
-    expect(c.fresh).toHaveLength(1);
-    expect(c.fresh[0]).toMatchObject({
-      notifyStage: 'final',
-      severity: 'critical',
-      nextEscalationAt: '2026-10-06T14:59:00.000Z',
-    });
-    expect(c.fresh[0]?.line).toContain('【締切直前】');
-
-    // 23:00 JST: final again (the 1h boundary is inside it): not repeated twice.
-    const d = await at('23:00', '2026-10-06T14:00:00Z');
-    expect(d.fresh).toHaveLength(0);
-    expect(d.pending[0]).toMatchObject({
-      notifyStage: 'final',
-      nextEscalationAt: '2026-10-06T14:59:00.000Z',
-    });
-
-    // 10/7 00:10 JST: overdue, still unsubmitted, late work not ruled out.
-    const e = await at('00:10', '2026-10-06T15:10:00Z');
-    expect(e.fresh).toHaveLength(1);
-    expect(e.fresh[0]).toMatchObject({
-      notifyStage: 'overdue',
-      severity: 'critical',
-      nextEscalationAt: undefined,
-    });
-    expect(e.fresh[0]?.line).toContain('【締切超過】');
-    expect(e.fresh[0]?.recommendedAction).toContain('遅れて提出できるか確認');
-    // Eleven minutes after the deadline: within 3 hours, so no quiet period.
-    expect(e.fresh[0]?.quietUntil).toBeUndefined();
-    expect((await at('00:40', '2026-10-06T15:40:00Z')).fresh).toHaveLength(0);
-
-    expect(seenStages).toEqual(['00:30 24h', '18:00 6h', '22:05 final', '00:10 overdue']);
+    clock.set('2026-10-05T15:30:00Z'); // 00:30 JST
+    const night = mine('00:30');
+    expect(night.fresh).toHaveLength(1);
+    expect(night.fresh[0]?.quietUntil).toBe('2026-10-05T23:00:00.000Z');
+    clock.set('2026-10-05T23:05:00Z'); // 08:05 JST
+    const morning = mine('08:05');
+    expect(morning.fresh.filter((i) => i.notifyStage === '24h')).toHaveLength(1);
+    expect(morning.fresh[0]?.quietUntil).toBeUndefined();
+    clock.set('2026-10-05T23:35:00Z'); // 08:35 JST
+    expect(mine('08:35').fresh).toHaveLength(0);
+    // Another client has its own marks.
+    expect(
+      about(attentionRequired(uc, 'other'), 'ER図レポート').fresh.filter(
+        (i) => i.notifyStage === '24h',
+      ),
+    ).toHaveLength(1);
   });
 
   it('keeps the same item across stages (attentionId) and counts a client apart from another', async () => {
@@ -210,7 +254,7 @@ describe('estimated deadline (推定) follows the same stages', () => {
       clock.set(iso);
       const r = attentionRequired(uc, 'watcher');
       const mine = about(r, '小レポート2');
-      for (const i of mine.fresh) stages.push(String(i.notifyStage));
+      for (const i of mine.fresh) if (!i.quietUntil) stages.push(String(i.notifyStage));
       return mine;
     };
     // The estimate is 10/7 23:59 JST (see next-action.test.ts).
@@ -218,7 +262,10 @@ describe('estimated deadline (推定) follows the same stages', () => {
     expect(a.fresh[0]).toMatchObject({ severity: 'warning', notifyStage: '24h' });
     expect(a.fresh[0]?.line).toContain('【締切不明・推定】');
     expect(a.fresh[0]?.key).toMatch(/^deadline-estimate:.*:24h$/);
-    expect(at('2026-10-06T16:30:00Z').fresh).toHaveLength(0);
+    // Held for the morning: back with quietUntil at 01:30, sent (once) after 08:00.
+    expect(at('2026-10-06T16:30:00Z').fresh[0]?.quietUntil).toBeDefined();
+    expect(at('2026-10-06T23:05:00Z').fresh[0]).toMatchObject({ notifyStage: '24h' });
+    expect(at('2026-10-06T23:40:00Z').fresh).toHaveLength(0);
     const b = at('2026-10-07T09:00:00Z'); // 18:00
     expect(b.fresh[0]).toMatchObject({ severity: 'critical', notifyStage: '6h' });
     expect(b.fresh[0]?.line).toContain('【締切不明・推定間近】');

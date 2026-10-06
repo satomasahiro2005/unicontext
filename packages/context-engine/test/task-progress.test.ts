@@ -5,7 +5,7 @@ import {
   TASK_PROGRESS_PREDICATE,
   taskProgressSubject,
 } from '@unicontext/task-engine';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AdditionClient, UniContext } from '../src/index.js';
 import { circuit, createNextActionScenario, db as dbCourse } from './next-action-scenario.js';
 
@@ -61,6 +61,47 @@ describe('record_task_progress', () => {
     await uc.runPipeline();
     expect(uc.tasks.get(t.id)).toMatchObject({ status: 'completed', statusSetBy: 'user' });
     expect(uc.context.nextActions().top?.title).not.toContain('Lesson 3');
+  });
+
+  it('a retry with the same idempotencyKey is replayed, so the undo still restores the status', async () => {
+    const t = taskTitled('Lesson 3');
+    const input = {
+      task: t.id,
+      status: 'completed' as const,
+      statement: 'Lesson 3 は終わった',
+      idempotencyKey: 'retry-1',
+    };
+    const first = await uc.additions.recordTaskProgress(client, input);
+    // The client timed out and sends it again after the commit.
+    const again = await uc.additions.recordTaskProgress(client, input);
+    expect(first.status).toBe('created');
+    expect(again.status).toBe('replayed');
+    expect(again.addition.id).toBe(first.addition.id);
+    expect(uc.additions.list().filter((a) => a.kind === 'progress')).toHaveLength(1);
+    await uc.additions.retract(client, first.addition.id);
+    expect(uc.tasks.get(t.id)).toMatchObject({ status: 'pending', statusSetBy: 'system' });
+  });
+
+  it('writes and retracts without running the pipeline', async () => {
+    const t = taskTitled('Lesson 3');
+    const derive = uc.tasks.derive.bind(uc.tasks);
+    let runs = 0;
+    const spy = vi.spyOn(uc.tasks, 'derive').mockImplementation(() => {
+      runs++;
+      return derive();
+    });
+    try {
+      const r = await uc.additions.recordTaskProgress(client, {
+        task: t.id,
+        status: 'in_progress',
+        statement: '始めた',
+      });
+      await uc.additions.retract(client, r.addition.id);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(runs).toBe(0);
+    expect(uc.tasks.get(t.id)).toMatchObject({ status: 'pending', statusSetBy: 'system' });
   });
 
   it('rejects submitted, and anything but the four statuses, before writing anything', async () => {

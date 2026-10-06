@@ -634,7 +634,9 @@ export class AdditionsService {
     client: AdditionClient,
     input: RecordTaskProgressInput,
   ): Promise<AdditionResult> {
-    return this.write(client, this.progressSpec(input));
+    // The status is applied directly and next actions read the fact live: nothing derived needs
+    // recomputing, so the (slow) pipeline is skipped and a retry cannot time out on it.
+    return this.write(client, this.progressSpec(input), { pipeline: false });
   }
 
   private progressSpec(input: RecordTaskProgressInput): WriteSpec {
@@ -1192,7 +1194,7 @@ export class AdditionsService {
         `addition ${id} was confirmed by the owner; only the owner can remove it now`,
       );
     const next = this.undo(a, 'retracted');
-    await this.deps.runPipeline();
+    if (a.kind !== 'progress') await this.deps.runPipeline();
     return { status: 'retracted', addition: this.view(next), audit: this.auditOf(next) };
   }
 
@@ -1251,7 +1253,7 @@ export class AdditionsService {
     if (!a) throw new NotFoundError(`addition ${id}`);
     if (a.status === 'rejected') return this.view(a);
     const next = this.undo(a, 'rejected');
-    await this.deps.runPipeline();
+    if (a.kind !== 'progress') await this.deps.runPipeline();
     return this.view(next);
   }
 

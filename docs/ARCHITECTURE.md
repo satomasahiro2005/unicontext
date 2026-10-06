@@ -740,7 +740,9 @@ coverageTrusted}`. `nextActionHost()` is the read model shared by the engine and
   (`attentionId`, `key`, `notifyStage`, `severity`, `nextEscalationAt`, `line`), so the watcher sees
   what it is holding back and when it returns; `alreadyTold` stays the count. Items carry
   `quietUntil` (08:00 local) when it is 0:00-7:59 local and the item is not within 3 h of its time:
-  the night rule stays the client's.
+  the night rule stays the client's. Such an item is not marked as told (the client's mark and
+  `since` stay put): it comes back in `items` on every call until 08:00, and from 08:00 without
+  `quietUntil`, when the client sends it once.
 - `briefing(uc, clientId, {kind?, dryRun?})` (MCP `get_briefing`): thin wrapper over the two —
   morning (< 11:00) / evening (≥ 17:00) / check by local time; classes of the day, top action,
   must-do, unsubmitted ≤ 72 h, unknown due dates estimated ≤ 72 h (「締切不明（早めの推定）: …」), news since the client's last briefing (its own `briefing` scope of
@@ -950,13 +952,20 @@ own inference. Output `{taskId, title, previousStatus, status, steps, percent?, 
   in_progress / completed / cancelled, never `submitted` (submission systems only) and never
   `expired_past_term` (or `unknown`); `statusSetBy` becomes `user` and `statusEvidenceFactId` points at the
   fact (kept through `derive()`). The plain `ai` actor is unchanged (no completed / submitted). A task the
-  submission system reports as submitted keeps that status; only the steps are recorded. Status omitted:
+  submission system reports as submitted keeps that status; only the steps are recorded. A status that
+  only rests on such a statement (open: pending / in_progress, evidence = a `task:progress` fact) gives way
+  later: submission evidence turns the task `submitted` (`submission-system`) and the end of the term makes
+  it `expired_past_term` in `derive()`; completed / cancelled and the owner's own status do not (an owner
+  `setStatus` drops the statement as evidence). Status omitted:
   done steps on a pending task make it `in_progress`; nothing implies `completed`.
 - It is an addition (tool `record_task_progress`, kind `progress`): stored unconfirmed but applied at
   once like `set_course_condition`, visible in `list_my_additions`, retractable with `retract_addition`
   (the owner's reject too): the fact is retracted and the status fields saved with the addition are
   restored, unless a later statement has taken the status over. `AdditionsService.recordTaskProgress`
   prepares it (`prepareTaskProgress`, validation before any write) and `undo` calls `undoTaskProgress`.
+  The tool takes `idempotencyKey` like the other write tools (a retry with the same key is replayed, not
+  stored twice). Nothing derived depends on the statement (the status is applied directly, next actions
+  read the fact live), so neither the write nor its retract / reject runs the pipeline.
 - Steps: `steps` replaces the list; `doneSteps` marks steps done (a label that matches no step is added
   as a step the student did); both start from the plan of that kind of work (`stepsFor`). Labels match
   after dropping 「（10分）」, width and spaces (`stepsMatch`). The next-action engine drops the done steps

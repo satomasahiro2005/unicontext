@@ -63,7 +63,7 @@ const source = z
   .describe(
     '出どころの名前。省略時は録音なら「ChatGPT Record」、会話なら「ChatGPTとの会話」など / Source name (default: ChatGPT Record / ChatGPTとの会話)',
   );
-const idempotencyKey = z
+export const idempotencyKey = z
   .string()
   .min(1)
   .max(L.idempotencyKey)

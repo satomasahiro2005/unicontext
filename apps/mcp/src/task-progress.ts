@@ -1,6 +1,6 @@
 import type { AdditionClient, AdditionResult, UniContext } from '@unicontext/context-engine';
 import { z } from 'zod';
-import { courseIdForWrite } from './additions.js';
+import { courseIdForWrite, idempotencyKey } from './additions.js';
 
 /*
  * MCP write tool `record_task_progress`: the student said they started, finished part of, or
@@ -57,6 +57,7 @@ export const recordTaskProgressShape = {
     .describe(
       '根拠: 学生の言葉をそのまま引用（「ER図は書き終わった」など）。自分の推測や要約は入れない / Verbatim quote of what the student said, never your own inference',
     ),
+  idempotencyKey,
 };
 
 export const TASK_PROGRESS_RESULT_SHAPE = {
@@ -78,6 +79,7 @@ type Args = {
   steps?: { label: string; done: boolean }[] | undefined;
   doneSteps?: string[] | undefined;
   statement: string;
+  idempotencyKey?: string | undefined;
 };
 
 export interface TaskProgressToolHost {
@@ -156,6 +158,7 @@ export function registerTaskProgressTools(host: TaskProgressToolHost): void {
         steps: a.steps,
         doneSteps: a.doneSteps,
         statement: a.statement,
+        idempotencyKey: a.idempotencyKey,
       });
       return {
         structured: taskProgressOutput(r),

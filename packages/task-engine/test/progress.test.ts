@@ -1,5 +1,5 @@
 import { type CanonicalEntityInput, type Fact, stableId } from '@unicontext/canonical-model';
-import { ManualClock, PolicyViolationError } from '@unicontext/core';
+import { ManualClock, parseProfile, PolicyViolationError } from '@unicontext/core';
 import {
   EntityStore,
   openDatabase,
@@ -294,6 +294,103 @@ describe('TaskEngine.setStatus with a student statement', () => {
     expect(engine.progressOf(taskId)?.value).toMatchObject({
       status: 'in_progress',
       steps: [{ label: '課題文を読む', done: true }],
+    });
+  });
+
+  describe('a statement followed by the submission system', () => {
+    const putStatement = (status: 'in_progress' | 'completed'): string => {
+      const ref = new SourceReferenceStore(db).upsert({
+        id: stableId('sourceReference', 'chat', status),
+        sourceSystem: 'chat',
+        authority: 'student-statement',
+        sourceItemId: status,
+        retrievedAt: '2026-10-01T00:00:00Z',
+      });
+      const v = { status, statement: '始めた', statedAt: '2026-10-01T01:00:00.000Z' };
+      const fact = resolver.facts.put({
+        id: factId(ref.id, taskProgressSubject(taskId), TASK_PROGRESS_PREDICATE, v),
+        subject: taskProgressSubject(taskId) as never,
+        predicate: TASK_PROGRESS_PREDICATE,
+        value: v,
+        origin: 'extracted',
+        confidence: 0.7,
+        observedAt: '2026-10-01T01:00:00.000Z',
+        sourceReferenceId: ref.id,
+        producer: { type: 'ai', id: 'mcp:test' },
+        evidence: '始めた',
+      });
+      engine.setStatus(taskId, status, { actor: 'student-statement', evidenceFactId: fact.id });
+      return fact.id;
+    };
+    const submit = (): void => {
+      const e: CanonicalEntityInput = {
+        id: stableId('submission', 'lms', 's1'),
+        kind: 'submission',
+        assignmentId: a1,
+        status: 'submitted',
+      };
+      new EntityStore(db, { clock }).upsert(e, { sourceId: 'lms' });
+      const ref = new SourceReferenceStore(db).upsert({
+        id: stableId('sourceReference', e.id),
+        sourceSystem: 'lms',
+        authority: 'submission-system',
+        sourceItemId: e.id,
+        retrievedAt: '2026-10-02T00:00:00Z',
+        entityId: e.id,
+      });
+      resolver.facts.put({
+        id: factId(ref.id, e.id, 'submission_status', 'submitted'),
+        subject: e.id,
+        predicate: 'submission_status',
+        value: 'submitted',
+        origin: 'authoritative',
+        confidence: 1,
+        observedAt: '2026-10-02T00:00:00Z',
+        sourceReferenceId: ref.id,
+        producer: { type: 'connector', id: 'lms' },
+      });
+    };
+
+    it('lets a later submission override an in_progress the student stated', () => {
+      putStatement('in_progress');
+      engine.derive();
+      expect(engine.get(taskId)).toMatchObject({ status: 'in_progress', statusSetBy: 'user' });
+      submit();
+      engine.derive();
+      expect(engine.get(taskId)).toMatchObject({
+        status: 'submitted',
+        statusSetBy: 'submission-system',
+      });
+    });
+
+    it('keeps completed, and the owner’s own in_progress', () => {
+      putStatement('completed');
+      submit();
+      engine.derive();
+      expect(engine.get(taskId)).toMatchObject({ status: 'completed', statusSetBy: 'user' });
+      engine.setStatus(taskId, 'in_progress', { actor: 'user' });
+      engine.derive();
+      expect(engine.get(taskId)).toMatchObject({ status: 'in_progress', statusSetBy: 'user' });
+    });
+
+    it('lets the end of the term expire a stated in_progress', () => {
+      putStatement('in_progress');
+      clock.set('2027-10-01T00:00:00Z');
+      const old = new TaskEngine({
+        db,
+        clock,
+        resolver,
+        profile: parseProfile(`
+id: sample
+academicCalendar:
+  timezone: Asia/Tokyo
+  terms:
+    - { id: '2026-2', name: '2026年度 後期', termCode: 後期, year: 2026, start: '2026-10-01', end: '2027-03-31', classes: { start: '2026-10-01', end: '2027-01-31' } }
+    - { id: '2027-2', name: '2027年度 後期', termCode: 後期, year: 2027, start: '2027-10-01', end: '2028-03-31', classes: { start: '2027-10-01', end: '2028-01-31' } }
+`),
+      });
+      old.derive();
+      expect(old.get(taskId)?.status).toBe('expired_past_term');
     });
   });
 });

@@ -294,7 +294,9 @@ export class TaskEngine {
     };
     if (options.actor === 'student-statement' && options.evidenceFactId)
       next.statusEvidenceFactId = options.evidenceFactId as Task['statusEvidenceFactId'];
-    else if (options.actor !== 'user') delete next.statusEvidenceFactId;
+    else if (options.actor !== 'user' || this.restsOnStudentStatement(t))
+      // The owner's own choice replaces what the student once said in chat.
+      delete next.statusEvidenceFactId;
     this.save(next);
     return next;
   }
@@ -701,6 +703,23 @@ export class TaskEngine {
     return undefined;
   }
 
+  /**
+   * The task's status is an open one (pending / in_progress) that the student only stated in chat
+   * (record_task_progress: its evidence is a task:progress fact), not one the owner set.
+   */
+  private isOpenStudentStatement(t: Task): boolean {
+    return (
+      (t.status === 'pending' || t.status === 'in_progress') && this.restsOnStudentStatement(t)
+    );
+  }
+
+  /** The task's own status was set by a student statement (its evidence is a task:progress fact). */
+  private restsOnStudentStatement(t: Task): boolean {
+    if (t.statusSetBy !== 'user' || !t.statusEvidenceFactId) return false;
+    const f = this.facts.get(t.statusEvidenceFactId);
+    return f?.predicate === TASK_PROGRESS_PREDICATE && f.subject === taskProgressSubject(t.id);
+  }
+
   private expireIfPast(
     status: TaskStatus,
     prev: Task | undefined,
@@ -894,8 +913,12 @@ export class TaskEngine {
       let status: TaskStatus = prev?.status ?? 'pending';
       let statusSetBy: Task['statusSetBy'] = prev?.statusSetBy ?? 'system';
       let statusEvidenceFactId = prev?.statusEvidenceFactId;
+      // An open status that only rests on what the student said in chat (「始めた」) gives way to
+      // the submission system and to the end of the term; the owner's own choice, completed and
+      // cancelled do not.
+      const openStatement = prev !== undefined && this.isOpenStudentStatement(prev);
       if (evidence) {
-        if (statusSetBy !== 'user') {
+        if (statusSetBy !== 'user' || openStatement) {
           status = 'submitted';
           statusSetBy = 'submission-system';
           statusEvidenceFactId = evidence.id as Task['statusEvidenceFactId'];
@@ -914,14 +937,17 @@ export class TaskEngine {
       // counts, notifications). The student's own status and the submission system's evidence win,
       // and the classification is lifted again when the calendar no longer says so.
       if (
-        statusSetBy === 'system' &&
+        (statusSetBy === 'system' || (openStatement && !evidence)) &&
         (status === 'pending' || status === 'in_progress' || status === 'unknown') &&
         this.pastTermReason({
           ...(a.courseOfferingId ? { courseOfferingId: a.courseOfferingId } : {}),
           dueAt,
         })
-      )
+      ) {
         status = 'expired_past_term';
+        statusSetBy = 'system';
+        statusEvidenceFactId = undefined;
+      }
       const task: Task = {
         id,
         title: a.title,

@@ -167,6 +167,27 @@ describe('record_task_progress: calls', () => {
     expect(report()).toMatchObject({ status: 'pending', statusSetBy: 'system' });
   });
 
+  it('takes an idempotencyKey: a retry is replayed and the undo still restores the status', async () => {
+    const client = await connect(remoteWrite);
+    const t = (await client.listTools()).tools.find((x) => x.name === 'record_task_progress');
+    expect(JSON.stringify(t?.inputSchema)).toContain('idempotencyKey');
+    const args = {
+      task: 'レポート課題2',
+      course: 'ソフトウェア',
+      status: 'completed',
+      statement: '終わった',
+      idempotencyKey: 'progress-retry',
+    };
+    const first = await call(client, 'record_task_progress', args);
+    const again = await call(client, 'record_task_progress', args);
+    const a = first.structuredContent as { additionId: string; writeStatus: string };
+    const b = again.structuredContent as { additionId: string; writeStatus: string };
+    expect(a.writeStatus).toBe('created');
+    expect(b).toMatchObject({ writeStatus: 'replayed', additionId: a.additionId });
+    await call(client, 'retract_addition', { additionId: a.additionId });
+    expect(report()).toMatchObject({ status: 'pending', statusSetBy: 'system' });
+  });
+
   it('rejects submitted and an empty statement as validation errors', async () => {
     const client = await connect();
     const t = report();

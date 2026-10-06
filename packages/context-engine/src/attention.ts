@@ -1073,10 +1073,23 @@ export function attentionRequired(
   const fresh = alerts.filter(isFresh).map((a) => a.item);
   const told = alerts.filter((a) => !isFresh(a));
   const alerted: Record<string, number> = {};
-  for (const a of alerts) alerted[a.mark] = Math.max(mark.alerted[a.mark] ?? 0, a.rank);
+  // Remember the alerts that were given to the client, except those it is to hold until the
+  // morning (`quietUntil`): they are not told yet, so they come back as fresh on every call
+  // (still carrying quietUntil) and, from 08:00, without it, when the client sends them once.
+  let held = false;
+  for (const a of alerts) {
+    if (a.item.quietUntil && isFresh(a)) {
+      held = true;
+      if (mark.alerted[a.mark] !== undefined) alerted[a.mark] = mark.alerted[a.mark] as number;
+      continue;
+    }
+    alerted[a.mark] = Math.max(mark.alerted[a.mark] ?? 0, a.rank);
+  }
   const recorded = options.dryRun
     ? false
-    : store.set(clientId, scope, { lastCallAt: nowIso, alerted, seen }, nowIso);
+    : // While something is held for the morning, "since the last call" stays where it was, so
+      // news-type alerts (a cancellation, a notice) are still found when it is time to send them.
+      store.set(clientId, scope, { lastCallAt: held ? since : nowIso, alerted, seen }, nowIso);
   return {
     view: 'attention',
     generatedAt: now.toISOString(),
