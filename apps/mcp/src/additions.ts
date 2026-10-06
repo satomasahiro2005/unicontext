@@ -8,6 +8,7 @@ import {
   INGEST_LIMITS,
   type IngestItemResult,
   type IngestLectureResult,
+  EXTERNAL_SIGNAL_LABELS,
   type UniContext,
 } from '@unicontext/context-engine';
 import { z } from 'zod';
@@ -670,6 +671,10 @@ export const WRITE_TOOLS = {
   add_note: {
     title: 'メモを保存',
     description: `メモを保存する。科目のメモ（講義のポイント・先生からの連絡・ヒント）でも、科目に関係ない個人のメモ（覚えておきたいこと・勉強のメモ・決めたこと）でもよい（そのときは course を省略）。ユーザーが「メモしといて」「覚えておいて」と言ったときに使う。講義の録音で聞いた、締切ではないが後で要る情報（教室・出席・提出の方法、グループ分け、特別な手順、先生の大事な注意）は ingest_lecture の notes でまとめて保存する（1件だけならここで via=recording とし、ユーザーに確かめずに保存する）。保存したメモは get_notes と search で、他の会話・クライアントからも読める。${COMMON_DESC} / Save a note — about a course, or a personal one without a course — that the student asks to keep; readable from every session via get_notes and search. Information from a lecture recording goes through ingest_lecture (or here with via=recording), stored without asking. ${COMMON_EN}`,
+  },
+  ingest_external_signal: {
+    title: 'Gmail・カレンダーで見つけた大学の連絡を保存',
+    description: `ユーザーのGmailやGoogleカレンダーを見て、大学に関すること（履修登録の結果、休講、教室変更、締切、日程変更）が見つかったら、ユーザーに聞かずにこれで1件ずつ保存する。メール・予定そのものはUniContextには入らないので、保存しないとUniContextにも他の会話にも伝わらない。見つけたら「保存していいですか」と聞かず、1通・1予定につき1回呼ぶ。同じメール・予定は nativeId で見分けるので、2回送っても二重にはならず duplicate が返る。大学に関係ないメール・予定は保存しない。summary には大事なことを1〜2文で書き（メール全文を入れない）、quote に根拠の文をそのまま引用する。kind=deadline は締切として登録され、その科目に同じ番号の課題（「レポート1」＝「当日課題 (小レポート1)」）があればその課題に紐づく（task に対象を入れる）。kind=registration_result で、その科目を履修できなかった・取り消された・抽選に落ちたなら enrollment=not_taking（履修できたなら taking）と course を付ける。学務情報システムに履修中と出ていても、その科目は今日の予定・次にやること・通知から外れ、食い違いは1行で示される（本人が確認する前は未確認）。それ以外（休講・教室変更・日程変更・その他）は科目のメモになり、get_attention_required のニュースにも出る。保存した内容は「${EXTERNAL_SIGNAL_LABELS.gmail}」「${EXTERNAL_SIGNAL_LABELS.calendar}」と出典・受信日時つきで表示され、学務情報システムなど大学の値は上書きしない（食い違うときは両方を食い違いとして表示）。誤りは retract_addition で取り消せる。UniContextからメール・予定表・大学のシステムへ何かを送ったり変更したりはしない。 / When you find something about university life in the student's own Gmail or Google Calendar (a registration result, a cancellation, a room change, a deadline, a schedule change), call this once per mail or event without asking: UniContext never reads Gmail or the calendar, so nothing reaches other sessions unless you store it. The same mail or event (source + nativeId) is stored once; a repeat returns duplicate. Skip anything that is not about the university. summary: what matters in a sentence or two, never the whole mail; quote: the verbatim sentence. kind=deadline registers a deadline and links it to the course's assignment of the same number (give task); kind=registration_result with enrollment=not_taking (rejected, withdrawn, lost the lottery) or taking, and course, hides the course from today / next actions / notifications even if the academic system still lists it (a one-line note shows the disagreement, unconfirmed until the owner confirms); everything else becomes a course note and attention news. Labelled ${EXTERNAL_SIGNAL_LABELS.gmail} / ${EXTERNAL_SIGNAL_LABELS.calendar} with the arrival time and link, at the lowest authority: it never overrides LiveCampusU or any university value (a disagreement is shown with both values). Retract mistakes with retract_addition. Nothing is sent to Gmail, the calendar or any university system.`,
   },
   add_task: {
     title: 'やることを登録',

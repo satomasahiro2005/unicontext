@@ -151,12 +151,14 @@ In the same Work chat, connect Gmail and Google Calendar in ChatGPT (its app/con
 settings) if you want them used. The prompts and the `student-briefing` skill use them when
 available and say 「取得できていない」 for a source that is not connected.
 
-- **Strictly read-only.** Never mark mail as read, reply, send, draft, label, archive or
-  trash; never create or change a calendar event.
-- **Nothing is stored.** What is found in mail or calendar is only shown in that run's answer.
-  No `add_note` / `add_deadline` / `add_task` from it: that is out of scope until a future
-  `ingest_external_signal` (see [ARCHITECTURE.md](ARCHITECTURE.md), "Future:
-  `ingest_external_signal`").
+- **Strictly read-only toward Gmail and the calendar.** Never mark mail as read, reply, send,
+  draft, label, archive or trash; never create or change a calendar event.
+- **Only the morning task and interactive chats store, and only university findings.** When a
+  mail or event is about the university (registration result, 休講, 教室変更, 締切, 日程変更),
+  they call `ingest_external_signal` once per mail or event without asking (summary, quote,
+  nativeId; `enrollment=not_taking` + course for a rejected or withdrawn course). The hourly
+  watcher, the evening task and the weekly task store nothing. No `add_note` / `add_deadline`
+  / `add_task` from mail or calendar contents.
 - **Calendar = time facts**: appointments that are not classes (interviews, travel). An entry
   with the same time and title as a UniContext class is the same class and is shown once.
 - **Gmail = new information**, judged by sender, subject and content, not by labels or

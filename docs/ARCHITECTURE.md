@@ -434,6 +434,16 @@ sourceItemId, retrievedAt, url, location, rawItemId, label}`; `toCitation(ref, t
   `reject(a, b)`, `getLink`, `listLinks({status?, entityId?})`, `expand(id)` (connected component
   over auto+confirmed links, canonical first), `canonical(id)`, `invalidate()`. Links are persisted
   in `identity_links` (§14); no LLM involved.
+- Prior-year lineage is deliberately **not** identity (context-engine `lineage.ts`): last year's
+  offering of the same course (another, earlier academic year; the same `normalizeCourseTitle` or
+  the same course code, from any source) is never linked — year mismatch vetoes it, and it stays
+  a separate course whose assignments and deadlines never reach this year's views. The pipeline's
+  derive step instead stores a system fact `course:lineage` on each current offering (origin
+  `inferred`, producer rule `course-lineage`; value `{priorOfferingIds, basis}`, recomputed every
+  run), and `get_course` shows `lineage.priorOfferings [{id, year, title, sources}]` plus up to 20
+  documents / lessons / threads of those offerings as `historicalResources` (newest year first),
+  each labelled 「前年度（2025）の参考資料」 with citations; `search` hits from them carry the same
+  `label` and `priorYear`.
 
 ### 3.8 `@unicontext/search`
 
@@ -1082,14 +1092,65 @@ declaredAt}, taken}`, and a course-scoped `get_deadlines` still lists its deadli
 - Precedence among declarations: a confirmed one wins over a newer unconfirmed one (as for the
   group); the AI can retract its own unconfirmed one.
 
-#### Future: `ingest_external_signal`
+#### External signals: `ingest_external_signal` (`external-signals.ts`, MCP `external-signal.ts`)
 
-Gmail and Google Calendar findings are currently only read by the ChatGPT scheduled tasks
-(read-only) and are never stored in UniContext. A future write tool
-`ingest_external_signal(source = gmail | calendar, ...)` could store them like the other chat
-additions: unconfirmed, cited (message or event reference) and non-authoritative, so they never
-override the university's data and a conflict shows both values. Until then the tasks and skills
-must not write anything found in mail or calendar into UniContext.
+Registration outcomes, cancellations, room changes and deadline notes often reach the student only
+by mail or in the calendar. UniContext never reads Gmail or Google Calendar itself (no connector,
+no credentials): the AI client that does read them writes what concerns the university through the
+write tool `ingest_external_signal`, once per mail or event and without asking the student
+(`custom-instructions.ja.txt`, `tasks/morning.ja.txt`). The scheduled tasks stay read-only toward
+Gmail and the calendar; this is their one UniContext write.
+
+- Input: `{source: gmail | calendar, nativeId, observedAt, from?, subject?, eventStart?, eventEnd?,
+location?, summary (what matters, one or two sentences — never the whole mail), kind:
+registration_result | cancellation | room_change | deadline | schedule_change | other, course?,
+task?, dueAt?, quote (the verbatim sentence), url?, enrollment? (not_taking | taking, for a
+registration_result)}`. Needs the write scope on the remote surface; a local client may always
+  write.
+- Stored as an addition (kind `external_signal`, tool `ingest_external_signal`, unconfirmed,
+  retractable, confirmed or rejected by the owner like any other). **Idempotent**: the fingerprint
+  is `sha256(source + nativeId)` (the addition's dedupe key), so the same mail or event — from any
+  client, in any words — answers `duplicate`; a deadline already stored for the same course, item
+  and day is a `duplicate` too; a retracted signal can be stored again, a rejected one cannot.
+- Cited as 「Gmail（本人のメール）」 / 「Googleカレンダー」: the SourceReference has `retrievedAt` =
+  `observedAt` (when the mail arrived), `url`, and **authority `external-signal`**, the last entry
+  of every authority list in `default-rules.yaml` (below every university source). Its facts are
+  origin `extracted`, confidence 0.7, observed when stored. It never overrides a university value:
+  a different value from it opens a Conflict (both shown with their sources) only while it is the
+  newer claim, and otherwise the university wins quietly — exactly as for chat and recording facts.
+- Effects by `kind`:
+  - `registration_result` with `enrollment` (and the course): an unconfirmed
+    `condition:enrollment` declaration (§ above). The views follow it (not_taking leaves today /
+    week / next actions / attention / notifications) while the academic enrollment record is
+    untouched; `enrollmentNotes` says 「学務では履修中、Gmail（本人のメール）では履修していない…との
+    連絡」 and `get_course.enrollment.declaration` has `provenance: external`, `source` and the
+    quote. A confirmed or newer declaration of the student decides over it (§ above).
+  - `deadline` (`dueAt`, else `eventStart`): what `add_deadline` stores — attached to the course's
+    assignment of the same number (`task` 「レポート1」 = 「当日課題 (小レポート1)」) as an unconfirmed
+    `assignment_due` fact (`attachedTo`), else an assignment of its own. A date that differs from
+    the system's is a Conflict, never a replacement; the deadline views show the university's date
+    with the signal in the course's conflicts. The item is labelled with the signal's source
+    (`recorded.label`) until confirmed.
+  - everything else (`cancellation`, `room_change`, `schedule_change`, `other`, a
+    `registration_result` that does not say taking or not): a note on the course (`get_notes`,
+    kind `external_signal`) holding the summary, the quote, the sender / event time / place and the
+    link, and an `attention` news item (`get_attention_required`, `get_briefing` news:
+    「【Gmail（本人のメール）】科目: …」, once per client). It does not change the room, the class
+    status or the timetable.
+- Read side: nothing new. Signals appear in the ordinary views with their label and citations.
+
+#### Attendance (`attendance.ts`)
+
+LiveCampusU's 出欠 rows are stored by the connector as one `attendance` fact per enrolled offering
+(raw counts `attended / absent / late / earlyLeave / excused / invalid` and `published`).
+`get_course.attendance` is `{counts, published?, asOf, absencesSoFar?, derived?, text,
+citations}`: the counts exactly as stated, the 欠席 count as `absencesSoFar`, and `derived` shares
+(`attendedShare`, `absentShare`) only when the counts include a total the university gave. There is
+no warning logic: UniContext does not know a course's attendance rule (the syllabus has it). MCP
+`get_attendance {course?}` (read-only, both surfaces) lists the current term's courses, or one,
+with `coverage {complete, missing, sources[{health, lastSuccessAt}], note}`: a course without a row
+says so, and when the academic system has given no attendance at all the note says it is not
+imported yet and to answer nothing from memory.
 
 #### Task progress (`task-progress.ts`, task-engine `progress.ts`)
 

@@ -22,3 +22,6 @@ export * from './syllabus-priority.js';
 export * from './documents.js';
 export * from './task-progress.js';
 export * from './freshness.js';
+export * from './attendance.js';
+export * from './external-signals.js';
+export * from './lineage.js';

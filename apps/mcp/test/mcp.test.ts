@@ -114,6 +114,7 @@ describe('MCP contract: tools listing', () => {
       'set_course_condition',
       'add_session_rule',
       'record_task_progress',
+      'ingest_external_signal',
       'list_my_additions',
       'retract_addition',
       'open_announcement',

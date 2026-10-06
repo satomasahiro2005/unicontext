@@ -152,6 +152,7 @@ const ADDITION_KIND: Record<AdditionView['kind'], string> = {
   session_rule: 'グループ別の日程',
   progress: '進み具合',
   place: '場所・移動時間',
+  external_signal: 'メール・予定表の連絡',
 };
 
 /** What AI clients added from lecture recordings, waiting for the user to confirm or reject. */

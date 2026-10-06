@@ -71,6 +71,22 @@ import {
   travelSubject,
   travelValue,
 } from './places.js';
+import {
+  boundedText,
+  EXTERNAL_SIGNAL_AUTHORITY,
+  EXTERNAL_SIGNAL_KINDS,
+  EXTERNAL_SIGNAL_LABELS,
+  EXTERNAL_SIGNAL_LIMITS,
+  EXTERNAL_SIGNAL_SOURCES,
+  externalSignalDedupeKey,
+  externalSignalFingerprint,
+  externalSignalNoteText,
+  externalSignalTitle,
+  type IngestExternalSignalInput,
+  isExternalSignalAddition,
+  parseSignalInstant,
+  signalUrl,
+} from './external-signals.js';
 
 /*
  * Writes from AI clients (§11, §19–22, §47–49, §74): lectures, deadlines, notes and things to do
@@ -104,7 +120,10 @@ export const ADDITION_VIA_AUTHORITY: Record<AdditionVia, string> = {
 };
 
 export function additionViaOfAuthority(authority: string | undefined): AdditionVia {
-  return authority === ADDITION_VIA_AUTHORITY.chat ? 'chat' : 'recording';
+  // A finding in the student's mail / calendar that an AI client wrote down is told like a chat.
+  return authority === ADDITION_VIA_AUTHORITY.chat || authority === EXTERNAL_SIGNAL_AUTHORITY
+    ? 'chat'
+    : 'recording';
 }
 
 /** Subject of to-dos that belong to no course (the student's own list). */
@@ -432,7 +451,7 @@ export interface NoteItem {
   /** The document holding the note. */
   id: string;
   additionId: string;
-  kind: 'note' | 'lecture_summary';
+  kind: 'note' | 'lecture_summary' | 'external_signal';
   title: string;
   /** Cut to {@link NOTE_PREVIEW_CHARS} in lists; complete when one note is asked for by id. */
   text: string;
@@ -587,7 +606,9 @@ export function viaOfAddition(a: Pick<Addition, 'data'>): AdditionVia {
   return a.data.via === 'chat' ? 'chat' : 'recording';
 }
 
-function labelOf(a: Pick<Addition, 'data'>): string {
+function labelOf(a: Pick<Addition, 'data' | 'tool'>): string {
+  // An external signal is labelled with where it was found: 「Gmail（本人のメール）」.
+  if (isExternalSignalAddition(a) && typeof a.data.source === 'string') return a.data.source;
   return ADDITION_VIA_LABELS[viaOfAddition(a)];
 }
 
@@ -637,6 +658,54 @@ export class AdditionsService {
    */
   async setTravelTime(client: AdditionClient, input: SetTravelTimeInput): Promise<AdditionResult> {
     return this.write(client, this.placeSpec(input));
+  }
+
+  /**
+   * ingest_external_signal: a finding from the student's Gmail / Google Calendar (a registration
+   * result, a cancellation, a room change, a deadline), stored unconfirmed at the lowest authority
+   * (`external-signal`) and cited to the message or event. The same mail / event (source +
+   * nativeId) is stored once: sending it again, from any client, answers `duplicate`. A deadline
+   * that is already stored (same course and item, close due date) is a duplicate too.
+   */
+  async ingestExternalSignal(
+    client: AdditionClient,
+    input: IngestExternalSignalInput,
+  ): Promise<AdditionResult> {
+    const nativeId = boundedText(input.nativeId, 'nativeId', EXTERNAL_SIGNAL_LIMITS.nativeId);
+    if (!nativeId) throw new ValidationError('nativeId is empty: give the mail / event id');
+    if (!EXTERNAL_SIGNAL_SOURCES.includes(input.source))
+      throw new ValidationError(`source must be one of ${EXTERNAL_SIGNAL_SOURCES.join(', ')}`);
+    const fingerprint = externalSignalFingerprint(input.source, nativeId);
+    const seen = (a: Addition | undefined): AdditionResult | undefined => {
+      if (!a) return undefined;
+      this.burstHit(client);
+      return { status: 'duplicate', addition: this.view(a), audit: this.auditOf(a) };
+    };
+    const dup = seen(
+      this.store.byDedupeKey(externalSignalDedupeKey(fingerprint), [
+        'unconfirmed',
+        'confirmed',
+        'rejected',
+      ])[0],
+    );
+    if (dup) return dup;
+    const plan = this.externalSignalPlan({ ...input, nativeId }, fingerprint);
+    // The same deadline stored by another mail, a chat or a recording: do not add it twice.
+    if (plan.item) {
+      const { key, dueAt } = plan.item;
+      // add_deadline / ingest_lecture items share the key; earlier signals carry it in their data.
+      const close = (a: Addition): boolean =>
+        a.dueAt !== undefined &&
+        Math.abs(Date.parse(a.dueAt) - Date.parse(dueAt)) <= DEDUPE_TOLERANCE_MS;
+      const same =
+        this.store.byDedupeKey(key, ['unconfirmed', 'confirmed']).find(close) ??
+        this.store
+          .list({ statuses: ['unconfirmed', 'confirmed'] })
+          .find((a) => isExternalSignalAddition(a) && a.data.itemKey === key && close(a));
+      const r = seen(same);
+      if (r) return r;
+    }
+    return this.write(client, plan.spec);
   }
 
   /** set_course_condition: the student's group in a course (unconfirmed until the owner confirms). */
@@ -979,6 +1048,169 @@ export class AdditionsService {
       dueAt: undefined,
       data: { text, ...(input.evidence ? { evidence: input.evidence } : {}) },
       apply: (a, ref) => this.applyNote(a, ref, course, title, text, input.lectureDate),
+    };
+  }
+
+  /**
+   * What one external signal stores. A deadline becomes what add_deadline would store (linked to
+   * the course's assignment of the same number when there is one); a registration result that says
+   * whether the student takes the course becomes an unconfirmed `condition:enrollment` declaration
+   * (task-engine enrollment-declaration.ts); everything else is a note on the course (also the
+   * attention view's news). Never overrides a university value: the claims are origin `extracted`
+   * at authority `external-signal`, last in the authority rules.
+   */
+  private externalSignalPlan(
+    input: IngestExternalSignalInput,
+    fingerprint: string,
+  ): { spec: WriteSpec; item?: { key: string; dueAt: string } } {
+    const L = EXTERNAL_SIGNAL_LIMITS;
+    if (!EXTERNAL_SIGNAL_KINDS.includes(input.kind))
+      throw new ValidationError(`kind must be one of ${EXTERNAL_SIGNAL_KINDS.join(', ')}`);
+    const summary = boundedText(input.summary, 'summary', L.summary);
+    if (!summary)
+      throw new ValidationError('summary is empty: say what matters in a sentence or two');
+    const quote = boundedText(input.quote, 'quote', L.quote);
+    if (!quote) throw new ValidationError('quote is empty: quote the sentence it rests on');
+    const stamp = parseSignalInstant(input.observedAt, 'observedAt');
+    // A mail cannot have arrived in the future.
+    const observedAt = Date.parse(stamp) > this.now().getTime() ? this.now().toISOString() : stamp;
+    const from = boundedText(input.from, 'from', L.from);
+    const subject = boundedText(input.subject, 'subject', L.subject);
+    const location = boundedText(input.location, 'location', L.location);
+    const task = boundedText(input.task, 'task', L.task);
+    const url = signalUrl(input.url);
+    const eventStart = input.eventStart?.trim()
+      ? parseSignalInstant(input.eventStart, 'eventStart')
+      : undefined;
+    const eventEnd = input.eventEnd?.trim()
+      ? parseSignalInstant(input.eventEnd, 'eventEnd')
+      : undefined;
+    const course = this.course(input.courseOfferingId);
+    const label = EXTERNAL_SIGNAL_LABELS[input.source];
+    const title = externalSignalTitle({ source: input.source, subject, summary, kind: input.kind });
+    const data: Record<string, JsonValue> = {
+      signalSource: input.source,
+      signalKind: input.kind,
+      nativeId: input.nativeId,
+      fingerprint,
+      observedAt,
+      summary,
+      evidence: quote,
+      ...(from ? { from } : {}),
+      ...(subject ? { subject } : {}),
+      ...(eventStart ? { eventStart } : {}),
+      ...(eventEnd ? { eventEnd } : {}),
+      ...(location ? { location } : {}),
+      ...(task ? { task } : {}),
+      ...(url ? { url } : {}),
+    };
+    const specInput: Common & { signal: JsonValue } = {
+      ...(course ? { courseOfferingId: course } : {}),
+      via: 'chat',
+      source: label,
+      ...(input.idempotencyKey?.trim() ? { idempotencyKey: input.idempotencyKey.trim() } : {}),
+      signal: { fingerprint, kind: input.kind },
+    };
+    const spec: Omit<WriteSpec, 'apply'> = {
+      tool: 'ingest_external_signal',
+      kind: 'external_signal',
+      input: specInput,
+      via: 'chat',
+      course,
+      title,
+      dedupeKey: externalSignalDedupeKey(fingerprint),
+      dueAt: undefined,
+      data,
+    };
+
+    if (input.kind === 'deadline') {
+      const raw = input.dueAt?.trim() || eventStart;
+      if (!raw) throw new ValidationError('dueAt (or eventStart) is required for kind=deadline');
+      const work = task ?? subject ?? (summary.length > 60 ? `${summary.slice(0, 60)}…` : summary);
+      const due = this.resolveDue(
+        course,
+        raw,
+        zonedDateString(new Date(observedAt), this.tz),
+        undefined,
+      );
+      const deadline: AddDeadlineInput = {
+        ...(course ? { courseOfferingId: course } : {}),
+        title: work,
+        dueAt: raw,
+        kind: 'assignment',
+        evidence: quote,
+        notes: summary,
+        via: 'chat',
+        source: label,
+      };
+      const itemKey = `assignment|${course ?? '-'}|${normTitle(work)}`;
+      data.dueInput = raw;
+      data.dueResolution = { ...due.resolution };
+      data.itemKey = itemKey;
+      return {
+        spec: {
+          ...spec,
+          dueAt: due.dueAt,
+          apply: (a, ref) => this.applyAssignment(a, ref, course, work, deadline, due),
+        },
+        item: { key: itemKey, dueAt: due.dueAt },
+      };
+    }
+
+    const declared =
+      input.kind === 'registration_result' && input.enrollment?.trim()
+        ? normalizeEnrollmentDeclaration(input.enrollment)
+        : undefined;
+    if (input.kind === 'registration_result' && input.enrollment?.trim() && !declared)
+      throw new ValidationError('enrollment must be not_taking or taking');
+    if (declared) {
+      if (!course)
+        throw new ValidationError(
+          'course is required when a registration result says whether the student takes it',
+        );
+      data.enrollment = declared;
+      return {
+        spec: {
+          ...spec,
+          apply: (a, ref) => {
+            const f = this.putFact(
+              a,
+              ref,
+              course,
+              ENROLLMENT_CONDITION_PREDICATE,
+              declared,
+              quote,
+              false,
+            );
+            return {
+              entityIds: [course],
+              ownEntityIds: [],
+              factIds: [f.id],
+              stored: { predicate: ENROLLMENT_CONDITION_PREDICATE, value: declared },
+            };
+          },
+        },
+      };
+    }
+
+    const text = externalSignalNoteText({
+      source: input.source,
+      kind: input.kind,
+      from,
+      subject,
+      eventStart,
+      eventEnd,
+      location,
+      summary,
+      quote,
+      url,
+      observedAt,
+    });
+    return {
+      spec: {
+        ...spec,
+        apply: (a, ref) => this.applyExternalNote(a, ref, course, title, text, observedAt),
+      },
     };
   }
 
@@ -1858,6 +2090,44 @@ export class AdditionsService {
     };
   }
 
+  /** An external signal that is not a deadline or an enrollment result: a note on the course. */
+  private applyExternalNote(
+    a: Addition,
+    ref: SourceReference,
+    course: string | undefined,
+    title: string,
+    text: string,
+    observedAt: string,
+  ): Applied {
+    const id = stableId('document', ADDITIONS_SOURCE_ID, a.id);
+    this.upsertOwn(
+      {
+        id,
+        kind: 'document',
+        title,
+        mimeType: 'text/markdown',
+        text,
+        ...(course ? { courseOfferingId: course as Assignment['courseOfferingId'] } : {}),
+        modifiedAt: observedAt,
+        extra: {
+          additionId: a.id,
+          recorded: true,
+          via: 'chat',
+          externalSignal: true,
+          ...(typeof a.data.signalKind === 'string' ? { signalKind: a.data.signalKind } : {}),
+        },
+      },
+      a,
+      ref,
+    );
+    return {
+      entityIds: [id],
+      ownEntityIds: [id],
+      factIds: [],
+      stored: { documentId: id },
+    };
+  }
+
   // ---------- helpers ----------
 
   /** Upsert an entity owned by the additions source; true when it was created. */
@@ -1936,14 +2206,21 @@ export class AdditionsService {
     timestampMs: number | undefined,
   ): SourceReference {
     const clientId = client?.id ?? a.clientId;
+    // A signal from the student's mail / calendar: cited with when it arrived and a link to it, at
+    // the lowest authority (below every university source).
+    const external = isExternalSignalAddition(a);
+    const arrived =
+      external && typeof a.data.observedAt === 'string' ? a.data.observedAt : undefined;
+    const link = external && typeof a.data.url === 'string' ? a.data.url : undefined;
     return this.refs.upsert({
       id: this.refId(a, entityId),
       sourceSystem: source,
       sourceId: ADDITIONS_SOURCE_ID,
       sourceLabel: source,
-      authority: ADDITION_VIA_AUTHORITY[viaOfAddition(a)],
+      authority: external ? EXTERNAL_SIGNAL_AUTHORITY : ADDITION_VIA_AUTHORITY[viaOfAddition(a)],
       sourceItemId: `${clientId}#${a.id}`.slice(0, 500),
-      retrievedAt: this.now().toISOString(),
+      ...(link ? { url: link } : {}),
+      retrievedAt: arrived ?? this.now().toISOString(),
       ...(timestampMs !== undefined
         ? { location: { timestamp: hms(timestampMs), timestampMs } }
         : {}),
@@ -2220,7 +2497,7 @@ export class AdditionsService {
       kind: a.kind,
       status: a.status,
       via,
-      label: ADDITION_VIA_LABELS[via],
+      label: labelOf(a),
       title: a.title,
       course,
       dueAt: a.dueAt,
@@ -2288,7 +2565,8 @@ export class AdditionsService {
     const q = options.query?.normalize('NFKC').toLowerCase().trim();
     const items: NoteItem[] = [];
     for (const a of this.store.list({ statuses: ['unconfirmed', 'confirmed'] })) {
-      if (a.tool !== 'add_note' && a.tool !== 'record_lecture') continue;
+      if (a.tool !== 'add_note' && a.tool !== 'record_lecture' && !isExternalSignalAddition(a))
+        continue;
       const stored = a.data.stored;
       const documentId =
         stored && typeof stored === 'object' && !Array.isArray(stored)
@@ -2311,7 +2589,12 @@ export class AdditionsService {
       items.push({
         id: documentId,
         additionId: a.id,
-        kind: a.tool === 'record_lecture' ? 'lecture_summary' : 'note',
+        kind:
+          a.tool === 'record_lecture'
+            ? 'lecture_summary'
+            : isExternalSignalAddition(a)
+              ? 'external_signal'
+              : 'note',
         title: doc.title,
         text:
           full || text.length <= NOTE_PREVIEW_CHARS
@@ -2320,7 +2603,7 @@ export class AdditionsService {
         truncated: !full && text.length > NOTE_PREVIEW_CHARS,
         course: own ? { id: own, title: this.courseTitle(own) } : undefined,
         via,
-        label: ADDITION_VIA_LABELS[via],
+        label: labelOf(a),
         status: a.status,
         source: typeof a.data.source === 'string' ? a.data.source : (a.clientName ?? a.clientId),
         client: a.clientName,

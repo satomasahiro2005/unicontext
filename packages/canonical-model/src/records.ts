@@ -100,6 +100,7 @@ export const ADDITION_TOOLS = [
   'record_lecture',
   'add_deadline',
   'add_note',
+  'ingest_external_signal',
   'add_task',
   'set_travel_time',
   'set_course_condition',
@@ -115,6 +116,7 @@ export const ADDITION_KINDS = [
   'exam',
   'prep',
   'note',
+  'external_signal',
   'task',
   /** A place the student told about: how long a trip takes (set_travel_time). */
   'place',

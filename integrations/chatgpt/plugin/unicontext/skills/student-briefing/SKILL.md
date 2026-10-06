@@ -10,9 +10,11 @@ buzzing for nothing teaches them to ignore it, so silence is the default.
 
 ## Tools
 
-Read-only only. Never call a UniContext write tool here (`ingest_lecture`, `add_*`,
-`record_lecture`, `retract_addition`, `open_announcement`, `set_course_condition`,
-`add_session_rule`): a write waits for approval and pauses the task.
+Read-only only, with one exception. The hourly watcher never calls a UniContext write tool
+(`ingest_lecture`, `ingest_external_signal`, `add_*`, `record_lecture`, `retract_addition`,
+`open_announcement`, `set_course_condition`, `add_session_rule`): a write waits for approval
+and pauses the task. The morning task calls `ingest_external_signal` only, for university
+findings in Gmail and Calendar (see below), and no other write tool.
 
 UniContext, use the first that exists, in this order:
 
@@ -31,11 +33,19 @@ ChatGPTのプラグイン画面で再接続してください」.
 
 ## Google Calendar and Gmail (when the connectors are available)
 
-Strictly read-only. Never mark mail as read, reply, send, draft, label, archive or trash,
-and never create or change a calendar event. Never copy what you find into UniContext
-(`add_note`, `add_deadline`, … from mail or calendar contents): storing it is a future
-`ingest_external_signal`, not this task. If a connector is missing or fails, say
-「取得できていない」 for that source and go on with the rest.
+Strictly read-only toward Gmail and the calendar. Never mark mail as read, reply, send,
+draft, label, archive or trash, and never create or change a calendar event. If a connector
+is missing or fails, say 「取得できていない」 for that source and go on with the rest.
+
+- **Watcher: store nothing.** Do not call `ingest_external_signal` or any other write.
+- **Morning: keep university findings.** When a mail or event is about the university
+  (a registration result, 休講, 教室変更, 締切, 日程変更), call `ingest_external_signal`
+  once per mail or event without asking, in addition to writing it into the list. Give
+  `summary` (one or two sentences, never the whole mail), `quote` (the proving sentence,
+  verbatim) and `nativeId` (the mail or event id). For 取消 / 不許可 / 抽選落ち add
+  `enrollment=not_taking` and `course`. A repeat returns `duplicate`; that is fine. Skip
+  mail and events that are not about the university. Never use `add_note` or `add_deadline`
+  for this.
 
 - **Calendar = time facts**: appointments that are not classes (interviews, travel,
   meetings). A calendar entry with the same time and title as a UniContext class is the

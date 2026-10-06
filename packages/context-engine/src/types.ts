@@ -11,7 +11,9 @@ import type {
 import type { Citation } from '@unicontext/provenance';
 import type { CapabilityCoverage, CoverageCapability, DeadlineCoverage } from './coverage.js';
 import type { EstimatedDue } from './estimate.js';
+import type { CourseAttendance } from './attendance.js';
 import type { ViewFreshness } from './freshness.js';
+import type { CourseLineageView, HistoricalResource } from './lineage.js';
 import type { NextActionSummary } from './next-action.js';
 
 export type { Citation } from '@unicontext/provenance';
@@ -182,7 +184,7 @@ export interface EffectiveSchedule {
  * confirmed it yet: show the label with the evidence. Every client and session sees these items.
  */
 export interface RecordedMarker {
-  label: '録音から' | 'チャットで登録';
+  label: '録音から' | 'チャットで登録' | 'Gmail（本人のメール）' | 'Googleカレンダー';
   /** recording = heard in a lecture recording, chat = told / created in a chat. */
   via: 'recording' | 'chat';
   additionId: string | undefined;
@@ -382,7 +384,7 @@ export interface CourseEnrollmentView {
     | {
         value: 'not_taking' | 'taking';
         confirmed: boolean;
-        provenance: 'student' | 'chat' | 'recording';
+        provenance: 'student' | 'chat' | 'recording' | 'external';
         evidence: string | undefined;
         source: string;
         declaredAt: string;
@@ -656,6 +658,16 @@ export interface CourseContext extends BundleBase<'course'> {
   // stream E
   /** Which sources read each kind of information for this course, and what is missing. */
   capabilityCoverage?: Record<CoverageCapability, CapabilityCoverage> | undefined;
+  // stream F
+  /** The academic system's attendance counts for the course (raw); absent when it gave none. */
+  attendance?: CourseAttendance | undefined;
+  /**
+   * Up to 20 documents / lessons / threads of the earlier years' offerings of this course, newest
+   * year first, each labelled 「前年度（2025）の参考資料」. Study material only: never a deadline.
+   */
+  historicalResources?: HistoricalResource[] | undefined;
+  /** The earlier offerings of this course (derived pointer, never an identity link). */
+  lineage?: CourseLineageView | undefined;
 }
 
 export interface TeamsActivityContext extends BundleBase<'teams-activity'> {

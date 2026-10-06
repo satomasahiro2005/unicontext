@@ -26,7 +26,8 @@ export interface EnrollmentDeclaration {
   value: EnrollmentDeclarationValue;
   /** The student confirmed it (`unicontext additions confirm`), or entered it as a correction. */
   confirmed: boolean;
-  provenance: 'student' | 'chat' | 'recording';
+  /** external = a finding in the student's Gmail / calendar written down by an AI client. */
+  provenance: 'student' | 'chat' | 'recording' | 'external';
   factId: string;
   evidence: string | undefined;
   observedAt: string;
@@ -37,6 +38,7 @@ export interface EnrollmentDeclaration {
 
 export function provenanceOfDeclaration(f: FactWithSource): EnrollmentDeclaration['provenance'] {
   if (f.fact.origin === 'user') return 'student';
+  if (f.source?.authority === 'external-signal') return 'external';
   return f.source?.authority === 'transcript' ? 'recording' : 'chat';
 }
 

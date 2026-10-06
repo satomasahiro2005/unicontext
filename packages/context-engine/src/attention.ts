@@ -24,6 +24,7 @@ import { uniqueCitations } from '@unicontext/provenance';
 import type { UniContextDatabase } from '@unicontext/database';
 import type { CoverageGap, CoverageHealth, CoverageSource } from './coverage.js';
 import type { EstimatedDue } from './estimate.js';
+import { externalSignalAlerts } from './external-signals.js';
 import {
   classifyWork,
   coverageGapText,
@@ -905,6 +906,9 @@ function currentAlerts(uc: UniContext, since: string): Draft[] {
       });
     }
   }
+
+  // What the student's mail / calendar said about university life (stored by an AI client).
+  out.push(...externalSignalAlerts(uc, since));
 
   // Falling behind in courses without a weekly class.
   const week = zonedDateString(startOfZonedWeek(new Date(nowMs), tz), tz);
