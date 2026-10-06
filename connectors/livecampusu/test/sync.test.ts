@@ -89,9 +89,11 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
     expect(server.maxInflight).toBe(1);
     expect(server.paths().filter((p) => DENIED.test(p))).toEqual([]);
     expect(strategy.reauthCalls).toBe(0);
-    // Only the READ notice (row 46) was opened; the unread one never.
-    expect(server.openedRows).toEqual([46]);
+    // Both list rows were opened (openUnreadNotices is on by default): the course-linked room
+    // change (46, read) first, then the unread survey (0).
+    expect(server.openedRows).toEqual([46, 0]);
     expect(server.paths().filter((p) => /rowSelect/.test(p))).toEqual([
+      'POST SC_17001B00_01/rowSelect',
       'POST SC_17001B00_01/rowSelect',
     ]);
     expect(strategy.persisted).toEqual(['S1']);
@@ -109,8 +111,9 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
     expect(room?.context.offeringKey).toBe('2026-77401220-61');
     expect(room?.detail?.body).toContain('（本文）');
     const survey = notices.find((n) => n.important?.contactSeq === '100001');
+    // Unread in the list this run, opened by the sync (LCU now shows it read).
     expect(survey?.listRow?.unread).toBe(true);
-    expect(survey?.detail).toBeUndefined();
+    expect(survey?.detail?.openedWhileRead).toBe(false);
     // importantNotice-only items are matched to offerings by title when unambiguous.
     const modeling = notices.find((n) => n.important?.contactSeq === '100004');
     expect(modeling?.context.offeringKey).toBe('2026-77451100-61');
@@ -149,7 +152,7 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
   });
 
   it('incremental sync fetches details only for read notices whose row changed', async () => {
-    const first = setup({ readRows: [46] });
+    const first = setup({ readRows: [46] }, { openUnreadNotices: false });
     const r1 = await first.adapter.sync({ mode: 'initial' });
     expect(first.server.openedRows).toEqual([46]);
     // Same adapter, nothing changed: no detail request at all.
@@ -173,14 +176,15 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
   it('respects maxNoticeDetailsPerRun and noticeDetails: false', async () => {
     const a = setup({ readRows: [0, 46] }, { maxNoticeDetailsPerRun: 1 });
     await a.adapter.sync({ mode: 'initial' });
-    expect(a.server.openedRows).toEqual([0]); // newest first
+    // Course-linked / high importance first (the room change), then newest first.
+    expect(a.server.openedRows).toEqual([46]);
     const b = setup({ readRows: [0, 46] }, { noticeDetails: false });
     await b.adapter.sync({ mode: 'initial' });
     expect(b.server.openedRows).toEqual([]);
   });
 
-  it('reads body, sender, targets and attachment names of READ notices; never opens unread ones', async () => {
-    const { server, adapter } = setup({ readRows: [46] });
+  it('with openUnreadNotices: false reads READ notices only; never opens unread ones', async () => {
+    const { server, adapter } = setup({ readRows: [46] }, { openUnreadNotices: false });
     server.detailBody = '第1段落<br>締切は10月20日です。https://example.ac.jp/form';
     const result = await adapter.sync({ mode: 'initial' });
     const notices = byType(result)['lcu.notice']?.map((i) => i.payload as NoticePayload) ?? [];
@@ -218,7 +222,7 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
   });
 
   it('skips the attachment call for rows without the clip', async () => {
-    const { server, adapter } = setup({ readRows: [0] });
+    const { server, adapter } = setup({ readRows: [0] }, { openUnreadNotices: false });
     await adapter.sync({ mode: 'initial' });
     expect(server.openedRows).toEqual([0]);
     expect(server.paths().filter((p) => /fileUpload/.test(p))).toEqual([]);
@@ -245,7 +249,7 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
         { strategy },
       );
       await expect(a1.sync({ mode: 'initial' })).rejects.toThrow();
-      expect(server.openedRows).toEqual([0]);
+      expect(server.openedRows).toEqual([46]);
       const saved = JSON.parse(readFileSync(path.join(dir, 'notice-details.json'), 'utf8')) as {
         notices: Record<string, unknown>;
       };
@@ -256,7 +260,7 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
         { strategy },
       );
       const r = await a2.sync({ mode: 'initial' });
-      expect(server.openedRows).toEqual([0, 46]);
+      expect(server.openedRows).toEqual([46, 0]);
       const withBody = (byType(r)['lcu.notice'] ?? [])
         .map((i) => i.payload as NoticePayload)
         .filter((n) => n.bodyStatus === 'fetched');

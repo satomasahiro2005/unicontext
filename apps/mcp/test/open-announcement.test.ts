@@ -35,16 +35,21 @@ afterAll(async () => {
 });
 
 describe('open_announcement', () => {
-  it('is a destructive, open-world write tool; remote only with unicontext.write', async () => {
-    const local = (await (await connect()).listTools()).tools.find(
-      (t) => t.name === 'open_announcement',
-    );
+  it('is an open-world write tool used without asking; remote only with unicontext.write', async () => {
+    const tools = (await (await connect()).listTools()).tools;
+    const local = tools.find((t) => t.name === 'open_announcement');
+    // The student chose content over the unread flag: no confirmation-forcing destructive hint.
     expect(local?.annotations).toMatchObject({
       readOnlyHint: false,
-      destructiveHint: true,
+      destructiveHint: false,
       openWorldHint: true,
     });
     expect(local?.description).toContain('既読');
+    expect(local?.description).toContain('本人に確かめずに');
+    for (const t of tools.filter((x) => /announcement/.test(x.name)))
+      expect(t.description ?? '').not.toMatch(/了承|ask the user first/);
+    const get = tools.find((t) => t.name === 'get_announcement');
+    expect(get?.description).toContain('open_announcement');
     expect(local?.outputSchema).toBeDefined();
     const ro = await connect({ surface: 'remote', client: { id: 'ro' } });
     expect((await ro.listTools()).tools.map((t) => t.name)).not.toContain('open_announcement');

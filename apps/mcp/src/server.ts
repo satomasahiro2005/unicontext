@@ -238,6 +238,15 @@ export const ASSIGNMENT_CONTENT_INSTRUCTION_JA =
 export const ASSIGNMENT_CONTENT_INSTRUCTION_EN =
   'To work on an assignment, call get_assignment with its assignmentId or taskId (from get_assignments, get_course or search) for the full prompts (質問1, 質問2, ...), choices, files, the student’s saved answers and the deadline; get_assignments alone only says it exists. Saving or submitting answers is done by the student at the source (never through UniContext).';
 
+/** Announcements: the content wins over the unread flag (the student's decision). */
+export const ANNOUNCEMENT_CONTENT_INSTRUCTION_JA =
+  'お知らせは件名だけで判断せず、中身が答えや予定に関わりうるものは get_announcement で全文を読んでから答えてください。本文がまだない（bodyStatus が pending / notOpened）お知らせは、本人に確かめずに open_announcement で開いて読みます（LiveCampusUでは既読になりますが、本人は中身を優先すると決めています。UniContextでは本人が読むまで未読のまま）。「未読なので開いていません」「既読になるので開きません」とは答えないでください。';
+export const ANNOUNCEMENT_CONTENT_INSTRUCTION_EN =
+  'Announcements: when the content may matter, read it with get_announcement before answering; when it has no body yet (bodyStatus pending / notOpened), open it with open_announcement without asking first (it becomes read in LiveCampusU, which the student accepted: content wins over the unread flag; UniContext keeps it unread until they read it there). Never answer that a notice was left unopened because it is unread.';
+/** The read-only remote surface has no open_announcement. */
+export const ANNOUNCEMENT_CONTENT_INSTRUCTION_READONLY_JA =
+  'お知らせは件名だけで判断せず、中身が関わりうるものは get_announcement で全文を読んでから答えてください。本文がまだない（bodyStatus が pending / notOpened）ものは「未読なので開いていません」とは言わず、本文がまだ取れていないこと（UniContextの同期で取得されます）と、件名・分類・添付から分かることを伝えます。';
+
 export const SERVER_INSTRUCTIONS = [
   'UniContext は学生本人の大学情報（時間割・課題・お知らせ・講義録など）を、情報源つきで返します。',
   '回答するときは、各結果の citations / answerHint に従い「根拠: 学務情報システム 10/1 09:42取得」のように必ず出典を添えてください。',
@@ -252,6 +261,7 @@ export const SERVER_INSTRUCTIONS = [
   EXISTING_ITEM_RULE_JA,
   RECORDING_INSTRUCTION_JA,
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
+  ANNOUNCEMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
   UNKNOWN_DEADLINE_POLICY_EN,
@@ -259,6 +269,7 @@ export const SERVER_INSTRUCTIONS = [
   EXISTING_ITEM_RULE_EN,
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
+  ANNOUNCEMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
 
@@ -272,6 +283,7 @@ export const REMOTE_SERVER_INSTRUCTIONS = [
   UNKNOWN_DEADLINE_POLICY_JA,
   'この接続では何も変更できません。履修計画はsearch_syllabus・get_syllabus・get_credit_summaryで調べ、登録はユーザー本人が大学のシステムで行います。',
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
+  ANNOUNCEMENT_CONTENT_INSTRUCTION_READONLY_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Read-only: answers must cite sources and report conflicting sources instead of picking one.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
@@ -295,6 +307,7 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   RECORDING_INSTRUCTION_JA,
   '保存先はUniContextだけで、大学のシステムには何も送りません。会話で登録したものは「チャットで登録」、録音からのものは「録音から」と表示され、学務情報システムなどの値は変えられません（食い違えば食い違いとして表示）。課題の提出状態・成績・履修も変更できません。誤りは retract_addition で取り消せます（自分が追加したものだけ）。',
   ASSIGNMENT_CONTENT_INSTRUCTION_JA,
+  ANNOUNCEMENT_CONTENT_INSTRUCTION_JA,
   NEXT_ACTION_INSTRUCTIONS_JA,
   'Register deadlines, to-dos and notes the student mentions or plans in any chat (add_deadline / add_task / add_note) so every other session and client sees them. Writes go to UniContext only (never to a university system) and cannot change authoritative data, task status or grades.',
   'Deadlines: absence in UniContext does not mean there is none. Read coverage (sources, health, gaps); when it is incomplete say so, tell the student where to check, and never say there is no deadline or plenty of time without complete coverage.',
@@ -302,6 +315,7 @@ export const REMOTE_WRITE_SERVER_INSTRUCTIONS = [
   EXISTING_ITEM_RULE_EN,
   RECORDING_INSTRUCTION_EN,
   ASSIGNMENT_CONTENT_INSTRUCTION_EN,
+  ANNOUNCEMENT_CONTENT_INSTRUCTION_EN,
   NEXT_ACTION_INSTRUCTIONS_EN,
 ].join('\n');
 
@@ -763,7 +777,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: 'お知らせ一覧',
       description:
-        'お知らせ（大学・学部・授業）を新しい順に返す。件名・差出人・分類・既読/未読（read）・添付・本文の冒頭を含む。unreadOnly=true で未読だけ。LiveCampusUの未読のお知らせは、開くと既読になってしまうため本文を取得していないことがある（bodyStatus が notOpened）。その場合は本文がないことをそのまま伝える。全文は get_announcement で読む。 / Announcements newest first with read state, category, attachments and a body excerpt. Unread LiveCampusU notices may have no body (bodyStatus "notOpened": opening them would mark them read). Use get_announcement for the full text.',
+        'お知らせ（大学・学部・授業）を新しい順に返す。件名・差出人・分類・未読（unread: 本人がUniContextでまだ読んでいない）・元のシステムでの既読状態（read）・添付・本文の冒頭を含む。unreadOnly=true で未読だけ。件名だけで判断せず、中身が関わりうるものは get_announcement で全文を読む。本文がまだない（bodyStatus が pending / notOpened）ものは、本人に確かめずに open_announcement で開いてから読む（「未読なので開いていません」とは答えない）。 / Announcements newest first with UniContext’s unread flag (unread), the source’s read state (read), category, attachments and a body excerpt. Read the full text with get_announcement whenever the content may matter; when there is no body yet (bodyStatus "pending" / "notOpened"), open it with open_announcement first, without asking. Never answer that a notice was left unopened because it is unread.',
     },
     {
       since: z
@@ -793,7 +807,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: 'お知らせの全文',
       description:
-        'お知らせ1件の全文（本文・差出人・分類・添付ファイル名・本文中のリンク・対象講義・対象日・既読/未読）を返す。id は get_announcements や search の結果の id（announcement:...）。LiveCampusUの未読のお知らせは本文を取得していないことがあり（bodyStatus が notOpened）、その場合 body は空。本人がLiveCampusUで読むか、本人の了承を得て open_announcement で取得する（LiveCampusUで既読になる）と読める。 / Full text of one announcement by id (announcement:...), with sender, category, attachments, links, target courses and date, read state. Unread LiveCampusU notices may have an empty body (bodyStatus "notOpened") until the student reads them there.',
+        'お知らせ1件の全文（本文・差出人・分類・添付ファイル名・本文中のリンク・対象講義・対象日・既読/未読）を返す。id は get_announcements や search の結果の id（announcement:...）。body が空で bodyStatus が pending / notOpened のときは本文をまだ取得していないので、本人に確かめずに open_announcement で取得してから読む（LiveCampusUでは既読になるが、本人は中身を優先すると決めている。UniContextでは本人が読むまで未読のまま）。 / Full text of one announcement by id (announcement:...), with sender, category, attachments, links, target courses and date, read state. When the body is empty (bodyStatus "pending" / "notOpened"), fetch it with open_announcement without asking first, then read it.',
     },
     { id: z.string().min(1).describe('announcement:... の id') },
     (a) => {
@@ -1438,10 +1452,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     },
   );
 
-  // Changes state in LiveCampusU (read mark): destructive, open world, never during a sync.
+  // Marks unread LiveCampusU notices read there, as the scheduled sync does by default (the
+  // student chose content over the unread flag): open world, not destructive.
   writeTool(
     'open_announcement',
-    { outputShape: OPEN_ANNOUNCEMENT_RESULT_SHAPE, destructive: true, openWorld: true },
+    { outputShape: OPEN_ANNOUNCEMENT_RESULT_SHAPE, openWorld: true },
     openAnnouncementShape,
     async (a) => {
       const ids = a.ids.map((x) => x.trim());

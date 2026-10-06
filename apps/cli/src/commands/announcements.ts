@@ -74,7 +74,10 @@ export function registerAnnouncements(program: Command, h: Harness): void {
           throw new UsageError('IDと「--unread-all」は同時に指定できません');
         let ids = given;
         if (opts.unreadAll) {
-          const list = (await unopened(ctx)).filter((a) => a.bodyStatus === 'notOpened');
+          // Unread without a body: not opened (openUnreadNotices off) or waiting for a later sync.
+          const list = (await unopened(ctx)).filter(
+            (a) => a.bodyStatus === 'notOpened' || (a.bodyStatus === 'pending' && a.read === false),
+          );
           if (list.length === 0) {
             if (ctx.json) ctx.printJson({ results: [], opened: 0, markedReadAtSource: 0 });
             else ctx.out('本文を取得していない未読のお知らせはありません');

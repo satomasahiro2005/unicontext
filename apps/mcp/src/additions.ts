@@ -689,9 +689,9 @@ export const WRITE_TOOLS = {
       'この接続（クライアント）が追加した内容と、その状態（unconfirmed=未確認 / confirmed=本人が確認済み / rejected=本人が却下 / retracted=取り消し済み）を新しい順に返す。取り消し（retract_addition）の対象を探すときに使う。ingestionId（ingest_lecture の結果）を渡すと、その録音から保存したものだけを返す。他の会話・クライアントが登録したものも含めて見るなら get_deadlines・get_tasks・get_notes。 / This client’s own additions and their status (to find one to retract); ingestionId: only what one ingest_lecture call stored. Everything from every client: get_deadlines, get_tasks, get_notes.',
   },
   open_announcement: {
-    title: 'お知らせの本文を取得（LiveCampusUで既読になる）',
+    title: 'お知らせの本文を取得',
     description:
-      '【LiveCampusUのお知らせが既読になる・元に戻せない】本文を取得していない（bodyStatus が notOpened）LiveCampusUのお知らせを、指定したものだけ開いて本文を取得する。LiveCampusUは開いたお知らせを既読にし、未読に戻す方法がないため、必ず事前にユーザー本人の了承を得てから呼ぶこと。UniContextの中では本人が読むまで未読のまま表示される。本文以外は何も変更・送信しない。 / Opens the given unread LiveCampusU notices to fetch their bodies. THIS MARKS THEM READ IN LIVECAMPUSU AND CANNOT BE UNDONE: ask the user first. UniContext keeps them unread until the user reads them there. Nothing else is changed or sent.',
+      '本文がまだない（bodyStatus が pending / notOpened）お知らせを開き、本文・添付ファイル名を取得する。中身が答えや予定に関わりうるときは、本人に確かめずにすぐ呼ぶこと（本人の決定: 未読のままにするより中身を優先する）。LiveCampusUの未読のお知らせは開くと向こうで既読になり戻せないが、通常の同期でも同じように開いている。UniContextの中では本人が読むまで未読のまま表示される。本文以外は何も変更・送信しない。 / Fetches the body and attachment names of announcements that have none yet (bodyStatus "pending" / "notOpened"). Call it right away, without asking, whenever the content may matter: the student decided content wins over the unread flag. Unread LiveCampusU notices become read there (not undoable), as the regular sync does too; UniContext keeps them unread until the student reads them there. Nothing else is changed or sent.',
   },
   retract_addition: {
     title: '追加を取り消す',

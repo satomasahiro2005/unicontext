@@ -646,7 +646,9 @@ candidates, note}`; plus `ChangeItem`, `AnnouncementItem`, `MaterialItem`, `Task
   ids' raw items to their adapter's `openAnnouncements()` (SDK extension `OpenAnnouncementsAdapter`,
   implemented by LiveCampusU and serialized there with `sync()`), ingests the returned items and
   sets UniContext's own read mark to unread; `AnnouncementItem.unread` is that mark, else the
-  source's `read === false`. `context.setAnnouncementRead(id, read)` changes only UniContext's
+  source's `read === false` or `extra.openedByUniContext` (UniContext opened it while it was unread
+  at the source, e.g. the LiveCampusU sync with `openUnreadNotices`, so the source's "read" is not
+  the student's reading). `context.setAnnouncementRead(id, read)` changes only UniContext's
   flag; `context.unopenedAnnouncements()` lists notices without a fetched body.
 - `CONTEXT_VIEWS` (name, `context://<name>` URI, description), `ContextViewParams` (zod schemas per
   view, usable as MCP tool input schemas), `getView(engine, name, params)` (validated dispatcher),

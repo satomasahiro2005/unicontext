@@ -203,7 +203,8 @@ describe('normalizer: notices', () => {
     expect(entityOf(out, 'announcement')).toMatchObject({
       scope: 'university',
       importance: 'low',
-      body: '',
+      // Unread in LCU, opened by the sync: LCU's "read" is UniContext's doing, not the student's.
+      extra: { read: false, bodyStatus: 'fetched', openedByUniContext: true },
     });
     expect(out.entities).toHaveLength(1);
   });

@@ -33,8 +33,9 @@ unicontextd local listener 127.0.0.1:17878 (REST, Web UI, full MCP) — never in
   `record_lecture`, `add_deadline`, `add_note`, `add_task`, `list_my_additions` and
   `retract_addition` (`readOnlyHint: false`,
   `destructiveHint` only on `retract_addition`), and `open_announcement` (fetches the body of
-  LiveCampusU notices that are unread there; this marks them read in LiveCampusU and cannot be
-  undone, so it is `destructiveHint: true`, `openWorldHint: true` and ChatGPT asks first).
+  notices that have none yet; unread LiveCampusU notices become read there, as the sync does by
+  default, because the student chose content over the unread flag: `openWorldHint: true`, not
+  destructive, and the AI calls it without asking).
   `download_course_file` (read-only) fetches a class file from Teams/SharePoint into the local cache
   and returns its extracted text (truncated at `maxChars`, with `[p.N]` / `[スライド N]` markers),
   never a local path. With `link: true` it also returns a link `https://<host>/files/<token>` to the

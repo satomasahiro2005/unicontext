@@ -1069,13 +1069,16 @@ export class ContextEngine {
   }
 
   /**
-   * UniContext's own unread flag: the user's mark when there is one (a notice fetched on request
-   * stays unread here until read in UniContext), otherwise the source's read state.
+   * UniContext's own unread flag: the user's mark when there is one, otherwise unread when the
+   * source says unread or when UniContext itself opened it while it was unread there (sync or on
+   * request: the source's "read" is then not the student's reading). Such a notice stays unread
+   * here until the student reads it in UniContext.
    */
   isUnread(a: Announcement): boolean {
     const mark = this.readMarks.get(a.id);
     if (mark) return mark.unread;
-    return readAnnouncementExtra(a.extra).read === false;
+    const extra = readAnnouncementExtra(a.extra);
+    return extra.read === false || extra.openedByUniContext === true;
   }
 
   /** Mark an announcement read/unread in UniContext only (never at the source). */
@@ -1087,8 +1090,9 @@ export class ContextEngine {
   }
 
   /**
-   * Announcements whose body the connector has not fetched: unread at the source (`notOpened`,
-   * fetching marks them read there) or read but not fetched yet (`pending`). Newest first.
+   * Announcements whose body the connector has not fetched: unread at the source and not opened by
+   * the sync (`notOpened`, fetching marks them read there) or not fetched yet (`pending`, a later
+   * sync will). Newest first.
    */
   unopenedAnnouncements(): AnnouncementItem[] {
     return this.listAnnouncements().filter(

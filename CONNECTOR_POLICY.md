@@ -34,6 +34,16 @@ third-party ones.
    before the first navigation, with the same test obligation. Writes
    that may come later must go through propose → confirm → execute in the apps, and high-risk
    writes (§51: registration, submission, anything about grades) are never run automatically.
+
+   **Read side effects the student accepted.** Some sources mark an item read just because it was
+   viewed, with no request of its own to deny. Such a view is allowed only when the student has
+   decided that the content matters more than the source's read flag, the connector exposes it as
+   a documented config option the deployment can turn off, the session refuses it unless that
+   option is on (with a test), and UniContext keeps its own unread state for the item until the
+   student reads it in UniContext. Explicit mark-read actions stay denied. Today this is
+   LiveCampusU's `openUnreadNotices` (default on: the student chose content over the unread flag;
+   see docs/connectors/livecampusu.md).
+
 4. **Polite traffic (§37).** Use the connector SDK `RateLimiter` (token bucket, Retry-After,
    exponential backoff with jitter), at most one in-flight request per session where the server
    needs it, incremental sync (lists first, details only for items that changed), and schedules

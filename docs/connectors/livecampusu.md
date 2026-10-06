@@ -37,7 +37,9 @@ sources:
     # grades: true              # opt-in (default false)
     # attendance: true
     # noticeDetails: true
+    # openUnreadNotices: true   # also open notices unread in LCU (marks them read there; see below)
     # maxNoticeDetailsPerRun: 300
+    # maxUnreadNoticesPerRun: 30
     # academicYear: 2026        # default: current academic year (April start)
     # semesters: ['1', '2']     # default: all semesters of the deployment
     # minRequestIntervalMs: 1000
@@ -51,27 +53,30 @@ automatically with "remember"). `logout()` deletes the exported cookies and the 
 locally; it never calls LCU's logout.
 
 University profile (`profiles/<id>/profile.yaml`) keys read from `products.livecampusu`:
-`deployment`, `auth`, `allowLocalAccount`, and the per-key deployment overrides `baseUrl`,
+`deployment`, `auth`, `allowLocalAccount`, `openUnreadNotices` (the deployment's default; the
+source config wins), and the per-key deployment overrides `baseUrl`,
 `idpHosts`, `maintenanceWindow`, `idleTimeoutMinutes`, `screens`, `actions`, `endpoints`,
 `contactTypes`, `semesters`. Period start/end times come from `academicCalendar.periods`
 (period N = LCU pair index N, see below).
 
 ## Config keys
 
-| Key                                                                                                                         | Default        | Meaning                                                                                                                                    |
-| --------------------------------------------------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `deployment`                                                                                                                | profile        | Deployment profile key (`shizuoka`).                                                                                                       |
-| `auth`                                                                                                                      | profile `auth` | `saml` / `entra` / `browser-sso` → browser SSO; `local` → local-account stub.                                                              |
-| `allowLocalAccount`                                                                                                         | `false`        | Only with `auth: local`; still not implemented (see Auth).                                                                                 |
-| `baseUrl`, `idpHosts`, `maintenanceWindow`, `idleTimeoutMinutes`                                                            | deployment     | Overrides.                                                                                                                                 |
-| `academicYear`                                                                                                              | current        | Year for the assignment search and `getClassSubjectList`.                                                                                  |
-| `semesters`                                                                                                                 | deployment     | Semester codes for timetable / exams / subject lists.                                                                                      |
-| `grades`                                                                                                                    | `false`        | Read 成績 (`SC_15005B00_01` → `SC_10004B00_01`). Disabled ⇒ the HTTP layer refuses grade screens and previously synced grades are removed. |
-| `attendance`                                                                                                                | `true`         | Read 出欠 counts (`SC_13002B00_01`).                                                                                                       |
-| `noticeDetails`                                                                                                             | `true`         | Fetch body, sender, targets and attachment names of every READ notice (once, again when its row changes). Unread notices are never opened. |
-| `maxNoticeDetailsPerRun`                                                                                                    | `300`          | Cap on detail transitions per run (newest first; covers the first backfill; progress is checkpointed after each notice).                   |
-| `minRequestIntervalMs`                                                                                                      | `1000`         | Minimum gap between requests (on top of the source RateLimiter).                                                                           |
-| `browser.channel` / `browser.executablePath` / `browser.profileDir` / `browser.loginTimeoutMs` / `browser.refreshTimeoutMs` | —              | Passed to adapter-browser. Profile dir defaults to `<cacheDir>/browser-profile`.                                                           |
+| Key                                                                                                                         | Default              | Meaning                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `deployment`                                                                                                                | profile              | Deployment profile key (`shizuoka`).                                                                                                                                                                                                                                                       |
+| `auth`                                                                                                                      | profile `auth`       | `saml` / `entra` / `browser-sso` → browser SSO; `local` → local-account stub.                                                                                                                                                                                                              |
+| `allowLocalAccount`                                                                                                         | `false`              | Only with `auth: local`; still not implemented (see Auth).                                                                                                                                                                                                                                 |
+| `baseUrl`, `idpHosts`, `maintenanceWindow`, `idleTimeoutMinutes`                                                            | deployment           | Overrides.                                                                                                                                                                                                                                                                                 |
+| `academicYear`                                                                                                              | current              | Year for the assignment search and `getClassSubjectList`.                                                                                                                                                                                                                                  |
+| `semesters`                                                                                                                 | deployment           | Semester codes for timetable / exams / subject lists.                                                                                                                                                                                                                                      |
+| `grades`                                                                                                                    | `false`              | Read 成績 (`SC_15005B00_01` → `SC_10004B00_01`). Disabled ⇒ the HTTP layer refuses grade screens and previously synced grades are removed.                                                                                                                                                 |
+| `attendance`                                                                                                                | `true`               | Read 出欠 counts (`SC_13002B00_01`).                                                                                                                                                                                                                                                       |
+| `noticeDetails`                                                                                                             | `true`               | Fetch body, sender, targets and attachment names of notices (once, again when the list row changes).                                                                                                                                                                                       |
+| `openUnreadNotices`                                                                                                         | profile, else `true` | Open notices that are UNREAD in LCU too. This marks them read in LCU, which cannot be undone; UniContext keeps them 未読 until the student reads them in UniContext (see [Unread notices](#unread-notices-content-first)). `false`: unread notices are opened only on an explicit request. |
+| `maxNoticeDetailsPerRun`                                                                                                    | `300`                | Cap on detail transitions per run (course-linked and high-importance notices first, then newest first; covers the first backfill; progress is checkpointed after each notice).                                                                                                             |
+| `maxUnreadNoticesPerRun`                                                                                                    | `30`                 | Of those, unread notices that are neither course-linked nor high importance per run (the rest follow in later syncs). Course-linked and high-importance unread notices are bounded only by `maxNoticeDetailsPerRun`.                                                                       |
+| `minRequestIntervalMs`                                                                                                      | `1000`               | Minimum gap between requests (on top of the source RateLimiter).                                                                                                                                                                                                                           |
+| `browser.channel` / `browser.executablePath` / `browser.profileDir` / `browser.loginTimeoutMs` / `browser.refreshTimeoutMs` | —                    | Passed to adapter-browser. Profile dir defaults to `<cacheDir>/browser-profile`.                                                                                                                                                                                                           |
 
 ## Auth
 
@@ -105,27 +110,44 @@ University profile (`profiles/<id>/profile.yaml`) keys read from `products.livec
   `linkselect`) and the notice detail screen except through `openNoticeDetail()`; grade screens
   unless `grades: true`. Violations throw `PolicyViolationError`. The one exception to the `upload`
   rule: `POST fileUpload/load/<id>` (the detail screen's read-only file-list call) with the
-  `notice-attachments` grant, which only `loadNoticeAttachments()` issues while a READ notice's
+  `notice-attachments` grant, which only `loadNoticeAttachments()` issues while a notice's
   detail is open; downloads, uploads and deletes stay denied.
-- **Unread notices are never opened by a sync.** Opening a detail marks the notice read in LCU (observed
-  2026-10-02 over plain HTTP: the row left the unread set), and LCU has **no way back to unread**:
-  the list's only read action is 「既読にする」 (`SC_17001B00_01/readMark`, posts the checked
-  `checkArray` row indexes of `TableForm`); posting it for a read row leaves it read, and neither
-  the list nor the detail screen has a 未読にする button. So `readMark` stays denied with every
-  grant (it could only ever make things worse), and bodies of unread notices are fetched after the
-  student reads them in LCU. `openNoticeDetail(proof)` needs a proof built from the current list
-  page; the session re-parses that page itself and refuses unread rows, unknown rows, stale list
-  versions, or calls made while not on the list.
-- **On request only: `openAnnouncements()`.** The one path that opens UNREAD notices is the user's
-  explicit request for specific notices (`unicontext announcements open <id…>` /
+- **Opening marks a notice read, for good.** Opening a detail marks the notice read in LCU
+  (observed 2026-10-02 over plain HTTP: the row left the unread set), and LCU has **no way back to
+  unread**: the list's only read action is 「既読にする」 (`SC_17001B00_01/readMark`, posts the
+  checked `checkArray` row indexes of `TableForm`); posting it for a read row leaves it read, and
+  neither the list nor the detail screen has a 未読にする button. So `readMark` stays denied with
+  every grant (it could only ever make things worse). `openNoticeDetail(proof)` opens READ rows
+  only: it needs a proof built from the current list page; the session re-parses that page itself
+  and refuses unread rows, unknown rows, stale list versions, or calls made while not on the list.
+- <a id="unread-notices-content-first"></a>**Unread notices: content first (`openUnreadNotices`,
+  default on).** The student decided that knowing what a notice says matters more than keeping
+  LCU's unread flag (an AI that refused to open a new unread 「講義資料（…担当分）」 notice because
+  opening it is irreversible was the opposite of what they want). So a sync opens unread notices
+  too: course-linked (教員連絡 and other notices with a 講義名) and high-importance ones first, newest
+  first, the others at most `maxUnreadNoticesPerRun` per run, all within `maxNoticeDetailsPerRun`
+  and at the same 1 request/s. The sync gives the session an `OnDemandNoticePermit` for exactly the
+  unread keys it planned (single use each), and the session accepts permits during a sync only
+  when it was created with `openUnreadNoticesInSync` (the adapter sets it from the resolved
+  `openUnreadNotices`). **Trade-off:** every opened notice is read in LCU from then on, so the
+  student (or a teacher's 既読 count, where LCU shows one) can no longer tell from LCU which
+  notices they have read; LCU's own 未読 list empties. UniContext keeps such a notice 未読: the
+  detail is stored with `openedWhileRead: false` (kept on later re-reads), the normalizer sets
+  `extra.openedByUniContext`, and the engine shows it unread until the student reads it in
+  UniContext (`read_marks`). UniContext cannot see a later reading in LCU. A deployment that wants
+  LCU's read state left alone sets `openUnreadNotices: false` (source config, or
+  `products.livecampusu.openUnreadNotices` in the university profile): unread notices then keep
+  `bodyStatus: notOpened` until the student reads them in LCU or asks for them.
+- **On request: `openAnnouncements()`.** Opens specific notices right away, unread ones included,
+  whatever `openUnreadNotices` says: the user's (or their AI's) request for specific notices (`unicontext announcements open <id…>` /
   `--unread-all` after a count and y/N, `POST /api/v1/announcements/open`, the Web UI button
   「本文を取得（LCUで既読になります）」, MCP `open_announcement`). The adapter runs it serialized with
   `sync()` (one LCU session, one current screen); the daemon holds that session, so the CLI and
   `unicontext mcp` go through the daemon when it runs. `LcuSession.openNoticeOnDemand(proof,
 permit)` opens a row only with an `OnDemandNoticePermit` for that notice's key (single use; the
   session checks the row index against its own parse of the list), with the
-  `notice-detail-on-demand` policy grant, and **never while a sync runs** (`runLcuSync` runs inside
-  `session.duringSync()`, which makes the session refuse it). `readMark` stays denied with this
+  `notice-detail-on-demand` policy grant. `runLcuSync` runs inside `session.duringSync()`, during
+  which the session refuses unread rows unless it has `openUnreadNoticesInSync`. `readMark` stays denied with this
   grant too. The fetched detail is stored like the backfill's (`openedOnDemand: true`,
   `openedWhileRead: false` when it was unread) and checkpointed; UniContext keeps the notice 未読 in
   its own read state (`read_marks`) until the user reads it in UniContext or runs
@@ -158,15 +180,16 @@ class)` arguments; off-grid courses become offerings with `scheduleType` `unsche
    else by title (preferring the searched semester).
 6. 連絡一覧 (`SC_17001B00_01`, all rows incl. hidden columns and read state). Details
    (`rowSelect` → `SC_17001B00_02` → [`fileUpload/load/<id>` when the row shows the attachment
-   clip] → `back`) only for READ rows whose detail is missing or whose row hash changed
-   (incremental), newest first, capped per run, strictly serial at `minRequestIntervalMs` (1 s).
+   clip] → `back`) for rows whose detail is missing or whose row hash changed (incremental),
+   unread rows included unless `openUnreadNotices: false`; course-linked and high-importance
+   notices first, then newest first, capped per run, strictly serial at `minRequestIntervalMs` (1 s).
    The detail gives 内容 (rich text → plain text with paragraph breaks, links kept), 連絡種別,
    講義名 (targets), 重要度, 連絡日時, 連絡元 (sender); the file-list JSON gives attachment names and
    sizes (`temporaryFileList[].physicalFileName/fileSize`; session-bound ids and download paths are
    not kept). Bodies are carried forward in `cursor.extra.notices` and checkpointed to
    `<cacheDir>/notice-details.json` after every notice, so a backfill that is cut off resumes where
-   it stopped. Every notice gets `bodyStatus`: `fetched`, `notOpened` (unread in LCU) or `pending`
-   (read, over this run's budget).
+   it stopped. Every notice gets `bodyStatus`: `fetched`, `pending` (over this run's budget; a
+   later sync fetches it) or `notOpened` (unread in LCU with `openUnreadNotices: false`).
 7. 成績 (only with `grades: true`): 成績ダッシュボード → 成績情報 (`SC_10004B00_01`), switched to the
    「履修中含む」 tab (`changeSeisekiKind`, `seisekiKind=1`) so registered courses without a grade are
    listed too, then 「単位修得情報照会」 (`SC_10004B00_01/forward` → `SC_10004B00_02`, requirement
@@ -222,9 +245,10 @@ as drift findings (missing/mismatched ⇒ `degraded`).
 - Unofficial; observed on the 静岡大学 deployment on 2026-10-01 only. Unverified: the exact field
   encoding of the assignment search form, the `rowIndex`-only `rowSelect` body, the exam timetable
   columns, the `submissionInformation` item shape, the maintenance window time.
-- Unread notices have no body (title, type and dates only, `bodyStatus: notOpened`) until the user
-  reads them in LCU or asks UniContext to open them (which marks them read in LCU; it cannot be
-  undone).
+- With the default `openUnreadNotices: true`, every notice UniContext opens is read in LCU from
+  then on (it cannot be undone); UniContext's own 未読 is the only unread state left for them. With
+  `openUnreadNotices: false`, unread notices have no body (title, type and dates only,
+  `bodyStatus: notOpened`) until the student reads them in LCU or asks UniContext to open them.
 - Course matching for notices without a hidden subject code, assignments, exams and attendance is
   by title (+ class name) within the year's offerings; ambiguous titles stay unlinked.
 - Timetable `room` is LCU's text as-is (e.g. 共通講義棟３１, full-width digits).

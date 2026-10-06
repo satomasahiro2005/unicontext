@@ -736,8 +736,8 @@ export async function createRestServer(options: RestServerOptions): Promise<Fast
     return { proposal: toProposalView(runtime.proposals.reject(request.params.id)) };
   });
 
-  // Fetch notice bodies on the user's request. Unread LiveCampusU notices become read there
-  // (cannot be undone); the adapter serializes this with the sync, which never opens them.
+  // Fetch notice bodies on request. Unread LiveCampusU notices become read there (cannot be
+  // undone; the sync does the same unless openUnreadNotices is off); serialized with the sync.
   app.post<{ Body: unknown }>('/api/v1/announcements/open', write, async (request) => {
     const body = parse(
       z.object({ ids: z.array(z.string().min(1).max(200)).min(1).max(MAX_OPEN_PER_REQUEST) }),

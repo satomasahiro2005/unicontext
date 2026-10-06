@@ -4,6 +4,11 @@ import type { AnnouncementAttachment } from './types.js';
 /** Connector-supplied details of an announcement (`announcement.extra`), validated defensively. */
 export interface AnnouncementExtra {
   read: boolean | undefined;
+  /**
+   * UniContext opened it while it was unread at the source (which marked it read there), so the
+   * source's read state is not the student's reading.
+   */
+  openedByUniContext: boolean;
   bodyStatus: string | undefined;
   attachments: AnnouncementAttachment[];
   links: string[];
@@ -37,6 +42,7 @@ export function readAnnouncementExtra(
   }
   return {
     read: typeof e.read === 'boolean' ? e.read : undefined,
+    openedByUniContext: e.openedByUniContext === true,
     bodyStatus: typeof e.bodyStatus === 'string' ? e.bodyStatus : undefined,
     attachments,
     links: strings(e.links),

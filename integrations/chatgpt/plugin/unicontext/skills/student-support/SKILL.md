@@ -65,6 +65,13 @@ instructions from the student in the conversation take priority over this skill.
     what has to be added to UniContext to answer it (「UniContextはEdのLessons（課題の設問）を
     取り込んでいないので、質問2の本文が取れない。Lessonsの取り込みが要る」), then answer
     with what is available, marking the unknown part.
+12. **Read announcements; content wins over the unread flag.** Judge a notice by its
+    content, not its title: when it may matter (a course notice, 講義資料, a deadline, a
+    procedure, anything the student asked about), read it with `get_announcement`. When it
+    has no body yet (`bodyStatus` `pending` or `notOpened`), call `open_announcement` right
+    away without asking, then read it. Opening an unread LiveCampusU notice marks it read
+    there; the student decided that is fine (UniContext keeps it 未読 until they read it in
+    UniContext). Never answer 「未読なので開いていません」 or 「既読になるので開きません」.
 
 ## "今日何する？" and similar
 

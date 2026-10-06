@@ -95,6 +95,8 @@ export class LiveCampusUAdapter
   readonly strategyKind: AuthStrategyKind;
   readonly session: LcuSession;
   private readonly timezone: string;
+  /** Resolved `openUnreadNotices` (source config, else the profile's product setting, else true). */
+  readonly openUnreadNotices: boolean;
   private noticeCache = new Map<string, NoticeCacheEntry>();
   private noticeCheckpointLoaded = false;
   private versionState: VersionState | undefined;
@@ -116,6 +118,9 @@ export class LiveCampusUAdapter
     this.deployment = options.deployment ?? deploymentFor(ctx, options.deployments);
     this.timezone = ctx.profile?.academicCalendar.timezone ?? 'Asia/Tokyo';
     const settings = productSettings(ctx);
+    this.openUnreadNotices =
+      ctx.config.openUnreadNotices ??
+      (typeof settings?.openUnreadNotices === 'boolean' ? settings.openUnreadNotices : true);
     this.strategyKind = selectAuthStrategy(ctx.config.auth, settings);
     const allowLocal =
       this.strategyKind === 'local-account' &&
@@ -145,6 +150,7 @@ export class LiveCampusUAdapter
       logger: ctx.logger,
       minRequestIntervalMs: ctx.config.minRequestIntervalMs,
       gradesEnabled: ctx.config.grades,
+      openUnreadNoticesInSync: this.openUnreadNotices,
     });
   }
 
@@ -286,6 +292,8 @@ export class LiveCampusUAdapter
         attendance: cfg.attendance,
         noticeDetails: cfg.noticeDetails,
         maxNoticeDetailsPerRun: cfg.maxNoticeDetailsPerRun,
+        openUnreadNotices: this.openUnreadNotices,
+        maxUnreadNoticesPerRun: cfg.maxUnreadNoticesPerRun,
       },
       clock: this.ctx.clock,
       timezone: this.timezone,

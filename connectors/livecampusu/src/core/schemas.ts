@@ -171,7 +171,11 @@ export const NoticeDetailPayloadSchema = z.object({
   links: z.array(str).optional(),
   /** When the detail screen was read (ISO). */
   fetchedAt: str.optional(),
-  /** LCU read state of the row when the detail was opened (always read: unread rows are never opened). */
+  /**
+   * LCU read state of the row when the detail was first opened. False: UniContext opened it while
+   * it was unread (sync with openUnreadNotices, or on request), so LCU's "read" is UniContext's
+   * doing, not the student's; kept false on later re-reads.
+   */
   openedWhileRead: z.boolean().optional(),
   /** Opened because the user explicitly asked for it (it may have been unread before). */
   openedOnDemand: z.boolean().optional(),
@@ -187,8 +191,9 @@ export const NoticePayloadSchema = z.object({
   listRow: NoticeListRowPayloadSchema.omit({ rowIndex: true }).optional(),
   detail: NoticeDetailPayloadSchema.optional(),
   /**
-   * fetched: detail.body is the notice text; notOpened: unread in LCU, so the detail is not opened
-   * (opening marks it read and LCU cannot set it back to unread); pending: read, not fetched yet.
+   * fetched: detail.body is the notice text; notOpened: unread in LCU and not opened because the
+   * source has openUnreadNotices: false (opening marks it read and LCU cannot set it back);
+   * pending: not fetched yet, a later sync will (over this run's budget).
    */
   bodyStatus: z.enum(['fetched', 'notOpened', 'pending']).optional(),
   context: contextSchema,

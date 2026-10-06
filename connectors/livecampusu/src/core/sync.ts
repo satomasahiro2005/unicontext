@@ -1,6 +1,7 @@
 import type { RawItem, SyncInput, SyncResult } from '@unicontext/connector-sdk';
 import {
   AuthRequiredError,
+  classifyNoticeImportance,
   type Clock,
   contentHash,
   type Logger,
@@ -74,6 +75,14 @@ export interface LcuSyncOptions {
   attendance: boolean;
   noticeDetails: boolean;
   maxNoticeDetailsPerRun: number;
+  /**
+   * Open notices that are unread in LCU too (LCU marks them read; UniContext keeps them unread).
+   * The session must have been created with `openUnreadNoticesInSync` as well. Off when omitted;
+   * the adapter resolves the config (default on).
+   */
+  openUnreadNotices?: boolean;
+  /** Unread notices that are neither course-linked nor high importance opened per run. */
+  maxUnreadNoticesPerRun?: number;
 }
 
 export interface NoticeCacheEntry {
@@ -121,12 +130,14 @@ export interface LcuSyncOutcome {
 }
 
 export interface NoticeDetailStats {
-  /** Details read this run (READ notices only). */
+  /** Details read this run (read and, with openUnreadNotices, unread notices). */
   fetched: number;
+  /** Of `fetched`: notices that were unread in LCU (opening them marked them read there). */
+  unreadOpened: number;
   failed: number;
-  /** Notices without a body because they are unread in LCU (never opened). */
+  /** Unread notices still without a body (openUnreadNotices off, or over this run's budget). */
   unreadNotOpened: number;
-  /** READ notices still without a body (over this run's budget). */
+  /** Notices left for a later run by this run's budget (read ones, and unread ones to be opened). */
   pending: number;
   /** fileUpload/load calls that returned a file list. */
   attachmentLists: number;
@@ -219,7 +230,8 @@ class OfferingIndex {
  * otherwise is reported as a warning and its types are not marked complete (no false deletions).
  */
 export async function runLcuSync(ctx: LcuSyncContext, input: SyncInput): Promise<LcuSyncOutcome> {
-  // While a sync runs the session refuses to open unread notices, even with a permit.
+  // While a sync runs the session refuses to open unread notices unless it was created with
+  // openUnreadNoticesInSync, and then only the ones this sync issued a permit for.
   return ctx.session.duringSync(() => runLcuSyncSteps(ctx, input));
 }
 
@@ -885,6 +897,20 @@ async function readOpenNoticeDetail(
   };
 }
 
+/**
+ * Notices whose content matters most are opened first: course-linked ones (教員連絡 and other
+ * notices with a 講義名), a 教員 contact type, and the ones the list row already makes high importance.
+ */
+function noticeDetailPriority(d: LcuDeploymentProfile, row: NoticeListRow): boolean {
+  const type = d.contactTypes[row.typeCode ?? ''];
+  const courseLinked = row.subjectKey !== undefined || row.subjectText.trim() !== '';
+  if (courseLinked || /教員/.test(type?.title ?? row.category)) return true;
+  return (
+    classifyNoticeImportance({ title: row.title, kind: type?.kind ?? 'notice', courseLinked })
+      .importance === 'high'
+  );
+}
+
 function rowHash(row: NoticeListRow): string {
   const { rowIndex: _i, unread: _u, ...rest } = row;
   return contentHash(rest);
@@ -900,6 +926,7 @@ async function syncNotices(
   const { session, deployment: d, options: o } = ctx;
   const details: NoticeDetailStats = {
     fetched: 0,
+    unreadOpened: 0,
     failed: 0,
     unreadNotOpened: 0,
     pending: 0,
@@ -908,53 +935,96 @@ async function syncNotices(
   const rows = await step('noticeList', async () => {
     let list = await session.open(d.screens.noticeList);
     const parsed = parseNoticeList(list.html);
-    // Details only for rows that are READ in LCU: opening an unread notice marks it read and LCU
-    // has no way to set it back to unread (readMark only marks read). Incremental: only rows whose
-    // detail is missing or whose list row changed; newest first, at most maxNoticeDetailsPerRun.
-    const keyed = parsed.map((r) => ({
-      r,
-      key: noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title),
-      hash: rowHash(r),
-    }));
-    const needs = keyed.filter(({ key, hash }) => {
-      const c = ctx.noticeCache.get(key);
-      return !c?.detail || c.rowHash !== hash;
-    });
-    details.unreadNotOpened = needs.filter(({ r }) => r.unread).length;
+    // Details for rows whose detail is missing or whose list row changed (incremental). Unread
+    // rows too when openUnreadNotices is on: opening marks them read in LCU and LCU cannot set them
+    // back, which the student accepted (content wins over the unread flag); UniContext keeps them
+    // unread until read there (detail.openedWhileRead = false). Course-linked and high-importance
+    // notices first, newest first within each group; at most maxNoticeDetailsPerRun, and at most
+    // maxUnreadNoticesPerRun of the other unread ones (the rest follow in later syncs).
+    const openUnread = o.openUnreadNotices === true;
+    const needs = parsed
+      .map((r) => ({
+        r,
+        key: noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title),
+        hash: rowHash(r),
+        priority: noticeDetailPriority(d, r),
+      }))
+      .filter(({ key, hash }) => {
+        const c = ctx.noticeCache.get(key);
+        return !c?.detail || c.rowHash !== hash;
+      });
     const candidates = needs
-      .filter(({ r }) => !r.unread)
-      .sort((a, b) => (b.r.contactDateTime ?? '').localeCompare(a.r.contactDateTime ?? ''));
-    const enabled = o.noticeDetails && o.maxNoticeDetailsPerRun > 0;
-    const wanted = enabled ? candidates.slice(0, o.maxNoticeDetailsPerRun) : [];
-    details.pending = candidates.length - wanted.length;
+      .filter(({ r }) => openUnread || !r.unread)
+      .sort(
+        (a, b) =>
+          Number(b.priority) - Number(a.priority) ||
+          (b.r.contactDateTime ?? '').localeCompare(a.r.contactDateTime ?? ''),
+      );
+    let otherUnreadLeft = o.maxUnreadNoticesPerRun ?? 0;
+    const wanted =
+      o.noticeDetails && o.maxNoticeDetailsPerRun > 0
+        ? candidates
+            .filter(({ r, priority }) => {
+              if (!r.unread || priority) return true;
+              if (otherUnreadLeft <= 0) return false;
+              otherUnreadLeft--;
+              return true;
+            })
+            .slice(0, o.maxNoticeDetailsPerRun)
+        : [];
+    const wantedKeys = new Set(wanted.map(({ key }) => key));
+    // Only the unread notices planned above may be opened, each once.
+    const permit = OnDemandNoticePermit.forKeys(
+      wanted.filter(({ r }) => r.unread).map(({ key }) => key),
+    );
+    for (const { key, r } of needs) {
+      if (wantedKeys.has(key)) continue;
+      if (r.unread) details.unreadNotOpened++;
+      if (!r.unread || openUnread) details.pending++;
+    }
     for (const { key, hash, r: listed } of wanted) {
       // Row indexes belong to the list page we are on; find the row again on the current list.
       const current = parseNoticeList(list.html).find(
         (r) => noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title) === key,
       );
-      if (!current || current.unread || list.noticeListVersion === undefined) {
+      if (!current || (current.unread && !listed.unread) || list.noticeListVersion === undefined) {
         details.pending++;
+        if (current?.unread) details.unreadNotOpened++;
         continue;
       }
+      const previous = ctx.noticeCache.get(key)?.detail;
       let opened = false;
       try {
-        const detailPage = await session.openNoticeDetail({
-          rowIndex: current.rowIndex,
-          unread: current.unread,
-          listVersion: list.noticeListVersion,
-        });
+        const detailPage = current.unread
+          ? await session.openNoticeOnDemand(
+              {
+                rowIndex: current.rowIndex,
+                unread: true,
+                listVersion: list.noticeListVersion,
+                key,
+              },
+              permit,
+            )
+          : await session.openNoticeDetail({
+              rowIndex: current.rowIndex,
+              unread: false,
+              listVersion: list.noticeListVersion,
+            });
         opened = true;
         const entry = await readOpenNoticeDetail(
           ctx,
           detailPage,
           listed,
           hash,
-          { whileRead: true },
+          // Once UniContext opened it while unread, LCU's read state no longer means the student
+          // read it: keep that on later re-reads.
+          { whileRead: !current.unread && previous?.openedWhileRead !== false },
           warnings,
           details,
         );
         ctx.noticeCache.set(key, entry);
         details.fetched++;
+        if (current.unread) details.unreadOpened++;
         try {
           await ctx.onNoticeDetail?.(key, entry);
         } catch (e) {
@@ -963,6 +1033,7 @@ async function syncNotices(
       } catch (e) {
         if (e instanceof SessionRestartedError || isFatal(e)) throw e;
         details.failed++;
+        if (current.unread && !opened) details.unreadNotOpened++;
         warnings.push(`notice detail: ${errorMessage(e)}`);
       }
       list = opened
@@ -1009,9 +1080,10 @@ async function syncNotices(
     if (row && cached && cached.rowHash !== rowHash(row) && !cached.detail)
       ctx.noticeCache.delete(key);
     const { rowIndex: _ri, ...listRow } = row ?? ({} as NoticeListRow);
+    // Unread and not opened: 'pending' when a later sync will open it, else 'notOpened'.
     const bodyStatus: NoticePayload['bodyStatus'] = cached?.detail
       ? 'fetched'
-      : row?.unread
+      : row?.unread && !(o.openUnreadNotices === true && o.noticeDetails)
         ? 'notOpened'
         : row
           ? 'pending'
@@ -1068,10 +1140,10 @@ export interface OnDemandNoticeOutcome {
 
 /**
  * Fetch the bodies of notices the USER explicitly asked for (CLI `announcements open`, REST, Web UI
- * button, MCP open_announcement) — the only path that opens UNREAD notices: LCU marks an opened
- * notice read and has no way back, which the user accepted. Never called by a sync (and the
- * session refuses it while one runs). Returns the notices as raw items with the body, merged over
- * the previously stored payload.
+ * button, MCP open_announcement), unread ones included: LCU marks an opened notice read and has no
+ * way back, which the user accepted. This also works when the source has `openUnreadNotices: false`
+ * (then the only path that opens unread notices). Serialized with the sync by the adapter. Returns
+ * the notices as raw items with the body, merged over the previously stored payload.
  */
 export async function openNoticesOnDemand(
   ctx: LcuSyncContext,
@@ -1113,7 +1185,10 @@ export async function openNoticesOnDemand(
         detailPage,
         current,
         rowHash(current),
-        { whileRead: !wasUnread, onDemand: true },
+        {
+          whileRead: !wasUnread && ctx.noticeCache.get(key)?.detail?.openedWhileRead !== false,
+          onDemand: true,
+        },
         warnings,
       );
       ctx.noticeCache.set(key, entry);

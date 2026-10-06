@@ -324,6 +324,9 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
                 ...(subjectText ? { subject: subjectText } : {}),
                 // UniContext's mirror of LCU's own read state (list row; unknown without the list).
                 ...(row ? { read: !row.unread } : {}),
+                // UniContext opened it while it was unread in LCU: LCU's "read" is not the
+                // student's reading, so UniContext keeps it unread until read there.
+                ...(detail?.openedWhileRead === false ? { openedByUniContext: true } : {}),
                 ...(bodyStatus ? { bodyStatus } : {}),
                 ...(targetDateIso ? { targetDate: targetDateIso } : {}),
                 ...(detail

@@ -1,5 +1,5 @@
 import { stableId } from '@unicontext/canonical-model';
-import { PolicyViolationError } from '@unicontext/core';
+import { PolicyViolationError, type UniversityProfile } from '@unicontext/core';
 import { describe, expect, it } from 'vitest';
 import {
   assertRequestAllowed,
@@ -20,13 +20,18 @@ import {
   markNoticeRead,
   newClock,
   TEST_DEPLOYMENT,
+  TEST_PROFILE,
   testContext,
 } from './helpers.js';
 
 /*
- * Opening an UNREAD notice marks it read in LiveCampusU and cannot be undone, so a sync never
- * does it. Only the explicit on-demand path (the user asked for these notices) may.
+ * Opening an UNREAD notice marks it read in LiveCampusU and cannot be undone. The student decided
+ * that the content wins: by default a sync opens unread notices too (openUnreadNotices) and
+ * UniContext keeps them unread until read there. A source that opts out (openUnreadNotices: false)
+ * never opens them in a sync; the explicit on-demand path (the user asked) always may.
  */
+
+const OPT_OUT = { openUnreadNotices: false };
 
 const READ_ROW = 46;
 
@@ -42,15 +47,21 @@ function unreadRow() {
   return row;
 }
 
-function setupAdapter(readRows: number[] = [READ_ROW]) {
+function setupAdapter(
+  readRows: number[] = [READ_ROW],
+  config: Record<string, unknown> = OPT_OUT,
+  profile: UniversityProfile | undefined = TEST_PROFILE,
+) {
   const clock = newClock();
   const server = new FakeLcuServer({ clock, readRows });
   const strategy = new FakeStrategy(server);
-  const adapter = new LiveCampusUAdapter(testContext(clock, server.fetch), { strategy });
+  const adapter = new LiveCampusUAdapter(testContext(clock, server.fetch, config, profile), {
+    strategy,
+  });
   return { clock, server, adapter };
 }
 
-function setupSession(readRows: number[] = [READ_ROW]) {
+function setupSession(readRows: number[] = [READ_ROW], openUnreadNoticesInSync = false) {
   const clock = newClock();
   const server = new FakeLcuServer({ clock, readRows });
   const session = new LcuSession({
@@ -61,13 +72,14 @@ function setupSession(readRows: number[] = [READ_ROW]) {
     clock,
     minRequestIntervalMs: 0,
     gradesEnabled: false,
+    openUnreadNoticesInSync,
   });
   session.beginRun();
   return { server, session };
 }
 
 describe('on-demand opening of unread notices', () => {
-  it('a sync never opens unread notices, whatever the detail budget', async () => {
+  it('with openUnreadNotices: false a sync never opens unread notices, whatever the budget', async () => {
     const { server, adapter } = setupAdapter();
     const result = await adapter.sync({ mode: 'initial' });
     expect(server.openedRows).toEqual([READ_ROW]);
@@ -170,7 +182,7 @@ describe('LcuSession.openNoticeOnDemand', () => {
     expect(server.log.length).toBe(before);
   });
 
-  it('is refused while a sync runs, even with a permit', async () => {
+  it('is refused while a sync runs, even with a permit, unless the session allows it', async () => {
     const { server, session } = setupSession();
     const listVersion = await onList(session);
     const row = unreadRow();
@@ -186,6 +198,26 @@ describe('LcuSession.openNoticeOnDemand', () => {
     ).rejects.toThrow(/during a sync/);
     expect(server.log.length).toBe(before);
     expect(server.openedRows).toEqual([]);
+
+    // openUnreadNoticesInSync: a sync may open the unread notices it holds a permit for, only those.
+    const allowed = setupSession([READ_ROW], true);
+    const v = await onList(allowed.session);
+    await expect(
+      allowed.session.duringSync(() =>
+        allowed.session.openNoticeOnDemand(
+          { rowIndex: row.rowIndex, unread: true, listVersion: v, key },
+          OnDemandNoticePermit.forKeys(['n-0000000000000000']),
+        ),
+      ),
+    ).rejects.toThrow(PolicyViolationError);
+    expect(allowed.server.openedRows).toEqual([]);
+    await allowed.session.duringSync(() =>
+      allowed.session.openNoticeOnDemand(
+        { rowIndex: row.rowIndex, unread: true, listVersion: v, key },
+        OnDemandNoticePermit.forKeys([key]),
+      ),
+    );
+    expect(allowed.server.openedRows).toEqual([row.rowIndex]);
   });
 
   it('a permit opens only its own notice, once', async () => {
@@ -248,7 +280,7 @@ describe('UniContext: announcements open (end to end through the connector)', ()
       await import('../../../packages/context-engine/src/index.js');
     const clock = newClock();
     const server = new FakeLcuServer({ clock, readRows: [READ_ROW] });
-    const adapter = new LiveCampusUAdapter(testContext(clock, server.fetch), {
+    const adapter = new LiveCampusUAdapter(testContext(clock, server.fetch, OPT_OUT), {
       strategy: new FakeStrategy(server),
     });
     const uc = createUniContext({ clock });
@@ -295,6 +327,127 @@ describe('UniContext: announcements open (end to end through the connector)', ()
       expect((await uc.sync.sync('livecampusu')).ok).toBe(true);
       expect(server.openedRows).toEqual(openedBefore);
       expect(uc.context.getAnnouncement(id)?.body).toContain('オンデマンドで取得した本文。');
+    } finally {
+      await uc.close();
+    }
+  });
+});
+
+describe('sync opens unread notices (openUnreadNotices, default on)', () => {
+  it('opens unread notices too, with body and attachments, and never readMark', async () => {
+    const { server, adapter } = setupAdapter([], {});
+    expect(adapter.openUnreadNotices).toBe(true);
+    server.detailBody = '講義資料を掲載しました。';
+    const result = await adapter.sync({ mode: 'initial' });
+    const rows = listRows([]);
+    expect([...server.openedRows].sort((a, b) => a - b)).toEqual(
+      rows.map((r) => r.rowIndex).sort((a, b) => a - b),
+    );
+    const listed = result.items
+      .map((i) => i.payload as NoticePayload)
+      .filter((p) => p.listRow !== undefined);
+    expect(listed.length).toBe(rows.length);
+    for (const p of listed) {
+      expect(p.bodyStatus).toBe('fetched');
+      expect(p.detail?.openedWhileRead).toBe(false);
+      expect(p.detail?.body).toContain('講義資料を掲載しました。');
+    }
+    // The clip row's attachment list is read while its detail is open.
+    expect(server.paths().filter((x) => /fileUpload/.test(x))).toEqual([
+      'POST fileUpload/load/fi02',
+    ]);
+    expect(server.paths().filter((x) => /readMark|toDoIcon|todo/i.test(x))).toEqual([]);
+
+    // The next sync opens nothing again; the notice stays "opened by UniContext".
+    const opened = server.openedRows.length;
+    const next = await adapter.sync({ mode: 'incremental', cursor: result.cursor });
+    expect(server.openedRows.length).toBe(opened);
+    const again = next.items
+      .map((i) => i.payload as NoticePayload)
+      .filter((p) => p.listRow !== undefined);
+    expect(again.every((p) => p.listRow?.unread === false)).toBe(true);
+    expect(again.every((p) => p.detail?.openedWhileRead === false)).toBe(true);
+  });
+
+  it('course-linked and high-importance first; the other unread ones within maxUnreadNoticesPerRun', async () => {
+    // Row 46: course-linked room change (priority). Row 0: university survey (not priority).
+    const a = setupAdapter([], { maxUnreadNoticesPerRun: 0 });
+    const r1 = await a.adapter.sync({ mode: 'initial' });
+    expect(a.server.openedRows).toEqual([46]);
+    const survey = (r: typeof r1) =>
+      r.items
+        .map((i) => i.payload as NoticePayload)
+        .find((p) => p.important?.contactSeq === '100001');
+    // Left for a later sync: pending, not notOpened.
+    expect(survey(r1)?.bodyStatus).toBe('pending');
+
+    const b = setupAdapter([], { maxUnreadNoticesPerRun: 1 });
+    const r2 = await b.adapter.sync({ mode: 'initial' });
+    expect(b.server.openedRows).toEqual([46, 0]);
+    expect(survey(r2)?.bodyStatus).toBe('fetched');
+  });
+
+  it('a profile can opt out (products.livecampusu.openUnreadNotices: false); source config wins', async () => {
+    const products = TEST_PROFILE.products as Record<string, Record<string, unknown>>;
+    const profile = {
+      ...TEST_PROFILE,
+      products: { ...products, livecampusu: { ...products.livecampusu, openUnreadNotices: false } },
+    } as UniversityProfile;
+    const off = setupAdapter([READ_ROW], {}, profile);
+    expect(off.adapter.openUnreadNotices).toBe(false);
+    const r = await off.adapter.sync({ mode: 'initial' });
+    expect(off.server.openedRows).toEqual([READ_ROW]);
+    const unread = r.items.map((i) => i.payload as NoticePayload).filter((p) => p.listRow?.unread);
+    expect(unread.every((p) => p.bodyStatus === 'notOpened')).toBe(true);
+
+    const on = setupAdapter([READ_ROW], { openUnreadNotices: true }, profile);
+    expect(on.adapter.openUnreadNotices).toBe(true);
+  });
+
+  it('UniContext keeps a notice the sync opened unread until the student reads it there', async () => {
+    const { createUniContext } = await import('../../../packages/context-engine/src/index.js');
+    const clock = newClock();
+    const server = new FakeLcuServer({ clock, readRows: [READ_ROW] });
+    const adapter = new LiveCampusUAdapter(testContext(clock, server.fetch), {
+      strategy: new FakeStrategy(server),
+    });
+    const uc = createUniContext({ clock });
+    try {
+      uc.sync.register({
+        sourceId: 'livecampusu',
+        adapter,
+        normalizer: createLiveCampusUNormalizer({ deployment: TEST_DEPLOYMENT }),
+        metadata,
+      });
+      server.detailBody = '同期で取得した本文。';
+      expect((await uc.sync.sync('livecampusu')).ok).toBe(true);
+      const key = noticeRowKey(unreadRow());
+      const id = stableId('announcement', 'livecampusu', key);
+      expect(uc.context.getAnnouncement(id)).toMatchObject({
+        unread: true,
+        bodyStatus: 'fetched',
+      });
+      expect(uc.context.getAnnouncement(id)?.body).toContain('同期で取得した本文。');
+      // A notice the student had already read in LCU stays read.
+      const readId = stableId(
+        'announcement',
+        'livecampusu',
+        noticeRowKey(listRows().find((r) => r.rowIndex === READ_ROW) ?? unreadRow()),
+      );
+      expect(uc.context.getAnnouncement(readId)?.unread).toBe(false);
+
+      // Next sync: LCU now lists it as read, UniContext still shows it unread.
+      expect((await uc.sync.sync('livecampusu')).ok).toBe(true);
+      expect(uc.context.getAnnouncement(id)).toMatchObject({ read: true, unread: true });
+      expect(uc.context.listAnnouncements({ unreadOnly: true }).map((a) => a.id)).toContain(id);
+      expect(uc.context.unopenedAnnouncements().map((a) => a.id)).not.toContain(id);
+
+      // Read in UniContext (never touches LCU).
+      const requests = server.log.length;
+      expect(uc.context.setAnnouncementRead(id, true).unread).toBe(false);
+      expect(server.log.length).toBe(requests);
+      expect((await uc.sync.sync('livecampusu')).ok).toBe(true);
+      expect(uc.context.getAnnouncement(id)?.unread).toBe(false);
     } finally {
       await uc.close();
     }
