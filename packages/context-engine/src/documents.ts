@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type DocumentChunk, isEntityKind, isIdOf } from '@unicontext/canonical-model';
 import { errorMessage, NotFoundError, ValidationError } from '@unicontext/core';
-import type { Citation } from '@unicontext/provenance';
+import { type Citation, formatCitationLabel } from '@unicontext/provenance';
 import {
   canDownloadFile,
   type DownloadFilesReport,
@@ -303,6 +303,8 @@ function urlHandle(uc: UniContext, url: string, options: ResolveDocumentOptions)
           return doc.fetch();
         }
         if (report.status === 'folder') {
+          handle.title = report.folder?.name ?? handle.title;
+          handle.citations = uc.context.citationsFor((report.files ?? []).map((f) => f.id));
           handle.candidates = [
             ...(report.files ?? []).map((f) => ({ id: f.id, title: f.name })),
             ...(report.folders ?? []).flatMap((f) =>
@@ -326,6 +328,26 @@ function urlHandle(uc: UniContext, url: string, options: ResolveDocumentOptions)
         handle.title = r.fileName;
         handle.mimeType = r.mimeType;
         handle.sizeBytes = r.bytes.byteLength;
+        // The page itself is the source: cite it like any other (host + when it was read).
+        const host = new URL(r.url).hostname;
+        const retrievedAt = uc.clock.now().toISOString();
+        handle.citations = [
+          {
+            sourceReferenceId: `web:${r.url}`,
+            sourceSystem: 'web',
+            sourceLabel: host,
+            authority: 'public-web',
+            sourceItemId: r.url,
+            retrievedAt,
+            url: r.url,
+            location: undefined,
+            rawItemId: undefined,
+            label: formatCitationLabel(
+              { sourceSystem: 'web', sourceLabel: host, retrievedAt, location: undefined },
+              uc.profile?.academicCalendar.timezone,
+            ),
+          },
+        ];
         return {
           ok: true,
           bytes: r.bytes,

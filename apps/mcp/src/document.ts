@@ -226,7 +226,11 @@ export async function runGetDocument(
     hints.push(
       'needsVision のページは文字が取れていません。続く画像を見て読んでください（本人に貼り付けは求めない）。',
     );
-  if (read.unsupported) {
+  if (read.candidates?.length)
+    hints.push(
+      '複数のファイルを含みます（フォルダへのリンク、添付やリンクが複数あるお知らせ）。要るものを candidates の id（サブフォルダは url）で get_document に渡して読んでください。本人に開いてもらったりアップロードを頼んだりしない。',
+    );
+  else if (read.unsupported) {
     hints.push(
       read.unsupported.openUrl
         ? `UniContext からは取得できません: ${read.unsupported.reason}。開く場所は openUrl です。本人に押し付けず、何が取れなかったかをそのまま伝えてください。`
