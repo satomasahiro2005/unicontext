@@ -70,4 +70,26 @@ describe('LiveCampusU: on-request submission state (verify_submission)', () => {
     ]);
     expect(out.items).toEqual([]);
   });
+
+  it('keeps an assignment that is still accepted once it is handed in (it is not withdrawn)', async () => {
+    // The list with every status filter off leaves out 受付中 + 提出済 rows; 受付中のみ is merged.
+    const ACCEPTED_DONE = '2045';
+    const { server, adapter } = setup();
+    const synced = await adapter.sync({ mode: 'initial' });
+    const row = synced.items.find(
+      (i) => i.sourceType === RAW_TYPES.assignment && i.externalId === ACCEPTED_DONE,
+    );
+    expect(row?.payload).toMatchObject({ statusName: '受付中', submittalStatus: '提出済' });
+    expect(synced.complete?.sourceTypes).toContain(RAW_TYPES.assignment);
+
+    const out = await adapter.fetchDetails([
+      {
+        externalId: ACCEPTED_DONE,
+        sourceType: RAW_TYPES.assignment,
+        previousPayload: row?.payload,
+      },
+    ]);
+    expect(out.results).toEqual([{ externalId: ACCEPTED_DONE, status: 'fetched' }]);
+    expect(server.assignmentSubmitKbn).toBe('1');
+  });
 });

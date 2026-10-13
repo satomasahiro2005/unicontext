@@ -119,6 +119,11 @@ export const LcuDeploymentProfileSchema = z.object({
     .object({
       /** Fields of the assignment search (besides tokens); "{year}" is replaced. */
       assignmentSearch: formFields.default([]),
+      /**
+       * More searches of the same list whose rows are added to it (a row the main search leaves
+       * out, e.g. an accepted assignment once it is handed in).
+       */
+      assignmentSearchExtra: z.array(formFields).default([]),
       /** Fields of the attendance search; "{year}" and "{semester}" are replaced. */
       attendanceSearch: formFields.default([]),
       classSubjectList: z

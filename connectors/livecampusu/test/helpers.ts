@@ -56,13 +56,25 @@ products:
 `);
 
 /** Rows of lcu-kadai-list-rows-SC_14002B00_01.json rendered like the server's DataTables HTML. */
-export function kadaiListHtml(submitted: ReadonlySet<string> = new Set()): string {
+export function kadaiListHtml(
+  submitted: ReadonlySet<string> = new Set(),
+  /**
+   * The search's submitKbn: undefined = the screen as opened (no search), '' = every status filter
+   * off, which (like the real list) leaves out rows still accepted (受付中) and already handed in;
+   * '1' = 受付中のみ.
+   */
+  submitKbn?: string,
+): string {
   const data = jsonFixture<{ rows: { _index: string; cells: string[] }[] }>(
     'lcu-kadai-list-rows-SC_14002B00_01.json',
   );
   for (const r of data.rows)
     if (r.cells[1] !== undefined && submitted.has(r.cells[1]))
       r.cells[7] = '<span class="c-status-done"> 提出済 </span>';
+  const accepted = (r: { cells: string[] }) => r.cells[5] === '3';
+  const done = (r: { cells: string[] }) => /提出済/.test(r.cells[7] ?? '');
+  if (submitKbn === '') data.rows = data.rows.filter((r) => !(accepted(r) && done(r)));
+  else if (submitKbn === '1') data.rows = data.rows.filter(accepted);
   const ids = [
     ['submissionTypeName', true],
     ['submissionSeq', false],
@@ -162,6 +174,8 @@ export class FakeLcuServer {
   detailBody = '（本文）';
   /** Assignments (submissionSeq) the list shows as 提出済 (the student handed them in). */
   submittedSeqs = new Set<string>();
+  /** submitKbn of the last assignment search (undefined before any search). */
+  assignmentSubmitKbn: string | undefined;
   /** Files the detail's fileUpload/load call lists. */
   attachments: { name: string; size: number; deleted?: boolean }[] = [
     { name: '資料.pdf', size: 12345 },
@@ -404,8 +418,12 @@ ${body}</body></html>`;
           '試験時間割',
         );
       case 'GET SC_14002B00_01':
-        return this.html(kadaiListHtml(this.submittedSeqs), '課題・アンケートリスト');
+        return this.html(
+          kadaiListHtml(this.submittedSeqs, this.assignmentSubmitKbn),
+          '課題・アンケートリスト',
+        );
       case 'POST SC_14002B00_01/search':
+        this.assignmentSubmitKbn = form?.getAll('submitKbn').join(',') ?? '';
         // URL rewriting as seen when cookies are not trusted: ;jsessionid= in the Location.
         return new Response(null, {
           status: 302,

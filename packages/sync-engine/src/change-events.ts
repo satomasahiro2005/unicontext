@@ -72,7 +72,9 @@ export function summarizeChange(
     case 'created':
       return `${label}が追加されました`;
     case 'deleted':
-      return `${label}が削除されました`;
+      // The source stopped listing it: deleted, withdrawn, or only out of that list (a handed-in
+      // assignment can drop off) — UniContext cannot tell which.
+      return `${label}が情報源の一覧から消えました（削除・取り下げか、一覧に出なくなっただけかは不明）`;
     case 'restored':
       return `${label}が復活しました`;
     case 'updated': {

@@ -1329,11 +1329,21 @@ export async function readAssignmentRows(
   year: number,
 ): Promise<AssignmentRow[]> {
   const listPage = await session.open(d.screens.assignmentList);
-  const fields = d.forms.assignmentSearch.map(
-    ([k, v]) => [k, v.replaceAll('{year}', String(year))] as const,
-  );
+  const fieldsOf = (form: readonly (readonly [string, string])[]) =>
+    form.map(([k, v]) => [k, v.replaceAll('{year}', String(year))] as const);
+  const fields = fieldsOf(d.forms.assignmentSearch);
   const page = fields.length ? await session.post(d.actions.assignmentSearch, fields) : listPage;
-  return parseAssignmentList(page.html);
+  const rows = parseAssignmentList(page.html);
+  const seen = new Set(rows.map((r) => r.submissionSeq));
+  for (const extra of d.forms.assignmentSearchExtra) {
+    const more = await session.post(d.actions.assignmentSearch, fieldsOf(extra));
+    for (const r of parseAssignmentList(more.html))
+      if (!seen.has(r.submissionSeq)) {
+        seen.add(r.submissionSeq);
+        rows.push(r);
+      }
+  }
+  return rows;
 }
 
 /** The `lcu.assignment` raw item of one list row. */

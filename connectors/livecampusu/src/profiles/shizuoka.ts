@@ -81,6 +81,25 @@ export const SHIZUOKA_DEPLOYMENT = {
       ['subjectInfomationSearch.startSemester', ''],
       ['subjectInfomationSearch.classSubject', ''],
     ],
+    // With every status filter off the list leaves out what is still accepted and already handed
+    // in (2026-10-13: 応用プログラミングB 課題1–3 vanished when submitted and came back as 締切 /
+    // 提出済 after the deadline), so 「受付中のみ」 (submitKbn=1) is searched too and merged.
+    assignmentSearchExtra: [
+      [
+        ['submitKbn', '1'],
+        ['_submitKbn', 'on'],
+        ['submissionType', '0'],
+        ['submissionType', '1'],
+        ['submissionType', '2'],
+        ['submissionType', '3'],
+        ['submissionType', '4'],
+        ['_submissionType', 'on'],
+        ['title', ''],
+        ['subjectInfomationSearch.startYear', '{year}'],
+        ['subjectInfomationSearch.startSemester', ''],
+        ['subjectInfomationSearch.classSubject', ''],
+      ],
+    ],
     // 出欠状況一覧 search form SC_13002B00_01_SearchConditionForm (observed 2026-10-01: year and
     // semester selects, class subject select, 「警告ありのみ」 checkbox `category` left unchecked).
     attendanceSearch: [
