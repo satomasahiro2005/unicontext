@@ -9,7 +9,9 @@ import {
 import {
   detectSchemaDrift,
   type DriftFinding,
+  FILE_TEXT_SOURCE_TYPE,
   type FactInput,
+  normalizeFileTextItem,
   type NormalizeContext,
   type NormalizedEntity,
   type NormalizeOutput,
@@ -57,7 +59,7 @@ import {
 } from './text.js';
 
 // 6: term_slots facts (前半/後半 per timetable slot) from the subject text of notices/assignments.
-export const NORMALIZER_VERSION = '6';
+export const NORMALIZER_VERSION = '7';
 export const SELF_PERSON_KEY = 'self';
 
 export interface LiveCampusUNormalizerOptions {
@@ -172,8 +174,10 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
   return {
     id: 'livecampusu-normalizer',
     version: NORMALIZER_VERSION,
-    sourceTypes: ALL_RAW_TYPES,
+    // + the text UniContext extracted from notice attachments it downloaded on request
+    sourceTypes: [...ALL_RAW_TYPES, FILE_TEXT_SOURCE_TYPE],
     normalize(item: RawItemView, ctx: NormalizeContext): NormalizeOutput {
+      if (item.sourceType === FILE_TEXT_SOURCE_TYPE) return normalizeFileTextItem(item, ctx);
       const type = item.sourceType as LcuRawType;
       const schema = PAYLOAD_SCHEMAS[type] as z.ZodType | undefined;
       if (!schema) return { entities: [], warnings: [`unhandled raw type ${item.sourceType}`] };
@@ -350,6 +354,22 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
             },
             ref,
           });
+          // Each attached file is a document of its own: get_document / download_course_file fetch
+          // it on request through the detail screen's file link (noticeAttachmentDocumentId).
+          for (const a of detail?.attachments ?? [])
+            entities.push({
+              entity: {
+                id: ctx.id('document', ...noticeAttachmentIdParts(p.key, a.name)),
+                kind: 'document',
+                title: a.name,
+                path: `/${category ?? 'お知らせ'}/${title}/${a.name}`,
+                url: lcuUrl(d, p.source.screen),
+                ...(a.size !== undefined ? { sizeBytes: Math.max(0, Math.round(a.size)) } : {}),
+                ...(coId ? { courseOfferingId: coId } : {}),
+                ...(publishedAt ? { modifiedAt: publishedAt } : {}),
+              },
+              ref,
+            });
           const termSlots = termSlotsFact(coId, subjectText, ref);
           if (termSlots) facts.push(termSlots);
           const targetDate = slashDateToIso(imp?.targetDate || row?.targetDate);
@@ -745,4 +765,9 @@ export function examDate(text: string | undefined, academicYear: number): string
   if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
   const year = month <= 3 ? academicYear + 1 : academicYear;
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** Stable id parts of a notice attachment's document (the notice key and the listed file name). */
+export function noticeAttachmentIdParts(noticeKey: string, name: string): [string, string, string] {
+  return ['lcu-notice-attachment', noticeKey, name];
 }

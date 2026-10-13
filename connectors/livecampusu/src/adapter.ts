@@ -1,18 +1,25 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Capability, HealthStatus } from '@unicontext/canonical-model';
-import type {
-  AuthResult,
-  ConnectorContext,
-  DetailFetchAdapter,
-  DetailFetchResult,
-  InteractiveAuthAdapter,
-  InteractiveLoginOptions,
-  OpenAnnouncementsAdapter,
-  OpenAnnouncementsResult,
-  SyncInput,
-  SyncResult,
-  VersionAwareAdapter,
+import {
+  type AuthResult,
+  type ConnectorContext,
+  type DetailFetchAdapter,
+  type DetailFetchResult,
+  type DownloadableFile,
+  FILE_TEXT_SOURCE_TYPE,
+  type FileDownloadAdapter,
+  type FileDownloadOutcome,
+  type FileDownloadRequest,
+  type FileDownloadSettings,
+  type InteractiveAuthAdapter,
+  type InteractiveLoginOptions,
+  type OpenAnnouncementsAdapter,
+  type OpenAnnouncementsResult,
+  type RawItem,
+  type SyncInput,
+  type SyncResult,
+  type VersionAwareAdapter,
 } from '@unicontext/connector-sdk';
 import {
   AuthRequiredError,
@@ -36,6 +43,7 @@ import { AssignmentPayloadSchema, NoticePayloadSchema, RAW_TYPES } from './core/
 import {
   type LcuCursorExtra,
   type LcuSyncContext,
+  downloadNoticeAttachmentsOnDemand,
   type NoticeCacheEntry,
   openNoticesOnDemand,
   readAssignmentsOnDemand,
@@ -93,7 +101,8 @@ export class LiveCampusUAdapter
     VersionAwareAdapter,
     InteractiveAuthAdapter,
     OpenAnnouncementsAdapter,
-    DetailFetchAdapter
+    DetailFetchAdapter,
+    FileDownloadAdapter
 {
   readonly id: string;
   readonly version = metadata.version;
@@ -110,6 +119,11 @@ export class LiveCampusUAdapter
   private lastHealth: HealthStatus | undefined;
   /** sync() and openAnnouncements() share one LCU session (one current screen): never interleave. */
   private queue: Promise<unknown> = Promise.resolve();
+
+  /** Notice attachments are files: fetched only on the student's request (never by a sync). */
+  readonly fileSourceTypes = [RAW_TYPES.notice];
+  readonly fileTextSourceTypes = [FILE_TEXT_SOURCE_TYPE];
+  readonly hostExtractsFileText = true;
 
   private exclusive<T>(fn: () => Promise<T>): Promise<T> {
     const run = this.queue.then(fn, fn);
@@ -328,6 +342,104 @@ export class LiveCampusUAdapter
     });
   }
 
+  fileSettings(): FileDownloadSettings {
+    return { maxDownloadBytes: MAX_ATTACHMENT_BYTES };
+  }
+
+  /** One attachment of a notice: the document (its title is the listed file name) says which. */
+  describeFile(item: {
+    sourceType: string;
+    externalId: string;
+    payload: unknown;
+    document?: { title?: string } | undefined;
+  }): DownloadableFile | undefined {
+    if (item.sourceType !== RAW_TYPES.notice) return undefined;
+    const p = NoticePayloadSchema.safeParse(item.payload);
+    if (!p.success) return undefined;
+    const name = item.document?.title;
+    const a = p.data.detail?.attachments.find((x) => x.name === name);
+    if (!a) return undefined;
+    return {
+      externalId: attachmentExternalId(p.data.key, a.name),
+      name: a.name,
+      container: p.data.detail?.courses[0] ?? 'LiveCampusU',
+      containerId: p.data.key,
+      isClass: false,
+      folder: '',
+      // LCU gives no version: the listed size stands in (a replaced file almost always differs).
+      version: `${a.name}:${a.size ?? ''}`,
+      sizeBytes: a.size,
+      modifiedAt: undefined,
+      mimeType: undefined,
+    };
+  }
+
+  /**
+   * Download notice attachments on the student's request (get_document / download_course_file):
+   * the notice is opened like open_announcement opens it and the file comes through the detail
+   * screen's own file link. Serialized with sync(); the host extracts the text.
+   */
+  downloadFiles(
+    requests: readonly FileDownloadRequest[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ results: FileDownloadOutcome[]; items: RawItem[]; warnings: string[] }> {
+    return this.exclusive(async () => {
+      const results: FileDownloadOutcome[] = [];
+      const wanted: { request: FileDownloadRequest; key: string; name: string }[] = [];
+      for (const r of requests) {
+        const parsed = parseAttachmentExternalId(r.externalId);
+        if (r.extractOnly) {
+          results.push({ externalId: r.externalId, status: 'extracted' });
+          continue;
+        }
+        if (!parsed) {
+          results.push({
+            externalId: r.externalId,
+            status: 'notFound',
+            error: 'not a notice attachment',
+          });
+          continue;
+        }
+        wanted.push({ request: r, ...parsed });
+      }
+      if (wanted.length === 0) return { results, items: [], warnings: [] };
+      if (this.inMaintenance())
+        throw new OfflineError(
+          `LiveCampusU nightly maintenance window (${this.deployment.maintenanceWindow ?? ''})`,
+        );
+      const got = await downloadNoticeAttachmentsOnDemand(
+        this.syncContext(this.ctx.clock.now()),
+        wanted.map((w) => ({ key: w.key, name: w.name, maxBytes: w.request.maxBytes })),
+        options.signal,
+      );
+      for (const w of wanted) {
+        const r = got.find((x) => x.key === w.key && x.name === w.name);
+        if (!r || r.status !== 'downloaded' || !r.bytes) {
+          results.push({
+            externalId: w.request.externalId,
+            status: r?.status === 'notFound' ? 'notFound' : 'failed',
+            error: r?.error ?? 'not downloaded',
+          });
+          continue;
+        }
+        const target = w.request.targetPath;
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(`${target}.part`, r.bytes);
+        renameSync(`${target}.part`, target);
+        results.push({
+          externalId: w.request.externalId,
+          status: 'downloaded',
+          bytes: r.bytes.byteLength,
+          ...(r.contentType ? { contentType: r.contentType } : {}),
+        });
+      }
+      this.ctx.logger.info('LiveCampusU notice attachments downloaded on request', {
+        downloaded: results.filter((r) => r.status === 'downloaded').length,
+      });
+      return { results, items: [], warnings: [] };
+    });
+  }
+
   private syncContext(now: Date): LcuSyncContext {
     const cfg = this.ctx.config;
     return {
@@ -426,4 +538,18 @@ export class LiveCampusUAdapter
   async dispose(): Promise<void> {
     await this.strategy.dispose();
   }
+}
+
+/** Largest notice attachment fetched on request. */
+const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+
+/** File id of a notice attachment: `<notice key>/<listed file name>` (keys never hold a slash). */
+function attachmentExternalId(noticeKey: string, name: string): string {
+  return `${noticeKey}/${name}`;
+}
+
+function parseAttachmentExternalId(id: string): { key: string; name: string } | undefined {
+  const i = id.indexOf('/');
+  if (i <= 0 || i === id.length - 1) return undefined;
+  return { key: id.slice(0, i), name: id.slice(i + 1) };
 }

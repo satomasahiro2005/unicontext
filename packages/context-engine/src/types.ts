@@ -304,6 +304,8 @@ export interface AnnouncementItem extends Cited {
 export interface AnnouncementAttachment {
   name: string;
   size?: number;
+  /** The file as a document (get_document / download_course_file open it). */
+  documentId?: string;
 }
 
 /** One announcement with its full (untruncated) body and detail-screen fields. */

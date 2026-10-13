@@ -111,7 +111,10 @@ source config wins), and the per-key deployment overrides `baseUrl`,
   unless `grades: true`. Violations throw `PolicyViolationError`. The one exception to the `upload`
   rule: `POST fileUpload/load/<id>` (the detail screen's read-only file-list call) with the
   `notice-attachments` grant, which only `loadNoticeAttachments()` issues while a notice's
-  detail is open; downloads, uploads and deletes stay denied.
+  detail is open; and `GET fileUpload/download/<prefix>/<temporaryId>/` with the
+  `notice-attachment-download` grant, which only `downloadNoticeAttachment()` issues while a notice's
+  detail is open, on the student's request for that file (get_document / download_course_file,
+  never a sync). Uploads and deletes stay denied.
 - **Opening marks a notice read, for good.** Opening a detail marks the notice read in LCU
   (observed 2026-10-02 over plain HTTP: the row left the unread set), and LCU has **no way back to
   unread**: the list's only read action is 「既読にする」 (`SC_17001B00_01/readMark`, posts the
@@ -186,7 +189,8 @@ class)` arguments; off-grid courses become offerings with `scheduleType` `unsche
    The detail gives 内容 (rich text → plain text with paragraph breaks, links kept), 連絡種別,
    講義名 (targets), 重要度, 連絡日時, 連絡元 (sender); the file-list JSON gives attachment names and
    sizes (`temporaryFileList[].physicalFileName/fileSize`; session-bound ids and download paths are
-   not kept). Bodies are carried forward in `cursor.extra.notices` and checkpointed to
+   not kept). Each attachment becomes a `document` (FileDownloadAdapter): on request the notice is
+   opened again and the file comes through the screen's own link; the host extracts its text. Bodies are carried forward in `cursor.extra.notices` and checkpointed to
    `<cacheDir>/notice-details.json` after every notice, so a backfill that is cut off resumes where
    it stopped. Every notice gets `bodyStatus`: `fetched`, `pending` (over this run's budget; a
    later sync fetches it) or `notOpened` (unread in LCU with `openUnreadNotices: false`).

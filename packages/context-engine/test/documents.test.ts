@@ -298,7 +298,7 @@ describe('Word and image files', () => {
 });
 
 describe('sources that do not hand over files', () => {
-  it('a LiveCampusU announcement attachment is unsupported, with where to open it', async () => {
+  it('a LiveCampusU attachment not stored yet is unsupported, with where to open it', async () => {
     uc.sync.register({
       sourceId: 'livecampusu',
       adapter: idleAdapter('livecampusu'),
@@ -325,7 +325,7 @@ describe('sources that do not hand over files', () => {
     });
     const read = await readDocument(handle);
     expect(read.unsupported).toEqual({
-      reason: 'LiveCampusU の添付は LiveCampusU で開いてください（コネクタ方針でダウンロード不可）',
+      reason: 'LiveCampusU の添付はまだ取り込まれていません（次の同期のあとに開けます）',
       openUrl: 'https://lcu.example.test/notice/1',
     });
     expect(read.pages).toEqual([]);

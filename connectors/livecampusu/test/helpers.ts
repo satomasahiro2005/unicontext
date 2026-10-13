@@ -344,6 +344,19 @@ ${body}</body></html>`;
       }
     }
 
+    // The detail screen's file link (X-CSRF-TOKEN in the query).
+    const download = /^fileUpload\/download\/fi02\/TMP(\d+)\/?$/.exec(rel);
+    if (method === 'GET' && download) {
+      if (url.searchParams.get('X-CSRF-TOKEN') !== this.csrf)
+        return new Response('', { status: 403 });
+      const a = this.attachments[Number(download[1])];
+      if (!a || a.deleted) return new Response('', { status: 404 });
+      return new Response(`bytes of ${a.name}`, {
+        status: 200,
+        headers: { 'content-type': 'application/octet-stream' },
+      });
+    }
+
     const initMatch = /^(SC_[A-Za-z0-9]{8}_\d{2})\/init$/.exec(rel);
     if (method === 'POST' && initMatch) return this.redirect(initMatch[1] as string);
 

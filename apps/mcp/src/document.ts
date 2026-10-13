@@ -24,13 +24,13 @@ import type { McpDeps } from './server.js';
 
 /** One sentence for SERVER_INSTRUCTIONS / REMOTE_* : when to reach for get_document. */
 export const DOCUMENT_INSTRUCTION_JA =
-  'PDF・スライド・Word・画像・お知らせや投稿の添付など、資料の中身が答えに要るときは、本人に貼り付けやスクリーンショットを求めず、search や get_course などの document:… の id（お知らせは announcement:…）で get_document を呼んでください（ページごとの本文と、ページ画像・埋め込み画像が画像として返ります。needsVision のページは画像を見て読み、取得できない資料は UniContext に何が足りないかをそのまま伝える）。';
+  'PDF・スライド・Word・画像・お知らせや投稿の添付・本文中のリンク先など、資料の中身が答えに要るときは、本人にダウンロード・アップロード・貼り付け・スクリーンショットを求めず、get_document を呼んでください。id は search や get_course などの document:…、お知らせの announcement:…（添付と本文中のリンクが candidates に出る）、またはリンクの URL そのもの（SharePoint / OneDrive はサインイン済みのセッションで、それ以外は公開ファイルとして取得）。ページごとの本文と、ページ画像・埋め込み画像が画像として返ります。needsVision のページは画像を見て読み、取得できない資料は UniContext に何が足りないかをそのまま伝える。';
 
 export const GET_DOCUMENT_DESCRIPTION =
-  '資料を開き、ページ／スライドごとの本文と、ページ画像・スライドの埋め込み画像・画像ファイルを画像として返す（PDF・PowerPoint・Word・PNG/JPEG/GIF/WebP・テキスト）。id は document:…／material:…／announcement:…／search の結果の id、「科目名/フォルダ/ファイル名」、ローカルフォルダ内のパス。ファイルは必要になった時にその情報源から取得する（Teams・VPNファイル共有・Edの添付・ローカルファイル）。pages は「1-5」「3」「2,4-6」で、省略すると先頭5ページ（pageCount と続きの取り方を返す）。render は text / images / both（既定 both）。スキャンされたページ（needsVision）は本文が取れていないので、続く画像を見て読む。LiveCampusU の添付はコネクタ方針で取得できず、開く場所（openUrl）だけを返す。大学側には何も変更しない（読み取りのみ）。 / Open a document and return the text of each page or slide plus page renders, embedded slide images and image files as real image content (PDF, PowerPoint, Word, images, text). id: document:… / material:… / announcement:… / a search hit id, "<course>/<path>", or a path inside a local-files folder. Bytes are fetched on demand from the source that has them. pages: "1-5", "3" or "2,4-6" (default: the first 5, with pageCount and how to ask for more). render: text | images | both (default both). Pages with needsVision have no text layer: read the image that follows. LiveCampusU attachments cannot be downloaded (connector policy): only openUrl comes back. Read-only.';
+  '資料を開き、ページ／スライドごとの本文と、ページ画像・スライドの埋め込み画像・画像ファイルを画像として返す（PDF・PowerPoint・Word・PNG/JPEG/GIF/WebP・HTML・テキスト）。id は document:…／material:…／announcement:…／search の結果の id、「科目名/フォルダ/ファイル名」、ローカルフォルダ内のパス、または http(s) の URL（お知らせ・投稿・課題の本文にあるリンク）。ファイルは必要になった時にその情報源から取得する（Teams/SharePoint・OneDrive・VPNファイル共有・Edの添付・LiveCampusUのお知らせの添付・ローカルファイル・公開Webのファイル）。お知らせに添付やリンクが複数あるときは candidates の id を渡す。pages は「1-5」「3」「2,4-6」で、省略すると先頭5ページ（pageCount と続きの取り方を返す）。render は text / images / both（既定 both）。スキャンされたページ（needsVision）は本文が取れていないので、続く画像を見て読む。大学側には何も変更しない（読み取りのみ）。 / Open a document and return the text of each page or slide plus page renders, embedded slide images and image files as real image content (PDF, PowerPoint, Word, images, HTML, text). id: document:… / material:… / announcement:… / a search hit id, "<course>/<path>", a path inside a local-files folder, or an http(s) URL from a notice, post or assignment. Bytes are fetched on demand from the source that has them (Teams/SharePoint, OneDrive, the VPN share, Ed, LiveCampusU notice attachments, local files, public web files). An announcement with several attachments or links returns candidates: pass one of their ids. pages: "1-5", "3" or "2,4-6" (default: the first 5, with pageCount and how to ask for more). render: text | images | both (default both). Pages with needsVision have no text layer: read the image that follows. Read-only.';
 
 export const GET_DOCUMENT_REMOTE_DESCRIPTION =
-  '資料を開き、ページ／スライドごとの本文と、ページ画像・スライドの埋め込み画像・画像ファイルを画像として返す（PDF・PowerPoint・Word・画像・テキスト）。id は document:…／material:…／announcement:…／search の結果の id、または「科目名/フォルダ/ファイル名」。pages は「1-5」「3」「2,4-6」で、省略すると先頭5ページ。render は text / images / both。画像は最大4枚・合計3MBまで（続きは pages を絞って）。スキャンされたページ（needsVision）は続く画像を見て読む。LiveCampusU の添付は取得できず、開く場所（openUrl）だけを返す。読み取りのみ。 / Open a document and return per-page or per-slide text plus page renders and embedded images as image content (at most 4 images, 3 MB in total; ask for fewer pages to see more). Pages with needsVision: read the image that follows. LiveCampusU attachments are not downloadable: only openUrl comes back. Read-only.';
+  '資料を開き、ページ／スライドごとの本文と、ページ画像・スライドの埋め込み画像・画像ファイルを画像として返す（PDF・PowerPoint・Word・画像・HTML・テキスト）。id は document:…／material:…／announcement:…／search の結果の id、「科目名/フォルダ/ファイル名」、または http(s) の URL（お知らせ・投稿・課題の本文にあるリンク。SharePoint / OneDrive も公開Webのファイルも開ける）。Teams/SharePoint・OneDrive・VPNファイル共有・Ed・LiveCampusUのお知らせの添付はUniContextが取得するので、本人にダウンロードやアップロードを頼まない。添付やリンクが複数あるお知らせは candidates の id を渡す。pages は「1-5」「3」「2,4-6」で、省略すると先頭5ページ。render は text / images / both。画像は最大4枚・合計3MBまで（続きは pages を絞って）。スキャンされたページ（needsVision）は続く画像を見て読む。読み取りのみ。 / Open a document and return per-page or per-slide text plus page renders and embedded images as image content (at most 4 images, 3 MB in total; ask for fewer pages to see more). id: a document / material / announcement / search hit id, "<course>/<path>", or an http(s) URL found in a notice, post or assignment (SharePoint, OneDrive and public web files all open). UniContext fetches files from Teams/SharePoint, OneDrive, the VPN share, Ed and LiveCampusU notice attachments itself: never ask the student to download or upload them. Announcements with several attachments or links return candidates. Pages with needsVision: read the image that follows. Read-only.';
 
 export const DOCUMENT_LIMITS = {
   local: { maxImages: 8, maxImageBase64: 1_500_000, maxTotalBase64: 6_000_000 },
@@ -52,7 +52,7 @@ export const getDocumentShape = {
     .min(1)
     .max(2000)
     .describe(
-      'document:…／material:…／announcement:… の id、検索結果の id、「科目名/フォルダ/ファイル名」、ローカルパス / Document id, search hit id, "<course>/<path>" or a local path',
+      'document:…／material:…／announcement:… の id、検索結果の id、「科目名/フォルダ/ファイル名」、ローカルパス、http(s) の URL / Document id, search hit id, "<course>/<path>", a local path or an http(s) URL',
     ),
   pages: z
     .union([z.string().max(200), z.array(z.number().int().positive()).max(500)])
@@ -193,6 +193,7 @@ export async function runGetDocument(
   const handle = resolveDocument(deps.uc, ref, {
     ...(deps.filesDir ? { filesDir: deps.filesDir } : {}),
     ...(deps.downloadFiles ? { downloadFiles: deps.downloadFiles } : {}),
+    ...(deps.openLink ? { openLink: deps.openLink } : {}),
   });
   const read = await readDocument(handle, {
     pages,

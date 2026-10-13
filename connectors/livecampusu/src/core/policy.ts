@@ -28,7 +28,10 @@ import { PolicyViolationError } from '@unicontext/core';
  * One narrow exception to the `upload` rule: with the `notice-attachments` grant (issued by
  * LcuSession.loadNoticeAttachments() while the detail of a READ notice is open), exactly
  * `POST fileUpload/load/<id>` is allowed — the read-only file-list call the detail screen makes on
- * every view. Downloads, uploads and deletes (fileUpload / fileUploadDb) stay denied.
+ * every view. And with the `notice-attachment-download` grant (issued by
+ * LcuSession.downloadNoticeAttachment() while a notice detail is open, on the student's request for
+ * that file), exactly `GET fileUpload/download/<prefix>/<temporaryId>/` — what the detail screen's
+ * file link fetches. Uploads and deletes (fileUpload / fileUploadDb) stay denied.
  */
 
 /** Action segments (case-insensitive, full segment) that are never requested. */
@@ -59,7 +62,8 @@ const DEFAULT_NOTICE_DETAIL_SCREENS = ['SC_17001B00_02'];
 const DEFAULT_GRADE_SCREENS = ['SC_10004B00_01', 'SC_10004B00_02', 'SC_15005B00_01'];
 const GRADE_ACTIONS = /^(grede|grade)information$/i;
 
-export type PolicyGrant = 'notice-detail' | 'notice-detail-on-demand' | 'notice-attachments';
+export type PolicyGrant =
+  'notice-detail' | 'notice-detail-on-demand' | 'notice-attachments' | 'notice-attachment-download';
 
 const NOTICE_DETAIL_GRANTS: ReadonlySet<PolicyGrant | undefined> = new Set([
   'notice-detail',
@@ -68,6 +72,9 @@ const NOTICE_DETAIL_GRANTS: ReadonlySet<PolicyGrant | undefined> = new Set([
 
 /** `fileUpload/load/<id>`: the only fileUpload* call ever made (notice-attachments grant). */
 const ATTACHMENT_LIST_PATH = /^fileUpload\/load\/[A-Za-z0-9]{1,16}$/;
+/** `fileUpload/download/<prefix>/<temporaryId>`: one attachment (notice-attachment-download grant). */
+const ATTACHMENT_DOWNLOAD_PATH =
+  /^fileUpload\/download\/[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,128}$/;
 
 export interface PolicyContext {
   gradesEnabled: boolean;
@@ -105,6 +112,13 @@ export function assertRequestAllowed(method: string, path: string, ctx: PolicyCo
     method.toUpperCase() === 'POST' &&
     ATTACHMENT_LIST_PATH.test(segments.join('/')) &&
     segments.join('/') === clean.replace(/^\/+/, '')
+  )
+    return;
+  if (
+    ctx.grant === 'notice-attachment-download' &&
+    method.toUpperCase() === 'GET' &&
+    ATTACHMENT_DOWNLOAD_PATH.test(segments.join('/')) &&
+    segments.join('/') === clean.replace(/^\/+|\/+$/g, '')
   )
     return;
   const extraScreens = new Set(ctx.extraDeniedScreens ?? []);

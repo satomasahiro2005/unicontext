@@ -20,7 +20,9 @@ import {
   type RenderMode,
   type RenderOptions,
 } from './render/types.js';
+import { openLink, type OpenLinkReport } from './open-link.js';
 import type { UniContext } from './runtime.js';
+import { fetchPublicUrl, isHttpUrl } from './url-fetch.js';
 
 export type { DocumentImage } from './render/image.js';
 export type { DocumentPage, RenderedDocument, RenderMode } from './render/types.js';
@@ -74,11 +76,16 @@ export interface ResolveDocumentOptions {
    */
   downloadFiles?:
     ((refs: string[], options: { extract: boolean }) => Promise<DownloadFilesReport>) | undefined;
+  /**
+   * Open a SharePoint / OneDrive link through the process holding the Microsoft session (the
+   * daemon). Default: in this process with `filesDir`.
+   */
+  openLink?: ((url: string, options: { extract: boolean }) => Promise<OpenLinkReport>) | undefined;
   signal?: AbortSignal | undefined;
 }
 
 export const LCU_ATTACHMENT_REASON =
-  'LiveCampusU の添付は LiveCampusU で開いてください（コネクタ方針でダウンロード不可）';
+  'LiveCampusU の添付はまだ取り込まれていません（次の同期のあとに開けます）';
 export const M365_REASON =
   'Microsoft 365（OneDrive・メール）のコネクタは無効のため、この添付・ファイルは取得できません';
 
@@ -196,6 +203,7 @@ export function resolveDocument(
   const r = ref.trim();
   if (!r) throw new ValidationError('give a document id, "<course>/<path>" or a local path');
   if (isLocalPathRef(r)) return resolveLocalPath(uc, r);
+  if (isHttpUrl(r)) return urlHandle(uc, r, options);
   const entities = uc.sync.stores.entities;
   if (isIdOf('announcement', r)) return announcementHandle(uc, r, options);
   if (isIdOf('documentChunk', r)) {
@@ -222,6 +230,114 @@ export function resolveDocument(
       `${r} is not a document (use a document:… id; for an assignment use get_assignment)`,
     );
   return documentHandle(uc, resolveFileRef(uc, r), r, options);
+}
+
+const SHAREPOINT_HOST = /(^|\.)sharepoint\.com$|(^|\.)teams\.microsoft\.com$|^1drv\.ms$/i;
+
+/** A source holding a signed-in session opens this link (SharePoint / OneDrive). */
+function opensWithSession(uc: UniContext, url: string): boolean {
+  for (const s of uc.sync.sources()) {
+    const a = s.adapter as { canOpenLink?: (u: string) => boolean };
+    if (typeof a.canOpenLink === 'function' && a.canOpenLink(url)) return true;
+  }
+  try {
+    return SHAREPOINT_HOST.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A link (from a notice, a post, an assignment, or what the student pasted): SharePoint / OneDrive
+ * through the signed-in Microsoft session (the file is stored like a synced one), anything else as
+ * a public web file. Nothing is asked of the student.
+ */
+function urlHandle(uc: UniContext, url: string, options: ResolveDocumentOptions): DocumentHandle {
+  let title = url;
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split('/').filter(Boolean).pop();
+    title = last ? decodeURIComponent(last) : u.hostname;
+  } catch {
+    // keep the url
+  }
+  const handle: DocumentHandle = {
+    id: url,
+    ref: url,
+    sourceId: undefined,
+    title,
+    mimeType: undefined,
+    sizeBytes: undefined,
+    sourcePath: undefined,
+    citations: [],
+    storedPages: () => [],
+    fetch: async (): Promise<DocumentFetch> => {
+      if (opensWithSession(uc, url)) {
+        const report = options.openLink
+          ? await options.openLink(url, { extract: false })
+          : options.filesDir
+            ? await openLink(uc, url, {
+                filesDir: options.filesDir,
+                extract: false,
+                ...(options.downloadFiles ? { downloadFiles: options.downloadFiles } : {}),
+                ...(options.signal ? { signal: options.signal } : {}),
+              })
+            : undefined;
+        if (!report)
+          return {
+            ok: false,
+            unsupported: {
+              reason: 'SharePoint / OneDrive のリンクを開く手段がこの接続にありません',
+            },
+          };
+        if (report.status === 'file' && report.file) {
+          const doc = documentHandle(uc, report.file.id, url, options);
+          handle.id = doc.id;
+          handle.title = doc.title;
+          handle.mimeType = doc.mimeType;
+          handle.sizeBytes = doc.sizeBytes;
+          handle.sourceId = doc.sourceId;
+          handle.sourcePath = doc.sourcePath;
+          handle.citations = doc.citations;
+          handle.storedPages = doc.storedPages;
+          return doc.fetch();
+        }
+        if (report.status === 'folder') {
+          handle.candidates = [
+            ...(report.files ?? []).map((f) => ({ id: f.id, title: f.name })),
+            ...(report.folders ?? []).flatMap((f) =>
+              f.url ? [{ id: f.url, title: `${f.name}/` }] : [],
+            ),
+          ];
+          return {
+            ok: false,
+            unsupported: {
+              reason: `フォルダ「${report.folder?.name ?? ''}」へのリンクです。candidates の id（ファイル）か url（サブフォルダ）を指定してください`,
+            },
+          };
+        }
+        return {
+          ok: false,
+          unsupported: { reason: report.reason ?? `リンクを開けませんでした（${report.status}）` },
+        };
+      }
+      try {
+        const r = await fetchPublicUrl(url, options.signal ? { signal: options.signal } : {});
+        handle.title = r.fileName;
+        handle.mimeType = r.mimeType;
+        handle.sizeBytes = r.bytes.byteLength;
+        return {
+          ok: true,
+          bytes: r.bytes,
+          fileName: r.fileName,
+          ...(r.mimeType ? { mimeType: r.mimeType } : {}),
+        };
+      } catch (e) {
+        return { ok: false, unsupported: { reason: errorMessage(e) } };
+      }
+    },
+  };
+  return handle;
 }
 
 function unsupportedHandle(
@@ -445,14 +561,23 @@ function announcementHandle(
     .filter((r): r is NonNullable<typeof r> => r !== undefined);
   const lcu = raws.some((r) => sourceKind(uc, r.sourceId, r.sourceType) === 'lcu');
   const m365 = raws.some((r) => sourceKind(uc, r.sourceId, r.sourceType) === 'm365');
-  const extra = (a.extra ?? {}) as { attachments?: { name?: unknown }[] };
+  const extra = (a.extra ?? {}) as { attachments?: { name?: unknown }[]; links?: unknown };
   const names = (Array.isArray(extra.attachments) ? extra.attachments : [])
     .map((x) => (typeof x?.name === 'string' ? x.name : undefined))
     .filter((x): x is string => x !== undefined);
-  const candidates = [...docs.entries()].map(([cid, title]) => ({ id: cid, title }));
+  // Links in the body (a flyer PDF, a OneDrive folder of slides) open the same way: by their url.
+  const links = (Array.isArray(extra.links) ? extra.links : []).filter(
+    (u): u is string => typeof u === 'string' && isHttpUrl(u),
+  );
+  if (docs.size === 0 && names.length === 0 && links.length === 1)
+    return urlHandle(uc, links[0] as string, options);
+  const candidates = [
+    ...[...docs.entries()].map(([cid, title]) => ({ id: cid, title })),
+    ...links.map((u) => ({ id: u, title: `リンク: ${u}` })),
+  ];
   const reason =
     candidates.length > 1
-      ? `このお知らせには添付が${candidates.length}件あります。candidates の id を指定してください`
+      ? `このお知らせには添付・リンクが${candidates.length}件あります。candidates の id（リンクは url そのもの）を指定してください`
       : lcu
         ? LCU_ATTACHMENT_REASON
         : m365
@@ -607,7 +732,8 @@ export async function readDocument(
   options: ReadDocumentOptions = {},
 ): Promise<DocumentRead> {
   const render = options.render ?? 'both';
-  const base = {
+  // Built after the fetch: a link only learns its name, type and candidates once it is opened.
+  const baseOf = () => ({
     document: {
       id: handle.id,
       title: handle.title,
@@ -618,7 +744,7 @@ export async function readDocument(
     },
     citations: handle.citations,
     ...(handle.candidates ? { candidates: handle.candidates } : {}),
-  };
+  });
   const fallback = (warnings: string[], unsupported?: UnsupportedDocument): DocumentRead => {
     const all = handle.storedPages();
     const wanted = options.pages ? new Set(options.pages) : undefined;
@@ -631,7 +757,7 @@ export async function readDocument(
     if (pages.length > 0)
       warnings.push('取り込み済みの本文だけを返しています（元のファイルは開けていません）');
     return {
-      ...base,
+      ...baseOf(),
       kind: 'other',
       ...(all.length > 0 ? { pageCount: all.length } : {}),
       pages,
@@ -689,7 +815,7 @@ export async function readDocument(
   const pages =
     render === 'images' ? rendered.pages.map((p) => ({ ...p, text: '' })) : rendered.pages;
   return {
-    ...base,
+    ...baseOf(),
     kind: rendered.kind,
     ...(rendered.pageCount !== undefined ? { pageCount: rendered.pageCount } : {}),
     pages,

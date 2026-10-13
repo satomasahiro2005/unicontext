@@ -290,7 +290,7 @@ describe('get_document', () => {
     expect(r.isError).toBe(false);
     expect(r.images).toHaveLength(0);
     expect(r.body?.unsupported).toEqual({
-      reason: 'LiveCampusU の添付は LiveCampusU で開いてください（コネクタ方針でダウンロード不可）',
+      reason: 'LiveCampusU の添付はまだ取り込まれていません（次の同期のあとに開けます）',
       openUrl: 'https://lcu.example.test/notice/9',
     });
     expect(r.body?.answerHint).toContain('取得できません');

@@ -17,6 +17,9 @@ import {
   type DownloadFilesReport,
   fetchDetailsOnRequest,
   fileTextExcerpt,
+  isHttpUrl,
+  readDocument,
+  resolveDocument,
   openAnnouncements as openAnnouncementsInProcess,
   type OpenAnnouncementsReport,
   formatPaceSlot,
@@ -261,8 +264,7 @@ export const RECORDING_INSTRUCTION_EN =
   'When a lecture recording or transcript is given as input and the course and date can reasonably be determined, call ingest_lecture even without a request to save, in addition to answering. Do not ask the user to confirm, or to restate a course, date or period that the conversation, the recording or the timetable tells; it is stored as unconfirmed and never overrides university data.';
 
 /** Findings in the student's own Gmail / Google Calendar are stored without being asked (write surfaces). */
-export const EXTERNAL_SIGNAL_INSTRUCTION_JA =
-  `ユーザーのGmailやGoogleカレンダーを読んで大学に関すること（履修登録の結果・休講・教室変更・締切・日程変更）が見つかったら、頼まれなくても ingest_external_signal を1通・1予定につき1回呼んでください。保存してよいか聞かないでください。メールや予定の全文は貼らず、summary に大事なことを1〜2文、quote に根拠の文をそのまま入れ、nativeId にメール・予定のidを付けます。同じものを2回送っても二重にならず duplicate が返ります。大学に関係ないメール・予定は保存しません。履修を取り消された・不許可・抽選に落ちたと分かったら enrollment=not_taking と course を付けます。保存した内容は「${EXTERNAL_SIGNAL_LABELS.gmail}」「${EXTERNAL_SIGNAL_LABELS.calendar}」と表示され、大学側の値は上書きしません。`;
+export const EXTERNAL_SIGNAL_INSTRUCTION_JA = `ユーザーのGmailやGoogleカレンダーを読んで大学に関すること（履修登録の結果・休講・教室変更・締切・日程変更）が見つかったら、頼まれなくても ingest_external_signal を1通・1予定につき1回呼んでください。保存してよいか聞かないでください。メールや予定の全文は貼らず、summary に大事なことを1〜2文、quote に根拠の文をそのまま入れ、nativeId にメール・予定のidを付けます。同じものを2回送っても二重にならず duplicate が返ります。大学に関係ないメール・予定は保存しません。履修を取り消された・不許可・抽選に落ちたと分かったら enrollment=not_taking と course を付けます。保存した内容は「${EXTERNAL_SIGNAL_LABELS.gmail}」「${EXTERNAL_SIGNAL_LABELS.calendar}」と表示され、大学側の値は上書きしません。`;
 export const EXTERNAL_SIGNAL_INSTRUCTION_EN =
   'When you read the student’s Gmail or Google Calendar and find something about the university (a registration result, a cancellation, a room change, a deadline, a schedule change), call ingest_external_signal once per mail or event without asking; never paste whole mails (summary and a verbatim quote only, plus the mail or event id as nativeId). A repeat returns duplicate. Skip anything not about the university. Stored items are labelled Gmail / Google Calendar and never override university data.';
 
@@ -877,7 +879,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: 'お知らせの全文',
       description:
-        'お知らせ1件の全文（本文・差出人・分類・添付ファイル名・本文中のリンク・対象講義・対象日・既読/未読）を返す。id は get_announcements や search の結果の id（announcement:...）。body が空で bodyStatus が pending / notOpened のときは本文をまだ取得していないので、本人に確かめずに open_announcement で取得してから読む（LiveCampusUでは既読になるが、本人は中身を優先すると決めている。UniContextでは本人が読むまで未読のまま）。 / Full text of one announcement by id (announcement:...), with sender, category, attachments, links, target courses and date, read state. When the body is empty (bodyStatus "pending" / "notOpened"), fetch it with open_announcement without asking first, then read it.',
+        'お知らせ1件の全文（本文・差出人・分類・添付ファイル名・本文中のリンク・対象講義・対象日・既読/未読）を返す。id は get_announcements や search の結果の id（announcement:...）。body が空で bodyStatus が pending / notOpened のときは本文をまだ取得していないので、本人に確かめずに open_announcement で取得してから読む（LiveCampusUでは既読になるが、本人は中身を優先すると決めている。UniContextでは本人が読むまで未読のまま）。添付（attachments の documentId）と本文中のリンク（links の URL）は、中身が要るときに本人へ頼まず get_document にそのまま渡して読む。 / Full text of one announcement by id (announcement:...), with sender, category, attachments, links, target courses and date, read state. When the body is empty (bodyStatus "pending" / "notOpened"), fetch it with open_announcement without asking first, then read it. Attachments (their documentId) and links (the URL) open with get_document: read them yourself, never ask the student to download or upload them.',
     },
     { id: z.string().min(1).describe('announcement:... の id') },
     (a) => {
@@ -1090,16 +1092,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '授業ファイルのダウンロード',
       description:
-        '授業のTeams/SharePointのファイル（get_courseやsearchの結果のdocument:…のid、または「科目名/フォルダ/ファイル名」）を本人のPCにダウンロードし、保存先のパス・サイズ・更新日時と、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき）を返す。大学側には何も変更しない（読み取りのみ）。本文は検索（search）でも引けるようになる。画像・スキャンされたページ・スライドの図を見るときは get_document を使う。 / Download a class file (document id or "<course>/<path>") to the student’s computer; returns the local path, metadata and the extracted text with page/slide markers. Read-only at the source; the text becomes searchable. For images, scanned pages and slide pictures use get_document.',
+        '授業や大学のファイル（get_courseやsearchの結果のdocument:…のid、「科目名/フォルダ/ファイル名」、またはお知らせ・投稿・課題にあるリンクのURL。Teams/SharePoint・OneDrive・VPNファイル共有・Ed・LiveCampusUの添付・公開Webのファイル）を本人のPCにダウンロードし、保存先のパス・サイズ・更新日時と、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき）を返す。大学側には何も変更しない（読み取りのみ）。本文は検索（search）でも引けるようになる。画像・スキャンされたページ・スライドの図を見るときは get_document を使う。 / Download a class or university file (document id, "<course>/<path>", or a link URL from a notice, post or assignment: Teams/SharePoint, OneDrive, the VPN share, Ed, LiveCampusU attachments, public web files) to the student’s computer; returns the local path, metadata and the extracted text with page/slide markers. Read-only at the source; the text becomes searchable. For images, scanned pages and slide pictures use get_document.',
       remoteDescription:
-        '授業のTeams/SharePointのファイル（get_courseやsearchの結果のdocument:…のid、または「科目名/フォルダ/ファイル名」）を取得し、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき、maxCharsで打ち切り）を返す。link=trueのときは、この接続（同じOAuthクライアント）だけが約10分間ダウンロードできるリンクも返す。大学側には何も変更しない。画像・スキャンされたページは get_document で見る。 / Fetch a class file and return its extracted text (page/slide markers, truncated at maxChars); link=true also returns a ~10-minute download link valid for this OAuth client only. Read-only at the source. For images and scanned pages use get_document.',
+        '授業や大学のファイル（get_courseやsearchの結果のdocument:…のid、「科目名/フォルダ/ファイル名」、またはお知らせ・投稿・課題にあるリンクのURL。Teams/SharePoint・OneDrive・VPNファイル共有・Ed・LiveCampusUの添付・公開Webのファイル）を取得し、抽出した本文（PDF/Word/PowerPoint/テキスト、[p.N]・[スライドN]の印つき、maxCharsで打ち切り）を返す。link=trueのときは、この接続（同じOAuthクライアント）だけが約10分間ダウンロードできるリンクも返す。大学側には何も変更しない。画像・スキャンされたページは get_document で見る。 / Fetch a class file and return its extracted text (page/slide markers, truncated at maxChars); link=true also returns a ~10-minute download link valid for this OAuth client only. Read-only at the source. For images and scanned pages use get_document.',
     },
     {
       file: z
         .string()
         .min(1)
         .max(1000)
-        .describe('document:…/material:…のid、または「科目名/フォルダ/ファイル名」'),
+        .describe('document:…/material:…のid、「科目名/フォルダ/ファイル名」、またはリンクのURL'),
       includeText: z
         .boolean()
         .optional()
@@ -1124,6 +1126,36 @@ export function createMcpServer(deps: McpDeps): McpServer {
     },
     async (a) => {
       const includeText = a.includeText !== false;
+      // A link (a notice's flyer, a OneDrive folder of slides, a page of the university site):
+      // opened like get_document does, so the AI never hands the download to the student.
+      if (isHttpUrl(a.file)) {
+        const handle = resolveDocument(uc, a.file.trim(), {
+          ...(deps.filesDir ? { filesDir: deps.filesDir } : {}),
+          ...(deps.downloadFiles ? { downloadFiles: deps.downloadFiles } : {}),
+          ...(deps.openLink ? { openLink: deps.openLink } : {}),
+        });
+        const read = await readDocument(handle, { render: 'text', defaultPages: 1000, ocr: false });
+        const all = read.pages.map((p) => p.text).join('\n\n');
+        const max = a.maxChars ?? 20_000;
+        return {
+          data: {
+            file: { ...read.document, status: read.unsupported ? 'failed' : 'downloaded' },
+            ...(includeText && all
+              ? {
+                  text: {
+                    excerpt: all.slice(0, max),
+                    truncated: all.length > max,
+                    totalChars: all.length,
+                  },
+                }
+              : {}),
+            ...(read.unsupported ? { unsupported: read.unsupported } : {}),
+            ...(read.candidates ? { candidates: read.candidates } : {}),
+            ...(read.warnings.length ? { warnings: read.warnings } : {}),
+            citations: read.citations,
+          },
+        };
+      }
       const run =
         deps.downloadFiles ??
         ((refs: string[], o: { extract: boolean }) => {

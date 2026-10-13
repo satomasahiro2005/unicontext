@@ -4,6 +4,7 @@ import {
   type EntityId,
   type FactOrigin,
   type IdKind,
+  isIdOf,
   type Id,
   type JsonValue,
   type Producer,
@@ -16,6 +17,7 @@ import {
   silentLogger,
   type UniversityProfile,
 } from '@unicontext/core';
+import type { FileTextPayload } from './adapter.js';
 import type { DriftFinding } from './drift.js';
 
 /** Read-only view of a stored raw item handed to normalizers (§6). */
@@ -135,4 +137,41 @@ export function createNormalizeContext(init: NormalizeContextInit): NormalizeCon
     id: (kind, ...parts) => stableId(kind, init.sourceId, ...parts),
     lookup: init.lookup ?? (() => undefined),
   };
+}
+
+/**
+ * Text the host extracted from a downloaded file (FILE_TEXT_SOURCE_TYPE): one documentChunk per
+ * piece, tied to the document the file belongs to, so search and the file text excerpt see it.
+ */
+export function normalizeFileTextItem(item: RawItemView, ctx: NormalizeContext): NormalizeOutput {
+  const p = item.payload as Partial<FileTextPayload> | null;
+  if (
+    !p ||
+    typeof p.documentId !== 'string' ||
+    !isIdOf('document', p.documentId) ||
+    !Array.isArray(p.chunks)
+  )
+    return { entities: [], warnings: [`invalid ${item.sourceType} payload`] };
+  const cite: SourceRefSpec = {};
+  if (typeof p.ref?.sourceLabel === 'string') cite.sourceLabel = p.ref.sourceLabel;
+  if (typeof p.ref?.url === 'string') cite.url = p.ref.url;
+  if (typeof p.ref?.authority === 'string') cite.authority = p.ref.authority;
+  const entities: NormalizedEntity[] = [];
+  for (const piece of p.chunks) {
+    if (typeof piece?.text !== 'string' || !piece.text.trim()) continue;
+    const page = typeof piece.page === 'number' && piece.page > 0 ? piece.page : undefined;
+    entities.push({
+      entity: {
+        id: ctx.id('documentChunk', p.documentId, String(entities.length)),
+        kind: 'documentChunk',
+        documentId: p.documentId,
+        ordinal: entities.length,
+        text: piece.text,
+        ...(page ? { page } : {}),
+        ...(piece.heading ? { heading: piece.heading } : {}),
+      },
+      ref: { ...cite, ...(page ? { location: { page } } : {}) },
+    });
+  }
+  return { entities };
 }

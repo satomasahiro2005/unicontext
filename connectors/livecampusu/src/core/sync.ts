@@ -1218,6 +1218,107 @@ export async function openNoticesOnDemand(
   return { items, results, warnings };
 }
 
+export interface NoticeAttachmentRequest {
+  /** Notice key (the `lcu.notice` external id). */
+  key: string;
+  /** File name as listed (`physicalFileName`). */
+  name: string;
+  maxBytes: number;
+}
+
+export interface NoticeAttachmentResult {
+  key: string;
+  name: string;
+  status: 'downloaded' | 'notFound' | 'failed';
+  bytes?: Uint8Array;
+  contentType?: string;
+  error?: string;
+}
+
+/**
+ * Attachments of notices, on the student's request for them (get_document / download_course_file):
+ * each notice's detail is opened the way open_announcement opens it, the file is fetched through
+ * the screen's own file link, and the screen is left with 戻る. Nothing else is touched.
+ */
+export async function downloadNoticeAttachmentsOnDemand(
+  ctx: LcuSyncContext,
+  requests: readonly NoticeAttachmentRequest[],
+  signal?: AbortSignal,
+): Promise<NoticeAttachmentResult[]> {
+  const { session, deployment: d } = ctx;
+  const results: NoticeAttachmentResult[] = [];
+  const byKey = new Map<string, NoticeAttachmentRequest[]>();
+  for (const r of requests) byKey.set(r.key, [...(byKey.get(r.key) ?? []), r]);
+  const permit = OnDemandNoticePermit.forKeys(byKey.keys());
+  session.beginRun(signal);
+  await session.bootstrap();
+  let list = await session.open(d.screens.noticeList);
+  for (const [key, wanted] of byKey) {
+    const current = parseNoticeList(list.html).find(
+      (r) => noticeKey(r.contactDateTime ?? '', r.typeCode ?? '', r.title) === key,
+    );
+    if (!current || list.noticeListVersion === undefined) {
+      for (const w of wanted)
+        results.push({
+          key,
+          name: w.name,
+          status: 'notFound',
+          error: 'the notice is no longer listed',
+        });
+      continue;
+    }
+    let opened = false;
+    try {
+      await session.openNoticeOnDemand(
+        {
+          rowIndex: current.rowIndex,
+          unread: current.unread,
+          listVersion: list.noticeListVersion,
+          key,
+        },
+        permit,
+      );
+      opened = true;
+      for (const w of wanted) {
+        try {
+          const file = await session.downloadNoticeAttachment(w.name, w.maxBytes);
+          results.push(
+            file
+              ? {
+                  key,
+                  name: w.name,
+                  status: 'downloaded',
+                  bytes: file.bytes,
+                  ...(file.contentType ? { contentType: file.contentType } : {}),
+                }
+              : {
+                  key,
+                  name: w.name,
+                  status: 'notFound',
+                  error: 'the notice no longer has this file',
+                },
+          );
+        } catch (e) {
+          if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+          results.push({ key, name: w.name, status: 'failed', error: errorMessage(e) });
+        }
+      }
+    } catch (e) {
+      if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+      for (const w of wanted)
+        if (!results.some((r) => r.key === key && r.name === w.name))
+          results.push({ key, name: w.name, status: 'failed', error: errorMessage(e) });
+    }
+    list = opened
+      ? await session.post(d.actions.noticeDetailBack)
+      : list.screenId === d.screens.noticeList
+        ? list
+        : await session.open(d.screens.noticeList);
+    if (list.screenId !== d.screens.noticeList) list = await session.open(d.screens.noticeList);
+  }
+  return results;
+}
+
 /**
  * 課題・アンケートリスト of one academic year (the list screen and its search post; nothing else).
  * The same read the sync makes; the 課題提出 screen itself is never opened (policy).

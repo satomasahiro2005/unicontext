@@ -134,6 +134,7 @@ describe('notice grants', () => {
     'notice-detail',
     'notice-detail-on-demand',
     'notice-attachments',
+    'notice-attachment-download',
   ] as const;
 
   it('readMark stays denied with every grant (it can only mark read, never restore unread)', () => {
@@ -167,6 +168,30 @@ describe('notice grants', () => {
       ['POST', 'SC_17001B00_01/rowSelect', g],
       ['GET', 'SC_17001B00_02', g],
       ['POST', 'SC_14002B00_03/submit', g],
+    ] as const)
+      expect(() => assertRequestAllowed(m, p, ctx as PolicyContext)).toThrow(PolicyViolationError);
+  });
+
+  it('the download grant allows exactly GET fileUpload/download/<prefix>/<id>/', () => {
+    const g: PolicyContext = { ...POLICY, grant: 'notice-attachment-download' };
+    for (const p of [
+      'fileUpload/download/fi02/0f3a-11/',
+      'fileUpload/download/fi02/0f3a-11/?X-CSRF-TOKEN=abc',
+      'fileUpload/download/fi02/0f3a-11',
+    ])
+      expect(() => assertRequestAllowed('GET', p, g)).not.toThrow();
+    for (const [m, p, ctx] of [
+      ['GET', 'fileUpload/download/fi02/abc/', POLICY],
+      ['GET', 'fileUpload/download/fi02/abc/', { ...POLICY, grant: 'notice-attachments' }],
+      ['POST', 'fileUpload/download/fi02/abc/', g],
+      ['GET', 'fileUpload/download/fi02/abc/extra', g],
+      ['GET', 'fileUpload/download/fi02;x=1/abc/', g],
+      ['GET', 'fileUpload/download/fi02%2F..%2Fupload/abc/', g],
+      ['GET', 'fileUpload/upload/fi02/abc/', g],
+      ['POST', 'fileUpload/load/fi02', g],
+      ['POST', 'fileUploadDb/delete/fi02/abc', g],
+      ['GET', 'SC_17001B00_02', g],
+      ['POST', 'SC_17001B00_01/readMark', g],
     ] as const)
       expect(() => assertRequestAllowed(m, p, ctx as PolicyContext)).toThrow(PolicyViolationError);
   });

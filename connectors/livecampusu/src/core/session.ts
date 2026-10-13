@@ -359,6 +359,80 @@ export class LcuSession {
     });
   }
 
+  /**
+   * One attachment of the notice detail that is currently open, on the student's request for that
+   * file: the screen's file-list call, then what its file link fetches,
+   * `GET fileUpload/download/<prefix>/<temporaryId>/?X-CSRF-TOKEN=…`. Read-only; refused unless
+   * the current screen is the notice detail. Undefined when the notice has no file of that name.
+   */
+  downloadNoticeAttachment(
+    name: string,
+    maxBytes: number,
+  ): Promise<{ bytes: Uint8Array; contentType?: string } | undefined> {
+    return this.run('op', async () => {
+      const page = this.current;
+      if (page?.screenId !== this.d.screens.noticeDetail)
+        throw new PolicyViolationError(
+          'Attachment download requested while not on a notice detail',
+        );
+      const listPath = noticeAttachmentLoadPath(page.html);
+      if (!listPath) return undefined;
+      this.check('POST', listPath, 'notice-attachments');
+      const json = (await this.jsonRequest('POST', listPath, undefined, {
+        grant: 'notice-attachments',
+      })) as {
+        prefix?: unknown;
+        temporaryPrefix?: unknown;
+        temporaryFileList?:
+          { temporaryId?: unknown; physicalFileName?: unknown; fileStatusType?: unknown }[] | null;
+      } | null;
+      const prefix = [json?.prefix, json?.temporaryPrefix].find(
+        (x): x is string => typeof x === 'string' && x !== '',
+      );
+      const file = (json?.temporaryFileList ?? []).find(
+        (f) =>
+          f?.fileStatusType !== 'DELETE' &&
+          typeof f?.physicalFileName === 'string' &&
+          f.physicalFileName.trim() === name.trim(),
+      );
+      const id =
+        typeof file?.temporaryId === 'string' || typeof file?.temporaryId === 'number'
+          ? String(file.temporaryId)
+          : undefined;
+      if (!file) return undefined;
+      if (!prefix || !id) throw new ConnectorError('the attachment list has no download id');
+      if (!this.tokens.csrf) throw new SessionLostError('no CSRF token for the attachment link');
+      const path = `fileUpload/download/${encodeURIComponent(prefix)}/${encodeURIComponent(id)}/?X-CSRF-TOKEN=${encodeURIComponent(this.tokens.csrf)}`;
+      const { res, url } = await this.fetchFollow('GET', path, {
+        headers: { accept: '*/*' },
+        grant: 'notice-attachment-download',
+      });
+      const type = res.headers.get('content-type') ?? '';
+      if (/text\/html/i.test(type)) {
+        const html = await res.text();
+        const cls = classifyPage(html, {
+          loginFormId: this.d.auth.loginFormId,
+          ssoStartSelector: this.d.auth.ssoStartSelector,
+        });
+        throw new SessionLostError(
+          cls.kind === 'ok' ? 'HTML instead of the file' : (cls.reason ?? cls.kind),
+        );
+      }
+      if (!res.ok)
+        throw new ConnectorError(`HTTP ${res.status} for ${relativeLcuPath(this.d, url) ?? url}`);
+      const declared = Number(res.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        await res.body?.cancel();
+        throw new ConnectorError(`the attachment is larger than ${maxBytes} bytes`);
+      }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.byteLength > maxBytes)
+        throw new ConnectorError(`the attachment is larger than ${maxBytes} bytes`);
+      this.touch();
+      return { bytes, ...(type ? { contentType: type.split(';')[0]!.trim() } : {}) };
+    });
+  }
+
   // ---------------------------------------------------------------- internals
 
   private check(method: string, path: string, grant?: PolicyGrant): void {

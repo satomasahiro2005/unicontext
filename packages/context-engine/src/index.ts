@@ -20,6 +20,7 @@ export * from './estimate.js';
 export * from './detail-fetch.js';
 export * from './syllabus-priority.js';
 export * from './documents.js';
+export * from './url-fetch.js';
 export * from './task-progress.js';
 export * from './freshness.js';
 export * from './attendance.js';

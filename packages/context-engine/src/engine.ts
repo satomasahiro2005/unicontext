@@ -13,6 +13,7 @@ import {
   type Document,
   type Exam,
   type Importance,
+  isIdOf,
   type JsonValue,
   type Lecture,
   type Material,
@@ -151,6 +152,7 @@ import {
 } from './discussion.js';
 import type {
   AdminContext,
+  AnnouncementAttachment,
   AnnouncementDetail,
   AnnouncementItem,
   CalendarEventItem,
@@ -1316,13 +1318,36 @@ export class ContextEngine {
     };
   }
 
+  /** Attachments with the document each one is stored as (same raw item, same file name). */
+  private withAttachmentDocuments(
+    announcementId: string,
+    attachments: AnnouncementAttachment[],
+  ): AnnouncementAttachment[] {
+    if (attachments.length === 0) return attachments;
+    const byName = new Map<string, string>();
+    for (const sr of this.refs.forEntity(announcementId)) {
+      if (!sr.rawItemId) continue;
+      for (const other of this.refs.byRawItem(sr.rawItemId)) {
+        if (!other.entityId || !isIdOf('document', other.entityId)) continue;
+        const d = this.entities.getOfKind('document', other.entityId);
+        if (d && !byName.has(d.title)) byName.set(d.title, d.id);
+      }
+    }
+    return attachments.map((x) => {
+      const documentId = byName.get(x.name);
+      return documentId ? { ...x, documentId } : x;
+    });
+  }
+
   /** One announcement with its full body and detail-screen fields, or undefined when unknown. */
   getAnnouncement(id: string): AnnouncementDetail | undefined {
     const a = this.entities.getOfKind('announcement', id);
     if (!a) return undefined;
     const extra = readAnnouncementExtra(a.extra);
+    const item = this.announcementItem(a);
     return {
-      ...this.announcementItem(a),
+      ...item,
+      attachments: this.withAttachmentDocuments(a.id, item.attachments),
       body: a.body,
       url: a.url,
       links: extra.links,
