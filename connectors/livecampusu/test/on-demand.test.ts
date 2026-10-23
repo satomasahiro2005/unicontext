@@ -353,9 +353,9 @@ describe('sync opens unread notices (openUnreadNotices, default on)', () => {
       expect(p.detail?.body).toContain('講義資料を掲載しました。');
     }
     // The clip row's attachment list is read while its detail is open.
-    expect(server.paths().filter((x) => /fileUpload/.test(x))).toEqual([
-      'POST fileUpload/load/fi02',
-    ]);
+    expect(
+      server.paths().filter((x) => /fileUpload/.test(x) && !/\/(reg02|submit)(\/|$)/.test(x)),
+    ).toEqual(['POST fileUpload/load/fi02']);
     expect(server.paths().filter((x) => /readMark|toDoIcon|todo/i.test(x))).toEqual([]);
 
     // The next sync opens nothing again; the notice stays "opened by UniContext".

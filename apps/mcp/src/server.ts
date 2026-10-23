@@ -935,7 +935,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: '課題の中身',
       description:
-        "課題1件の中身を、解くのに要るところまで返す: 締切・状態・出典に加え、Ed Lessons の課題なら全スライドを順に（本文、クイズの各設問=質問1・質問2…の本文と選択肢、添付ファイルの名前とリンク、本人が Ed に保存済みの回答）。id は get_assignments の assignmentId / taskId、get_course の assignment:… の id、または search で見つけた Ed の設問・スライドの document:… の id。既定で Ed から読み直す（読み取りのみ。回答の保存・提出・既読化はしない）。正解・解説は返さない。 / One assignment with what it takes to work on it: deadline, status, sources and, for an Ed lesson, every slide in order with its text, each quiz question (質問1, 質問2, ...) with prompt and choices, file names and links, and the student's own saved answers. Read live from Ed by default (read-only: never saves, submits or marks anything). Never returns answer keys.",
+        "課題1件の中身を、解くのに要るところまで返す: 締切・状態・出典・本文（assignment.description）に加え、学務情報システムの課題なら参考資料（files[]、id を get_document / download_course_file に渡すと中身が読める）と本文を読めたか（content.status: fetched / empty=本文なし / notFetched=未取得）、Ed Lessons の課題なら全スライドを順に（本文、クイズの各設問=質問1・質問2…の本文と選択肢、添付ファイルの名前とリンク、本人が Ed に保存済みの回答）。id は get_assignments の assignmentId / taskId、get_course の assignment:… の id、または search で見つけた Ed の設問・スライドの document:… の id。既定で Ed から読み直す（読み取りのみ。回答の保存・提出・既読化はしない）。正解・解説は返さない。 / One assignment with what it takes to work on it: deadline, status, sources and, for an Ed lesson, every slide in order with its text, each quiz question (質問1, 質問2, ...) with prompt and choices, file names and links, and the student's own saved answers. Read live from Ed by default (read-only: never saves, submits or marks anything). Never returns answer keys.",
     },
     {
       id: z
@@ -1014,9 +1014,19 @@ export function createMcpServer(deps: McpDeps): McpServer {
         else if (detail.lesson.answersFetchedAt === undefined)
           notes.push('保存済みの回答はまだ読めていません（Ed で確認してください）。');
       }
+      if (detail.content?.status === 'notFetched')
+        notes.push(
+          'この課題の本文・参考資料はまだ取り込めていません（次の同期で学務情報システムの課題画面を読みます）。本文が無いとは限りません。',
+        );
+      else if (detail.content?.status === 'empty')
+        notes.push('学務情報システムの課題画面に本文はありません（取り込み済み）。');
+      if (detail.content?.referencesComplete === false)
+        notes.push('参考資料の一覧を読めなかったため、files は欠けている可能性があります。');
       const hint = detail.lesson
         ? '設問は lesson.slides[].questions（質問1・質問2…）にあります。回答の保存・提出は本人が Ed で行います（UniContext からはしません）。myAnswer は本人が Ed に保存した回答です。出典として Ed のレッスンの URL を添えてください。'
-        : undefined;
+        : detail.files?.length
+          ? '参考資料は files[] にあります。中身は id を get_document か download_course_file に渡して読んでください（本人に開かせない）。'
+          : undefined;
       return {
         data: {
           ...detail,

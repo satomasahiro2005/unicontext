@@ -41,6 +41,8 @@ import {
 import { LcuSession } from './core/session.js';
 import { AssignmentPayloadSchema, NoticePayloadSchema, RAW_TYPES } from './core/schemas.js';
 import {
+  type AssignmentCacheEntry,
+  downloadAssignmentReferencesOnDemand,
   type LcuCursorExtra,
   type LcuSyncContext,
   downloadNoticeAttachmentsOnDemand,
@@ -114,14 +116,19 @@ export class LiveCampusUAdapter
   /** Resolved `openUnreadNotices` (source config, else the profile's product setting, else true). */
   readonly openUnreadNotices: boolean;
   private noticeCache = new Map<string, NoticeCacheEntry>();
+  /** Assignment screens read so far (seeded from the cursor, kept across runs in memory). */
+  private assignmentCache = new Map<string, AssignmentCacheEntry>();
   private noticeCheckpointLoaded = false;
   private versionState: VersionState | undefined;
   private lastHealth: HealthStatus | undefined;
   /** sync() and openAnnouncements() share one LCU session (one current screen): never interleave. */
   private queue: Promise<unknown> = Promise.resolve();
 
-  /** Notice attachments are files: fetched only on the student's request (never by a sync). */
-  readonly fileSourceTypes = [RAW_TYPES.notice];
+  /**
+   * Notice attachments and assignment 参考資料 are files: fetched only on the student's request
+   * (never by a sync).
+   */
+  readonly fileSourceTypes = [RAW_TYPES.notice, RAW_TYPES.assignment];
   readonly fileTextSourceTypes = [FILE_TEXT_SOURCE_TYPE];
   readonly hostExtractsFileText = true;
 
@@ -192,6 +199,7 @@ export class LiveCampusUAdapter
   async logout(): Promise<void> {
     this.session.reset();
     this.noticeCache.clear();
+    this.assignmentCache.clear();
     const file = this.noticeCheckpointFile();
     if (file) rmSync(file, { force: true });
     await this.strategy.logout();
@@ -346,13 +354,35 @@ export class LiveCampusUAdapter
     return { maxDownloadBytes: MAX_ATTACHMENT_BYTES };
   }
 
-  /** One attachment of a notice: the document (its title is the listed file name) says which. */
+  /**
+   * One attachment of a notice, or one 参考資料 of an assignment: the document (its title is the
+   * listed file name) says which.
+   */
   describeFile(item: {
     sourceType: string;
     externalId: string;
     payload: unknown;
     document?: { title?: string } | undefined;
   }): DownloadableFile | undefined {
+    if (item.sourceType === RAW_TYPES.assignment) {
+      const p = AssignmentPayloadSchema.safeParse(item.payload);
+      if (!p.success) return undefined;
+      const name = item.document?.title;
+      const f = p.data.detail?.references.find((x) => x.name === name);
+      if (!f) return undefined;
+      return {
+        externalId: referenceExternalId(p.data.submissionSeq, p.data.year, f.name),
+        name: f.name,
+        container: p.data.context.offeringTitle ?? p.data.title,
+        containerId: p.data.submissionSeq,
+        isClass: p.data.context.offeringKey !== undefined,
+        folder: p.data.title,
+        version: `${f.name}:${f.size ?? ''}`,
+        sizeBytes: f.size,
+        modifiedAt: undefined,
+        mimeType: undefined,
+      };
+    }
     if (item.sourceType !== RAW_TYPES.notice) return undefined;
     const p = NoticePayloadSchema.safeParse(item.payload);
     if (!p.success) return undefined;
@@ -386,12 +416,23 @@ export class LiveCampusUAdapter
     return this.exclusive(async () => {
       const results: FileDownloadOutcome[] = [];
       const wanted: { request: FileDownloadRequest; key: string; name: string }[] = [];
+      const references: {
+        request: FileDownloadRequest;
+        submissionSeq: string;
+        year?: number;
+        name: string;
+      }[] = [];
       for (const r of requests) {
-        const parsed = parseAttachmentExternalId(r.externalId);
         if (r.extractOnly) {
           results.push({ externalId: r.externalId, status: 'extracted' });
           continue;
         }
+        const reference = parseReferenceExternalId(r.externalId);
+        if (reference) {
+          references.push({ request: r, ...reference });
+          continue;
+        }
+        const parsed = parseAttachmentExternalId(r.externalId);
         if (!parsed) {
           results.push({
             externalId: r.externalId,
@@ -402,38 +443,66 @@ export class LiveCampusUAdapter
         }
         wanted.push({ request: r, ...parsed });
       }
-      if (wanted.length === 0) return { results, items: [], warnings: [] };
+      if (wanted.length === 0 && references.length === 0)
+        return { results, items: [], warnings: [] };
       if (this.inMaintenance())
         throw new OfflineError(
           `LiveCampusU nightly maintenance window (${this.deployment.maintenanceWindow ?? ''})`,
         );
-      const got = await downloadNoticeAttachmentsOnDemand(
-        this.syncContext(this.ctx.clock.now()),
-        wanted.map((w) => ({ key: w.key, name: w.name, maxBytes: w.request.maxBytes })),
-        options.signal,
-      );
-      for (const w of wanted) {
-        const r = got.find((x) => x.key === w.key && x.name === w.name);
+      const save = (
+        request: FileDownloadRequest,
+        r: { status: string; bytes?: Uint8Array; contentType?: string; error?: string } | undefined,
+      ): void => {
         if (!r || r.status !== 'downloaded' || !r.bytes) {
           results.push({
-            externalId: w.request.externalId,
+            externalId: request.externalId,
             status: r?.status === 'notFound' ? 'notFound' : 'failed',
             error: r?.error ?? 'not downloaded',
           });
-          continue;
+          return;
         }
-        const target = w.request.targetPath;
+        const target = request.targetPath;
         mkdirSync(path.dirname(target), { recursive: true });
         writeFileSync(`${target}.part`, r.bytes);
         renameSync(`${target}.part`, target);
         results.push({
-          externalId: w.request.externalId,
+          externalId: request.externalId,
           status: 'downloaded',
           bytes: r.bytes.byteLength,
           ...(r.contentType ? { contentType: r.contentType } : {}),
         });
+      };
+      if (wanted.length > 0) {
+        const got = await downloadNoticeAttachmentsOnDemand(
+          this.syncContext(this.ctx.clock.now()),
+          wanted.map((w) => ({ key: w.key, name: w.name, maxBytes: w.request.maxBytes })),
+          options.signal,
+        );
+        for (const w of wanted)
+          save(
+            w.request,
+            got.find((x) => x.key === w.key && x.name === w.name),
+          );
       }
-      this.ctx.logger.info('LiveCampusU notice attachments downloaded on request', {
+      if (references.length > 0) {
+        const sctx = this.syncContext(this.ctx.clock.now());
+        const got = await downloadAssignmentReferencesOnDemand(
+          sctx,
+          references.map((w) => ({
+            submissionSeq: w.submissionSeq,
+            year: w.year ?? sctx.options.academicYear,
+            name: w.name,
+            maxBytes: w.request.maxBytes,
+          })),
+          options.signal,
+        );
+        for (const w of references)
+          save(
+            w.request,
+            got.find((x) => x.submissionSeq === w.submissionSeq && x.name === w.name),
+          );
+      }
+      this.ctx.logger.info('LiveCampusU files downloaded on request', {
         downloaded: results.filter((r) => r.status === 'downloaded').length,
       });
       return { results, items: [], warnings: [] };
@@ -454,12 +523,15 @@ export class LiveCampusUAdapter
         maxNoticeDetailsPerRun: cfg.maxNoticeDetailsPerRun,
         openUnreadNotices: this.openUnreadNotices,
         maxUnreadNoticesPerRun: cfg.maxUnreadNoticesPerRun,
+        assignmentDetails: cfg.assignmentDetails,
+        maxAssignmentDetailsPerRun: cfg.maxAssignmentDetailsPerRun,
       },
       clock: this.ctx.clock,
       timezone: this.timezone,
       logger: this.ctx.logger,
       product: PRODUCT,
       noticeCache: this.noticeCache,
+      assignmentCache: this.assignmentCache,
       onNoticeDetail: () => this.saveNoticeCheckpoint(),
       version: this.versionState,
     };
@@ -476,6 +548,8 @@ export class LiveCampusUAdapter
       LcuCursorExtra | undefined;
     if (extra?.notices && this.noticeCache.size === 0)
       for (const [k, v] of Object.entries(extra.notices)) this.noticeCache.set(k, v);
+    if (extra?.assignments && this.assignmentCache.size === 0)
+      for (const [k, v] of Object.entries(extra.assignments)) this.assignmentCache.set(k, v);
     this.loadNoticeCheckpoint();
     if (!this.versionState && extra?.version) this.versionState = extra.version;
     try {
@@ -546,6 +620,30 @@ const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 /** File id of a notice attachment: `<notice key>/<listed file name>` (keys never hold a slash). */
 function attachmentExternalId(noticeKey: string, name: string): string {
   return `${noticeKey}/${name}`;
+}
+
+/**
+ * File id of an assignment's 参考資料: `kadai-<submissionSeq>-<year>/<listed file name>` (the
+ * prefix keeps it apart from notice keys, which start with `n-`).
+ */
+function referenceExternalId(
+  submissionSeq: string,
+  year: number | undefined,
+  name: string,
+): string {
+  return `kadai-${submissionSeq}-${year ?? ''}/${name}`;
+}
+
+function parseReferenceExternalId(
+  id: string,
+): { submissionSeq: string; year?: number; name: string } | undefined {
+  const m = /^kadai-([^/-]+)-(\d*)\/(.+)$/.exec(id);
+  if (!m) return undefined;
+  return {
+    submissionSeq: m[1] as string,
+    ...(m[2] ? { year: Number(m[2]) } : {}),
+    name: m[3] as string,
+  };
 }
 
 function parseAttachmentExternalId(id: string): { key: string; name: string } | undefined {

@@ -46,6 +46,7 @@ import {
   SHIZUOKA_DEPLOYMENT,
 } from '../../../connectors/livecampusu/src/index.js';
 import { createMcpServer, ProposalStore, type McpEnvelope } from '../src/index.js';
+import type { AssignmentDetailView } from '../src/assignment-detail.js';
 import type { ToolRegistrar } from '../src/refresh.js';
 import {
   registerVerifySubmissionTool,
@@ -371,9 +372,59 @@ describe('verify_submission (LiveCampusU / Teams)', () => {
     });
     expect(out.data.files).toEqual([]);
     expect(out.data.limits.join(' ')).toMatch(/提出済 \/ 未提出/);
-    // get_assignment does not read LiveCampusU live (it has no content to add)
+    // get_assignment does not read LiveCampusU live (the sync reads the assignment's screen)
     await call('get_assignment', { id: a?.id });
     expect(adapter.detailCalls).toHaveLength(1);
+  });
+
+  it('LiveCampusU: get_assignment gives the 本文 and the 参考資料 the sync read, or says it has not', async () => {
+    const withScreen: RawItem = {
+      ...lcuRow('未提出'),
+      payload: {
+        ...(lcuRow('未提出').payload as Record<string, unknown>),
+        detail: {
+          body: '第3回課題です。\nこちらにZip形式で送信ください。',
+          references: [{ name: '第3回.pdf', size: 210262 }],
+          screen: 'SC_14002B00_03',
+          fetchedAt: NOW,
+        },
+      },
+    };
+    const adapter = new StateAdapter('lcu', [withScreen]);
+    const { uc, call } = await setupState(
+      'livecampusu',
+      adapter,
+      createLiveCampusUNormalizer({ deployment: SHIZUOKA_DEPLOYMENT }),
+      lcuMetadata,
+    );
+    const a = uc.sync.stores.entities.list('assignment')[0];
+    const out = await call<AssignmentDetailView>('get_assignment', { id: a?.id });
+    expect(out.data.assignment.description).toBe(
+      '第3回課題です。\nこちらにZip形式で送信ください。',
+    );
+    expect(out.data.content).toMatchObject({ status: 'fetched', fetchedAt: NOW });
+    expect(out.data.files?.map((f) => f.name)).toEqual(['第3回.pdf']);
+    expect(out.data.files?.[0]?.id).toMatch(/^document:/);
+    // the 参考資料 is not something the student submitted
+    const verified = await call<Verified>('verify_submission', { id: a?.id });
+    expect(verified.data.files).toEqual([]);
+    // the 本文 is found by search
+    const hits = await call<{ hits: { title: string }[] }>('search', { query: 'Zip形式' });
+    expect(hits.data.hits.some((h) => h.title === '第3回レポート（課題の本文）')).toBe(true);
+  });
+
+  it('LiveCampusU: an assignment whose screen was not read yet is not called empty', async () => {
+    const adapter = new StateAdapter('lcu', [lcuRow('未提出')]);
+    const { uc, call } = await setupState(
+      'livecampusu',
+      adapter,
+      createLiveCampusUNormalizer({ deployment: SHIZUOKA_DEPLOYMENT }),
+      lcuMetadata,
+    );
+    const a = uc.sync.stores.entities.list('assignment')[0];
+    const out = await call<AssignmentDetailView>('get_assignment', { id: a?.id });
+    expect(out.data.content?.status).toBe('notFetched');
+    expect(JSON.stringify(out.data)).toMatch(/本文が無いとは限りません/);
   });
 
   it('Teams: re-reads the status and the time it was turned in', async () => {

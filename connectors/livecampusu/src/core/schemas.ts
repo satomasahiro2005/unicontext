@@ -201,6 +201,22 @@ export const NoticePayloadSchema = z.object({
 });
 export type NoticePayload = z.infer<typeof NoticePayloadSchema>;
 
+/** What the assignment's own screen showed (detail or submission screen; read-only). */
+export const AssignmentDetailPayloadSchema = z.object({
+  /** The 本文; '' when the teacher wrote none (not the same as never read: `detail` is absent). */
+  body: str,
+  links: z.array(str).optional(),
+  /** 参考資料 file names and sizes (download ids are session-bound and never kept). */
+  references: z.array(z.object({ name: str, size: z.number().optional() })),
+  /** False when the 参考資料 list could not be read (names may be missing). */
+  referencesComplete: z.boolean().optional(),
+  /** Screen the row opened (SC_14002B00_02 detail / SC_14002B00_03 submission). */
+  screen: str,
+  /** When the screen was read (ISO). */
+  fetchedAt: str,
+});
+export type AssignmentDetailPayload = z.infer<typeof AssignmentDetailPayloadSchema>;
+
 export const AssignmentPayloadSchema = z.object({
   submissionSeq: str,
   year: z.number().optional(),
@@ -211,6 +227,8 @@ export const AssignmentPayloadSchema = z.object({
   statusCode: str,
   submittalTerm: str,
   submittalStatus: str,
+  /** Absent until the assignment's screen was read (a later sync reads it, over its budget). */
+  detail: AssignmentDetailPayloadSchema.optional(),
   context: contextSchema,
   source: sourceSchema,
 });

@@ -44,6 +44,13 @@ export const LiveCampusUConfigSchema = z.looseObject({
    * notices are only bounded by maxNoticeDetailsPerRun.
    */
   maxUnreadNoticesPerRun: z.number().int().nonnegative().default(30),
+  /**
+   * Read each assignment's own screen (本文 and 参考資料 names): once, again when its list row
+   * changes, and daily while it still accepts submissions (teachers add files). About 4 requests
+   * each; accepting ones go first, the rest follow in later runs over the budget.
+   */
+  assignmentDetails: z.boolean().default(true),
+  maxAssignmentDetailsPerRun: z.number().int().nonnegative().default(100),
   /** Minimum gap between two requests to LCU, in ms (politeness). */
   minRequestIntervalMs: z.number().int().nonnegative().default(1000),
   browser: z

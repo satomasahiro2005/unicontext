@@ -50,8 +50,12 @@ function count(result: SyncResult): Record<string, number> {
   return Object.fromEntries(Object.entries(byType(result)).map(([k, v]) => [k, v.length]));
 }
 
+// The submission screen is shown (its bare GET, to read an accepting assignment's 本文 and
+// 参考資料) but nothing on it is ever called, nor the student's own upload widget (newReg).
 const DENIED =
-  /toDoIcon|readMark|addTodo|scheduleAdd|report|submit|SC_14002B00_03|SC_07002B00|lcuLogout|importantNoticeLink|SC_14002B00_01\/rowselect|linkselect|gredeInformation|SC_10004B00|SC_15005B00/i;
+  /toDoIcon|readMark|addTodo|scheduleAdd|report|SC_\w+\/\w*submit|SC_14002B00_03\/|newReg|fileUploadDb|SC_07002B00|lcuLogout|importantNoticeLink|linkselect|gredeInformation|SC_10004B00|SC_15005B00/i;
+/** fileUpload calls of notices (assignment 参考資料 widgets are reg02 / submit). */
+const NOTICE_FILES = (p: string) => /fileUpload/.test(p) && !/\/(reg02|submit)(\/|$)/.test(p);
 
 describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
   it('runs a full initial sync over JSON + HTML screens', async () => {
@@ -216,7 +220,7 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
     expect(req?.body ?? '').toBe('');
     expect(req?.headerCsrf).toMatch(/^csrf-/);
     // Nothing else under fileUpload*, and never readMark/toDoIcon.
-    expect(paths.filter((p) => /fileUpload|readMark|toDoIcon/i.test(p))).toEqual([
+    expect(paths.filter((p) => NOTICE_FILES(p) || /readMark|toDoIcon/i.test(p))).toEqual([
       'POST fileUpload/load/fi02',
     ]);
   });
@@ -225,7 +229,7 @@ describe('LiveCampusUAdapter.sync (fake LCU server)', () => {
     const { server, adapter } = setup({ readRows: [0] }, { openUnreadNotices: false });
     await adapter.sync({ mode: 'initial' });
     expect(server.openedRows).toEqual([0]);
-    expect(server.paths().filter((p) => /fileUpload/.test(p))).toEqual([]);
+    expect(server.paths().filter(NOTICE_FILES)).toEqual([]);
   });
 
   it('checkpoints every fetched detail so a cut-off backfill resumes', async () => {

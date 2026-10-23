@@ -29,6 +29,7 @@ export const SHIZUOKA_DEPLOYMENT = {
     noticeList: 'SC_17001B00_01',
     noticeDetail: 'SC_17001B00_02',
     assignmentList: 'SC_14002B00_01',
+    assignmentDetail: 'SC_14002B00_02',
     assignmentSubmit: 'SC_14002B00_03',
     attendance: 'SC_13002B00_01',
     gradeDashboard: 'SC_15005B00_01',
@@ -46,6 +47,9 @@ export const SHIZUOKA_DEPLOYMENT = {
     noticeDetailBack: 'SC_17001B00_02/back',
     rowIndexField: 'rowIndex',
     assignmentSearch: 'SC_14002B00_01/search',
+    // datatablesSubmitLinkForm('dataTable01','TableForm','SC_14002B00_01/rowselect',_index,true):
+    // a closed row → SC_14002B00_02 (詳細), a row still accepting → SC_14002B00_03 (提出画面).
+    assignmentRowSelect: 'SC_14002B00_01/rowselect',
     // 出欠状況一覧 defaults to the current semester; the search form switches year/semester.
     attendanceSearch: 'SC_13002B00_01/search',
     // Spelling as served by LCU ("grede").

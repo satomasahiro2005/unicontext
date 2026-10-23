@@ -1678,6 +1678,12 @@ export class ContextEngine {
         dueAt: a.dueAt,
         availableFrom: a.availableFrom,
         points: a.points,
+        ...(a.description
+          ? {
+              description:
+                a.description.length > 300 ? `${a.description.slice(0, 300)}…` : a.description,
+            }
+          : {}),
         status: latest.get(a.id)?.status,
         submittedAt: latest.get(a.id)?.submittedAt,
         url: a.url,

@@ -12,7 +12,11 @@ import {
   zonedParts,
 } from '@unicontext/core';
 import type { ContactKind, LcuDeploymentProfile } from './deployment.js';
-import { type AssignmentRow, parseAssignmentList } from './parsers/assignments.js';
+import {
+  type AssignmentRow,
+  parseAssignmentDetail,
+  parseAssignmentList,
+} from './parsers/assignments.js';
 import { parseCalendarEvents } from './parsers/calendar.js';
 import {
   type NoticeListRow,
@@ -44,6 +48,7 @@ import {
   type TimetableEntry,
 } from './parsers/timetable.js';
 import {
+  type AssignmentDetailPayload,
   type AssignmentPayload,
   type ClassSubject,
   type CoursePayload,
@@ -84,6 +89,15 @@ export interface LcuSyncOptions {
   openUnreadNotices?: boolean;
   /** Unread notices that are neither course-linked nor high importance opened per run. */
   maxUnreadNoticesPerRun?: number;
+  /** Read each assignment's own screen (本文, 参考資料). Off when omitted. */
+  assignmentDetails?: boolean;
+  maxAssignmentDetailsPerRun?: number;
+}
+
+export interface AssignmentCacheEntry {
+  /** Hash of the list row the detail was read for. */
+  rowHash: string;
+  detail: AssignmentDetailPayload;
 }
 
 export interface NoticeCacheEntry {
@@ -101,6 +115,7 @@ export interface VersionState {
 /** Persisted in SyncCursor.extra. */
 export interface LcuCursorExtra {
   notices?: Record<string, NoticeCacheEntry>;
+  assignments?: Record<string, AssignmentCacheEntry>;
   version?: VersionState;
 }
 
@@ -115,6 +130,8 @@ export interface LcuSyncContext {
   product: string;
   /** Adapter-owned caches (seeded from the cursor). */
   noticeCache: Map<string, NoticeCacheEntry>;
+  /** Assignment screens read so far, by submissionSeq (seeded from the cursor). */
+  assignmentCache?: Map<string, AssignmentCacheEntry>;
   /** Called after each fetched notice detail (checkpoint: a cut-off backfill resumes from here). */
   onNoticeDetail?: ((key: string, entry: NoticeCacheEntry) => void | Promise<void>) | undefined;
   version: VersionState | undefined;
@@ -408,7 +425,7 @@ async function runLcuSyncSteps(ctx: LcuSyncContext, input: SyncInput): Promise<L
   const timetableOk = steps.timetable === 'ok' && semestersVerified;
 
   // 3. 課題・アンケートリスト (full list) + getClassSubjectList (JSON, X-CSRF-TOKEN).
-  let assignmentRows: ReturnType<typeof parseAssignmentList> = [];
+  let assignmentRows: ListedAssignmentRow[] = [];
   const subjectLists = new Map<string, ClassSubject[]>();
   let subjectListsOk = false;
   await step('assignments', async () => {
@@ -446,6 +463,17 @@ async function runLcuSyncSteps(ctx: LcuSyncContext, input: SyncInput): Promise<L
     });
   }
 
+  // 3b. Each assignment's own screen (本文, 参考資料 names): new or changed rows, and accepting ones
+  // daily. Accepting ones first; the rest follow in later runs over the budget.
+  const assignmentCache = ctx.assignmentCache ?? new Map<string, AssignmentCacheEntry>();
+  if (assignmentsOk && o.assignmentDetails && d.actions.assignmentRowSelect) {
+    await step('assignmentDetails', () =>
+      readAssignmentDetails(ctx, assignmentRows, assignmentCache, warnings),
+    );
+    const listed = new Set(assignmentRows.map((r) => r.submissionSeq));
+    for (const k of [...assignmentCache.keys()]) if (!listed.has(k)) assignmentCache.delete(k);
+  } else steps.assignmentDetails = 'skipped';
+
   for (const r of assignmentRows) {
     const off = index.resolveSubjectText(r.subjectText);
     add(
@@ -454,6 +482,7 @@ async function runLcuSyncSteps(ctx: LcuSyncContext, input: SyncInput): Promise<L
         o.academicYear,
         r,
         off ? { offeringKey: off.key, offeringTitle: off.title } : {},
+        assignmentCache.get(r.submissionSeq)?.detail,
       ),
     );
   }
@@ -606,7 +635,13 @@ async function runLcuSyncSteps(ctx: LcuSyncContext, input: SyncInput): Promise<L
 
   const notices: Record<string, NoticeCacheEntry> = {};
   for (const [k, v] of ctx.noticeCache) notices[k] = v;
-  const extra: LcuCursorExtra = { notices, ...(version ? { version } : {}) };
+  const assignmentDetails: Record<string, AssignmentCacheEntry> = {};
+  for (const [k, v] of assignmentCache) assignmentDetails[k] = v;
+  const extra: LcuCursorExtra = {
+    notices,
+    ...(assignmentCache.size ? { assignments: assignmentDetails } : {}),
+    ...(version ? { version } : {}),
+  };
 
   return {
     result: {
@@ -1327,23 +1362,137 @@ export async function readAssignmentRows(
   session: LcuSession,
   d: LcuDeploymentProfile,
   year: number,
-): Promise<AssignmentRow[]> {
+): Promise<ListedAssignmentRow[]> {
   const listPage = await session.open(d.screens.assignmentList);
-  const fieldsOf = (form: readonly (readonly [string, string])[]) =>
-    form.map(([k, v]) => [k, v.replaceAll('{year}', String(year))] as const);
-  const fields = fieldsOf(d.forms.assignmentSearch);
+  const fields = searchFields(d, year, 0);
   const page = fields.length ? await session.post(d.actions.assignmentSearch, fields) : listPage;
-  const rows = parseAssignmentList(page.html);
+  const rows: ListedAssignmentRow[] = parseAssignmentList(page.html).map((r) => ({
+    ...r,
+    search: 0,
+  }));
   const seen = new Set(rows.map((r) => r.submissionSeq));
-  for (const extra of d.forms.assignmentSearchExtra) {
-    const more = await session.post(d.actions.assignmentSearch, fieldsOf(extra));
+  for (let i = 1; i <= d.forms.assignmentSearchExtra.length; i++) {
+    const more = await session.post(d.actions.assignmentSearch, searchFields(d, year, i));
     for (const r of parseAssignmentList(more.html))
       if (!seen.has(r.submissionSeq)) {
         seen.add(r.submissionSeq);
-        rows.push(r);
+        rows.push({ ...r, search: i });
       }
   }
   return rows;
+}
+
+/** A list row and the search that listed it (0: the main search, i: assignmentSearchExtra[i-1]). */
+export type ListedAssignmentRow = AssignmentRow & { search: number };
+
+function searchFields(d: LcuDeploymentProfile, year: number, search: number) {
+  const form = search === 0 ? d.forms.assignmentSearch : d.forms.assignmentSearchExtra[search - 1];
+  return (form ?? []).map(([k, v]) => [k, v.replaceAll('{year}', String(year))] as const);
+}
+
+/**
+ * Open the screen of one listed assignment: the list, the search that lists it, then its row
+ * (detail screen when closed, submission screen when accepting; read-only, see the policy).
+ * Undefined when the row is no longer listed.
+ */
+async function openAssignmentRow(
+  session: LcuSession,
+  d: LcuDeploymentProfile,
+  year: number,
+  row: ListedAssignmentRow,
+): Promise<LcuPage | undefined> {
+  const listPage = await session.open(d.screens.assignmentList);
+  const fields = searchFields(d, year, row.search);
+  const page = fields.length ? await session.post(d.actions.assignmentSearch, fields) : listPage;
+  const current = parseAssignmentList(page.html).find((r) => r.submissionSeq === row.submissionSeq);
+  if (current?.rowIndex === undefined) return undefined;
+  return session.openAssignmentDetail(current.rowIndex);
+}
+
+function assignmentRowHash(r: AssignmentRow): string {
+  return contentHash([r.submissionType, r.subjectText, r.title, r.statusCode, r.submittalTerm]);
+}
+
+function acceptingAssignment(r: AssignmentRow): boolean {
+  return r.statusCode === '3' || /受付中/.test(r.statusName);
+}
+
+const ASSIGNMENT_DETAIL_REFRESH_MS = 24 * 60 * 60 * 1000;
+
+/** Read the screen of one assignment (本文 and the 参考資料 list). */
+async function readAssignmentDetail(
+  ctx: LcuSyncContext,
+  year: number,
+  row: ListedAssignmentRow,
+  warnings: string[],
+): Promise<AssignmentDetailPayload | undefined> {
+  const { session, deployment: d } = ctx;
+  const page = await openAssignmentRow(session, d, year, row);
+  if (!page) return undefined;
+  const parsed = parseAssignmentDetail(page.html);
+  if (!parsed) throw new Error('the assignment screen had no heading');
+  let references: AssignmentDetailPayload['references'] = [];
+  let complete = true;
+  if (parsed.hasReferenceWidget) {
+    try {
+      const files = parseNoticeAttachments(await session.loadAssignmentReferences());
+      if (files) references = files;
+      else complete = false;
+    } catch (e) {
+      if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+      complete = false;
+      warnings.push(`assignment 参考資料 (${row.title}): ${errorMessage(e)}`);
+    }
+  }
+  return {
+    body: parsed.body.slice(0, MAX_DETAIL_BODY),
+    ...(parsed.links.length ? { links: parsed.links } : {}),
+    references,
+    ...(complete ? {} : { referencesComplete: false }),
+    screen: page.screenId ?? '',
+    fetchedAt: ctx.clock.now().toISOString(),
+  };
+}
+
+/** The sync step: screens of new or changed assignments, and of accepting ones once a day. */
+async function readAssignmentDetails(
+  ctx: LcuSyncContext,
+  rows: readonly ListedAssignmentRow[],
+  cache: Map<string, AssignmentCacheEntry>,
+  warnings: string[],
+): Promise<void> {
+  const now = ctx.clock.now().getTime();
+  const due = rows.filter((r) => {
+    const c = cache.get(r.submissionSeq);
+    if (!c || c.rowHash !== assignmentRowHash(r)) return true;
+    return (
+      acceptingAssignment(r) && now - Date.parse(c.detail.fetchedAt) > ASSIGNMENT_DETAIL_REFRESH_MS
+    );
+  });
+  due.sort(
+    (a, b) =>
+      Number(acceptingAssignment(b)) - Number(acceptingAssignment(a)) ||
+      b.submittalTerm.localeCompare(a.submittalTerm),
+  );
+  const budget = ctx.options.maxAssignmentDetailsPerRun ?? 100;
+  for (const r of due.slice(0, budget)) {
+    try {
+      const detail = await readAssignmentDetail(ctx, ctx.options.academicYear, r, warnings);
+      if (detail) cache.set(r.submissionSeq, { rowHash: assignmentRowHash(r), detail });
+    } catch (e) {
+      // An unexpected redirect is refused by the policy: stop reading screens, keep the sync.
+      if (e instanceof PolicyViolationError) {
+        warnings.push(`assignment screens: ${errorMessage(e)}`);
+        return;
+      }
+      if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+      warnings.push(`assignment screen (${r.title}): ${errorMessage(e)}`);
+    }
+  }
+  if (due.length > budget)
+    ctx.logger.info('LiveCampusU assignment screens left for a later run', {
+      pending: due.length - budget,
+    });
 }
 
 /** The `lcu.assignment` raw item of one list row. */
@@ -1352,6 +1501,7 @@ export function assignmentItem(
   year: number,
   r: AssignmentRow,
   context: AssignmentPayload['context'],
+  detail?: AssignmentDetailPayload,
 ): RawItem {
   const payload: AssignmentPayload = {
     submissionSeq: r.submissionSeq,
@@ -1363,6 +1513,7 @@ export function assignmentItem(
     statusCode: r.statusCode,
     submittalTerm: r.submittalTerm,
     submittalStatus: r.submittalStatus,
+    ...(detail ? { detail } : {}),
     context,
     source: {
       screen: d.screens.assignmentList,
@@ -1412,11 +1563,112 @@ export async function readAssignmentsOnDemand(
         results.push({ submissionSeq: w.submissionSeq, status: 'notFound' });
         continue;
       }
-      items.push(assignmentItem(d, year, row, w.previous?.context ?? {}));
+      items.push(
+        assignmentItem(
+          d,
+          year,
+          row,
+          w.previous?.context ?? {},
+          w.previous?.detail ?? ctx.assignmentCache?.get(w.submissionSeq)?.detail,
+        ),
+      );
       results.push({ submissionSeq: w.submissionSeq, status: 'fetched' });
     }
   }
   return { items, results };
+}
+
+export interface AssignmentReferenceRequest {
+  submissionSeq: string;
+  /** Academic year of its list (the stored payload's). */
+  year: number;
+  /** File name as listed (`physicalFileName`). */
+  name: string;
+  maxBytes: number;
+}
+
+export interface AssignmentReferenceResult {
+  submissionSeq: string;
+  name: string;
+  status: 'downloaded' | 'notFound' | 'failed';
+  bytes?: Uint8Array;
+  contentType?: string;
+  error?: string;
+}
+
+/**
+ * 参考資料 of assignments, on the student's request for them (get_document / download_course_file):
+ * the assignment's screen is opened like the sync opens it and the file comes through the widget's
+ * own file link. Read-only; the download link is session-bound and never stored.
+ */
+export async function downloadAssignmentReferencesOnDemand(
+  ctx: LcuSyncContext,
+  requests: readonly AssignmentReferenceRequest[],
+  signal?: AbortSignal,
+): Promise<AssignmentReferenceResult[]> {
+  const { session, deployment: d } = ctx;
+  const results: AssignmentReferenceResult[] = [];
+  session.beginRun(signal);
+  await session.bootstrap();
+  const byYear = new Map<number, AssignmentReferenceRequest[]>();
+  for (const r of requests) byYear.set(r.year, [...(byYear.get(r.year) ?? []), r]);
+  for (const [year, wanted] of byYear) {
+    const rows = await readAssignmentRows(session, d, year);
+    const bySeq = new Map<string, AssignmentReferenceRequest[]>();
+    for (const w of wanted) bySeq.set(w.submissionSeq, [...(bySeq.get(w.submissionSeq) ?? []), w]);
+    for (const [seq, files] of bySeq) {
+      const fail = (status: 'notFound' | 'failed', error: string): void => {
+        for (const f of files)
+          if (!results.some((r) => r.submissionSeq === seq && r.name === f.name))
+            results.push({ submissionSeq: seq, name: f.name, status, error });
+      };
+      const row = rows.find((r) => r.submissionSeq === seq);
+      if (!row) {
+        fail('notFound', 'the assignment is no longer listed');
+        continue;
+      }
+      try {
+        const page = await openAssignmentRow(session, d, year, row);
+        if (!page) {
+          fail('notFound', 'the assignment is no longer listed');
+          continue;
+        }
+        for (const f of files) {
+          try {
+            const file = await session.downloadAssignmentReference(f.name, f.maxBytes);
+            results.push(
+              file
+                ? {
+                    submissionSeq: seq,
+                    name: f.name,
+                    status: 'downloaded',
+                    bytes: file.bytes,
+                    ...(file.contentType ? { contentType: file.contentType } : {}),
+                  }
+                : {
+                    submissionSeq: seq,
+                    name: f.name,
+                    status: 'notFound',
+                    error: 'the assignment no longer has this file',
+                  },
+            );
+          } catch (e) {
+            if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+            results.push({
+              submissionSeq: seq,
+              name: f.name,
+              status: 'failed',
+              error: errorMessage(e),
+            });
+          }
+        }
+      } catch (e) {
+        if (e instanceof SessionRestartedError || isFatal(e)) throw e;
+        fail('failed', errorMessage(e));
+      }
+    }
+  }
+  return results;
 }
 
 export { VERSION_PRODUCT };

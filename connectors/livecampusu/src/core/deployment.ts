@@ -38,7 +38,13 @@ export const LcuScreensSchema = z.object({
   noticeList: screenId,
   noticeDetail: screenId,
   assignmentList: screenId,
-  /** Submission screen — never opened (denylisted). Listed so overrides are denylisted too. */
+  /** 課題・アンケート詳細: a row of the list that is closed opens here (read-only screen). */
+  assignmentDetail: screenId.optional(),
+  /**
+   * Submission screen. A row that still accepts submissions opens here instead of the detail, and
+   * it is the only place its 本文 and 参考資料 are shown: only that plain GET is ever made (with the
+   * assignment-detail grant); every action on it stays denylisted. Listed so overrides are too.
+   */
   assignmentSubmit: screenId,
   attendance: screenId,
   gradeDashboard: screenId,
@@ -62,6 +68,8 @@ export const LcuActionsSchema = z.object({
   /** Form field holding the DataTables row index for row transitions. */
   rowIndexField: z.string().default('rowIndex'),
   assignmentSearch: relPath,
+  /** Row transition of the assignment list to its detail / submission screen (read-only use). */
+  assignmentRowSelect: relPath.optional(),
   /** 出欠状況一覧 search (per year/semester); without it only the default (current) semester is read. */
   attendanceSearch: relPath.optional(),
   gradesFromDashboard: relPath,

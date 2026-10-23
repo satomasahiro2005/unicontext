@@ -5,7 +5,8 @@ import { FakeLcuServer, FakeStrategy, newClock, testContext } from './helpers.js
 /*
  * verify_submission on a LiveCampusU assignment: right after the student hands it in, the
  * 課題・アンケートリスト is read again for that one assignment (提出済 / 未提出). Never the 課題提出
- * screen, never a row transition, never a download; a sync stays metadata-only for files.
+ * screen, never a row transition, never a download. A sync reads each assignment's screen (本文,
+ * 参考資料 names) but never a file body nor anything on the submission screen beyond showing it.
  */
 
 const SEQ = '95133';
@@ -28,8 +29,10 @@ describe('LiveCampusU: on-request submission state (verify_submission)', () => {
   it('re-reads one assignment row after the student submits, from the list screen only', async () => {
     const { server, adapter } = setup();
     const synced = await adapter.sync({ mode: 'initial' });
-    // the sync reads lists and metadata only: no file body, no submission screen
-    expect(server.paths().filter((p) => FILE_OR_SUBMISSION.test(p))).toEqual([]);
+    // the sync reads lists, screens and metadata only: no file body, nothing done on a screen
+    expect(
+      server.paths().filter((p) => /download|fileUploadDb|newReg|SC_14002B00_0[23]\//i.test(p)),
+    ).toEqual([]);
     const stored = synced.items.find(
       (i) => i.sourceType === RAW_TYPES.assignment && i.externalId === SEQ,
     );

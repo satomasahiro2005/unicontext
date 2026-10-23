@@ -19,6 +19,7 @@ import {
   screenIdFromUrl,
   stripJsessionid,
 } from './html.js';
+import { assignmentReferenceLoadPath } from './parsers/assignments.js';
 import { noticeAttachmentLoadPath, noticeRowKey, parseNoticeList } from './parsers/notices.js';
 import { assertRequestAllowed, type PolicyGrant } from './policy.js';
 
@@ -377,60 +378,145 @@ export class LcuSession {
         );
       const listPath = noticeAttachmentLoadPath(page.html);
       if (!listPath) return undefined;
-      this.check('POST', listPath, 'notice-attachments');
-      const json = (await this.jsonRequest('POST', listPath, undefined, {
-        grant: 'notice-attachments',
-      })) as {
-        prefix?: unknown;
-        temporaryPrefix?: unknown;
-        temporaryFileList?:
-          { temporaryId?: unknown; physicalFileName?: unknown; fileStatusType?: unknown }[] | null;
-      } | null;
-      const prefix = [json?.prefix, json?.temporaryPrefix].find(
-        (x): x is string => typeof x === 'string' && x !== '',
-      );
-      const file = (json?.temporaryFileList ?? []).find(
-        (f) =>
-          f?.fileStatusType !== 'DELETE' &&
-          typeof f?.physicalFileName === 'string' &&
-          f.physicalFileName.trim() === name.trim(),
-      );
-      const id =
-        typeof file?.temporaryId === 'string' || typeof file?.temporaryId === 'number'
-          ? String(file.temporaryId)
-          : undefined;
-      if (!file) return undefined;
-      if (!prefix || !id) throw new ConnectorError('the attachment list has no download id');
-      if (!this.tokens.csrf) throw new SessionLostError('no CSRF token for the attachment link');
-      const path = `fileUpload/download/${encodeURIComponent(prefix)}/${encodeURIComponent(id)}/?X-CSRF-TOKEN=${encodeURIComponent(this.tokens.csrf)}`;
-      const { res, url } = await this.fetchFollow('GET', path, {
-        headers: { accept: '*/*' },
-        grant: 'notice-attachment-download',
-      });
-      const type = res.headers.get('content-type') ?? '';
-      if (/text\/html/i.test(type)) {
-        const html = await res.text();
-        const cls = classifyPage(html, {
-          loginFormId: this.d.auth.loginFormId,
-          ssoStartSelector: this.d.auth.ssoStartSelector,
-        });
-        throw new SessionLostError(
-          cls.kind === 'ok' ? 'HTML instead of the file' : (cls.reason ?? cls.kind),
-        );
-      }
-      if (!res.ok)
-        throw new ConnectorError(`HTTP ${res.status} for ${relativeLcuPath(this.d, url) ?? url}`);
-      const declared = Number(res.headers.get('content-length'));
-      if (Number.isFinite(declared) && declared > maxBytes) {
-        await res.body?.cancel();
-        throw new ConnectorError(`the attachment is larger than ${maxBytes} bytes`);
-      }
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.byteLength > maxBytes)
-        throw new ConnectorError(`the attachment is larger than ${maxBytes} bytes`);
-      this.touch();
-      return { bytes, ...(type ? { contentType: type.split(';')[0]!.trim() } : {}) };
+      return this.downloadListedFile(listPath, name, maxBytes, 'notice');
     });
+  }
+
+  /**
+   * Open one row of the 課題・アンケートリスト that is the current screen: `POST <list>/rowselect`
+   * with the assignment-detail grant. LCU redirects a closed row to the detail screen and a row
+   * that still accepts submissions to the submission screen; only that plain GET is made (the
+   * policy refuses anything after the screen id), so nothing is saved or submitted. Opening a row
+   * marks it read in LCU's list, as viewing it in the browser does.
+   */
+  openAssignmentDetail(rowIndex: number): Promise<LcuPage> {
+    const path = this.d.actions.assignmentRowSelect;
+    if (!path)
+      throw new PolicyViolationError('This deployment has no assignment row transition configured');
+    this.check('POST', path, 'assignment-detail');
+    return this.run('op', async () => {
+      if (this.current?.screenId !== this.d.screens.assignmentList)
+        throw new PolicyViolationError(
+          'Assignment detail requested while not on the assignment list',
+        );
+      const page = await this.pageRequest('POST', path, {
+        form: [
+          [this.d.actions.rowIndexField, String(rowIndex)],
+          ['viewRowIndexArray', ''],
+        ],
+        grant: 'assignment-detail',
+      });
+      if (!this.assignmentScreens().includes(page.screenId ?? ''))
+        throw new ConnectorError(
+          `the assignment row opened ${page.screenId ?? page.path}, not an assignment screen`,
+        );
+      return page;
+    });
+  }
+
+  /**
+   * File list of the 参考資料 widget of the assignment screen that is open (the `fileUpload/load`
+   * call that screen makes on every view). Undefined when the screen has no such widget.
+   */
+  loadAssignmentReferences(): Promise<unknown> {
+    return this.run('op', async () => {
+      const page = this.current;
+      if (!this.assignmentScreens().includes(page?.screenId ?? ''))
+        throw new PolicyViolationError('参考資料 requested while not on an assignment screen');
+      const path = assignmentReferenceLoadPath(page!.html);
+      if (!path) return undefined;
+      this.check('POST', path, 'assignment-attachments');
+      return this.jsonRequest('POST', path, undefined, { grant: 'assignment-attachments' });
+    });
+  }
+
+  /**
+   * One 参考資料 file of the assignment screen that is open, on the student's request: the widget's
+   * file list, then what its file link fetches. Undefined when there is no file of that name.
+   */
+  downloadAssignmentReference(
+    name: string,
+    maxBytes: number,
+  ): Promise<{ bytes: Uint8Array; contentType?: string } | undefined> {
+    return this.run('op', async () => {
+      const page = this.current;
+      if (!this.assignmentScreens().includes(page?.screenId ?? ''))
+        throw new PolicyViolationError(
+          '参考資料 download requested while not on an assignment screen',
+        );
+      const listPath = assignmentReferenceLoadPath(page!.html);
+      if (!listPath) return undefined;
+      return this.downloadListedFile(listPath, name, maxBytes, 'assignment');
+    });
+  }
+
+  private assignmentScreens(): string[] {
+    return [this.d.screens.assignmentDetail, this.d.screens.assignmentSubmit].filter(
+      (s): s is string => s !== undefined,
+    );
+  }
+
+  /** A file of a `fileUpload/load` list, fetched like the screen's own file link (inside run()). */
+  private async downloadListedFile(
+    listPath: string,
+    name: string,
+    maxBytes: number,
+    of: 'notice' | 'assignment',
+  ): Promise<{ bytes: Uint8Array; contentType?: string } | undefined> {
+    const listGrant = of === 'notice' ? 'notice-attachments' : 'assignment-attachments';
+    this.check('POST', listPath, listGrant);
+    const json = (await this.jsonRequest('POST', listPath, undefined, {
+      grant: listGrant,
+    })) as {
+      prefix?: unknown;
+      temporaryPrefix?: unknown;
+      temporaryFileList?:
+        { temporaryId?: unknown; physicalFileName?: unknown; fileStatusType?: unknown }[] | null;
+    } | null;
+    const prefix = [json?.prefix, json?.temporaryPrefix].find(
+      (x): x is string => typeof x === 'string' && x !== '',
+    );
+    const file = (json?.temporaryFileList ?? []).find(
+      (f) =>
+        f?.fileStatusType !== 'DELETE' &&
+        typeof f?.physicalFileName === 'string' &&
+        f.physicalFileName.trim() === name.trim(),
+    );
+    const id =
+      typeof file?.temporaryId === 'string' || typeof file?.temporaryId === 'number'
+        ? String(file.temporaryId)
+        : undefined;
+    if (!file) return undefined;
+    if (!prefix || !id) throw new ConnectorError('the attachment list has no download id');
+    if (!this.tokens.csrf) throw new SessionLostError('no CSRF token for the attachment link');
+    const path = `fileUpload/download/${encodeURIComponent(prefix)}/${encodeURIComponent(id)}/?X-CSRF-TOKEN=${encodeURIComponent(this.tokens.csrf)}`;
+    const { res, url } = await this.fetchFollow('GET', path, {
+      headers: { accept: '*/*' },
+      grant: of === 'notice' ? 'notice-attachment-download' : 'assignment-attachment-download',
+    });
+    const type = res.headers.get('content-type') ?? '';
+    if (/text\/html/i.test(type)) {
+      const html = await res.text();
+      const cls = classifyPage(html, {
+        loginFormId: this.d.auth.loginFormId,
+        ssoStartSelector: this.d.auth.ssoStartSelector,
+      });
+      throw new SessionLostError(
+        cls.kind === 'ok' ? 'HTML instead of the file' : (cls.reason ?? cls.kind),
+      );
+    }
+    if (!res.ok)
+      throw new ConnectorError(`HTTP ${res.status} for ${relativeLcuPath(this.d, url) ?? url}`);
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await res.body?.cancel();
+      throw new ConnectorError(`the attachment is larger than ${maxBytes} bytes`);
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength > maxBytes)
+      throw new ConnectorError(`the attachment is larger than ${maxBytes} bytes`);
+    this.touch();
+    return { bytes, ...(type ? { contentType: type.split(';')[0]!.trim() } : {}) };
   }
 
   // ---------------------------------------------------------------- internals
@@ -442,6 +528,8 @@ export class LcuSession {
       extraDeniedScreens: [this.d.screens.assignmentSubmit],
       noticeListScreen: this.d.screens.noticeList,
       noticeDetailScreen: this.d.screens.noticeDetail,
+      assignmentListScreen: this.d.screens.assignmentList,
+      assignmentReadScreens: this.assignmentScreens(),
       gradeScreens: [
         this.d.screens.grades,
         this.d.screens.gradeDashboard,

@@ -59,7 +59,7 @@ import {
 } from './text.js';
 
 // 6: term_slots facts (前半/後半 per timetable slot) from the subject text of notices/assignments.
-export const NORMALIZER_VERSION = '7';
+export const NORMALIZER_VERSION = '8';
 export const SELF_PERSON_KEY = 'self';
 
 export interface LiveCampusUNormalizerOptions {
@@ -475,6 +475,10 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
           const ref = refFor(p.source.screen, p.source.selector, {
             authority: 'submission-system',
           });
+          const detail = p.detail;
+          // contentStatus — fetched: description is the 本文; empty: the screen has no 本文 (the
+          // teacher wrote none); notFetched: the assignment's screen has not been read yet.
+          const contentStatus = !detail ? 'notFetched' : detail.body ? 'fetched' : 'empty';
           entities.push({
             entity: {
               id: assignmentId,
@@ -484,14 +488,60 @@ export function createLiveCampusUNormalizer(options: LiveCampusUNormalizerOption
               ...(availableFrom ? { availableFrom } : {}),
               ...(dueAt ? { dueAt } : {}),
               ...(p.submissionType ? { submissionType: p.submissionType } : {}),
+              ...(detail?.body ? { description: detail.body } : {}),
               extra: {
                 submissionSeq: p.submissionSeq,
                 ...(p.statusName ? { statusName: p.statusName } : {}),
                 ...(p.subjectText ? { subject: p.subjectText } : {}),
+                contentStatus,
+                ...(detail
+                  ? {
+                      contentFetchedAt: detail.fetchedAt,
+                      references: detail.references.map((f) => ({
+                        name: f.name,
+                        ...(f.size !== undefined ? { size: f.size } : {}),
+                      })),
+                      ...(detail.referencesComplete === false ? { referencesComplete: false } : {}),
+                      ...(detail.links?.length ? { links: detail.links } : {}),
+                    }
+                  : {}),
               },
             },
             ref,
           });
+          // The 本文 as a document of its own, so search finds the assignment by what it asks.
+          if (detail?.body)
+            entities.push({
+              entity: {
+                id: ctx.id('document', 'lcu-assignment-body', p.submissionSeq),
+                kind: 'document',
+                title: `${p.title}（課題の本文）`,
+                text: detail.body,
+                path: `/課題/${p.title.replace(/\//g, '／')}/本文`,
+                url: lcuUrl(d, p.source.screen),
+                ...(coId ? { courseOfferingId: coId } : {}),
+                ...(availableFrom ? { modifiedAt: availableFrom } : {}),
+                extra: { assignmentId, lcuKind: 'assignment-body' },
+              },
+              ref,
+            });
+          // Each 参考資料 file is a document: get_document / download_course_file fetch it on request
+          // through the assignment screen's own file link (never stored as a URL).
+          for (const f of detail?.references ?? [])
+            entities.push({
+              entity: {
+                id: ctx.id('document', ...assignmentReferenceIdParts(p.submissionSeq, f.name)),
+                kind: 'document',
+                title: f.name,
+                path: `/課題/${p.title.replace(/\//g, '／')}/${f.name}`,
+                url: lcuUrl(d, p.source.screen),
+                ...(f.size !== undefined ? { sizeBytes: Math.max(0, Math.round(f.size)) } : {}),
+                ...(coId ? { courseOfferingId: coId } : {}),
+                ...(availableFrom ? { modifiedAt: availableFrom } : {}),
+                extra: { assignmentId, lcuKind: 'assignment-reference' },
+              },
+              ref,
+            });
           const termSlots = p.subjectText ? termSlotsFact(coId, p.subjectText, ref) : undefined;
           if (termSlots) facts.push(termSlots);
           const st = p.submittalStatus;
@@ -765,6 +815,14 @@ export function examDate(text: string | undefined, academicYear: number): string
   if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
   const year = month <= 3 ? academicYear + 1 : academicYear;
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** Stable id parts of an assignment 参考資料 document (submissionSeq and the listed file name). */
+export function assignmentReferenceIdParts(
+  submissionSeq: string,
+  name: string,
+): [string, string, string] {
+  return ['lcu-assignment-reference', submissionSeq, name];
 }
 
 /** Stable id parts of a notice attachment's document (the notice key and the listed file name). */

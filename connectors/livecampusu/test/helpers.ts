@@ -55,6 +55,29 @@ products:
     auth: entra
 `);
 
+/** Rows of the assignment list fixture as a search with this submitKbn lists them. */
+export function kadaiRows(
+  submitted: ReadonlySet<string> = new Set(),
+  submitKbn?: string,
+): { _index: string; cells: string[] }[] {
+  const data = jsonFixture<{ rows: { _index: string; cells: string[] }[] }>(
+    'lcu-kadai-list-rows-SC_14002B00_01.json',
+  );
+  for (const r of data.rows)
+    if (r.cells[1] !== undefined && submitted.has(r.cells[1]))
+      r.cells[7] = '<span class="c-status-done"> 提出済 </span>';
+  const accepted = (r: { cells: string[] }) => r.cells[5] === '3';
+  const done = (r: { cells: string[] }) => /提出済/.test(r.cells[7] ?? '');
+  const rows =
+    submitKbn === ''
+      ? data.rows.filter((r) => !(accepted(r) && done(r)))
+      : submitKbn === '1'
+        ? data.rows.filter(accepted)
+        : data.rows;
+  // DataTables numbers the rows of each result 0..n-1 (the fixture mixes rows of several results).
+  return rows.map((r, i) => ({ ...r, _index: String(i) }));
+}
+
 /** Rows of lcu-kadai-list-rows-SC_14002B00_01.json rendered like the server's DataTables HTML. */
 export function kadaiListHtml(
   submitted: ReadonlySet<string> = new Set(),
@@ -65,16 +88,7 @@ export function kadaiListHtml(
    */
   submitKbn?: string,
 ): string {
-  const data = jsonFixture<{ rows: { _index: string; cells: string[] }[] }>(
-    'lcu-kadai-list-rows-SC_14002B00_01.json',
-  );
-  for (const r of data.rows)
-    if (r.cells[1] !== undefined && submitted.has(r.cells[1]))
-      r.cells[7] = '<span class="c-status-done"> 提出済 </span>';
-  const accepted = (r: { cells: string[] }) => r.cells[5] === '3';
-  const done = (r: { cells: string[] }) => /提出済/.test(r.cells[7] ?? '');
-  if (submitKbn === '') data.rows = data.rows.filter((r) => !(accepted(r) && done(r)));
-  else if (submitKbn === '1') data.rows = data.rows.filter(accepted);
+  const data = { rows: kadaiRows(submitted, submitKbn) };
   const ids = [
     ['submissionTypeName', true],
     ['submissionSeq', false],
@@ -181,6 +195,15 @@ export class FakeLcuServer {
     { name: '資料.pdf', size: 12345 },
     { name: '削除済み.txt', size: 1, deleted: true },
   ];
+  /** Rows of the assignment list opened (rowselect) and the screen each went to. */
+  openedAssignmentRows: { index: number; screen: string }[] = [];
+  /** 本文 shown on the screen of a row that still accepts submissions (closed rows show none). */
+  assignmentBody = '第N回課題です。<br>こちらにZip形式で送信ください。';
+  /** Files of the 参考資料 widget of an accepting row (closed rows have none). */
+  assignmentReferences: { name: string; size: number; deleted?: boolean }[] = [
+    { name: '第N回.pdf', size: 210262 },
+  ];
+  private assignmentRow: { _index: string; cells: string[] } | undefined;
   idleMs = 60 * 60_000;
 
   constructor(options: FakeLcuOptions) {
@@ -359,11 +382,12 @@ ${body}</body></html>`;
     }
 
     // The detail screen's file link (X-CSRF-TOKEN in the query).
-    const download = /^fileUpload\/download\/fi02\/TMP(\d+)\/?$/.exec(rel);
+    const download = /^fileUpload\/download\/(fi02|reg02|submit)\/TMP(\d+)\/?$/.exec(rel);
     if (method === 'GET' && download) {
       if (url.searchParams.get('X-CSRF-TOKEN') !== this.csrf)
         return new Response('', { status: 403 });
-      const a = this.attachments[Number(download[1])];
+      const files = download[1] === 'fi02' ? this.attachments : this.assignmentReferences;
+      const a = files[Number(download[2])];
       if (!a || a.deleted) return new Response('', { status: 404 });
       return new Response(`bytes of ${a.name}`, {
         status: 200,
@@ -429,6 +453,53 @@ ${body}</body></html>`;
           status: 302,
           headers: { location: `/lcu-web/SC_14002B00_01;jsessionid=${sid ?? ''}` },
         });
+      case 'POST SC_14002B00_01/rowselect': {
+        const idx = Number(form?.get('rowIndex'));
+        // _index is per search result: the row of the list the last search showed.
+        const row = kadaiRows(this.submittedSeqs, this.assignmentSubmitKbn).find(
+          (r) => Number(r._index) === idx,
+        );
+        if (!row) return this.errorPage();
+        this.assignmentRow = row;
+        // A row still accepting submissions opens the submission screen, a closed one the detail.
+        const screen = row.cells[5] === '3' ? 'SC_14002B00_03' : 'SC_14002B00_02';
+        this.openedAssignmentRows.push({ index: idx, screen });
+        return this.redirect(screen);
+      }
+      case 'GET SC_14002B00_02':
+      case 'GET SC_14002B00_03': {
+        const row = this.assignmentRow;
+        if (!row) return this.errorPage();
+        const accepting = rel === 'SC_14002B00_03';
+        return this.html(
+          fixture('lcu-kadai-screen.synthetic.html')
+            .replaceAll('{{TITLE}}', row.cells[3] ?? '')
+            .replaceAll('{{STATUS}}', accepting ? '受付中' : '締切')
+            .replaceAll('{{BODY}}', accepting ? this.assignmentBody : '')
+            .replaceAll('{{PREFIX}}', accepting ? 'reg02' : 'submit'),
+          accepting ? '課題・アンケート提出' : '課題・アンケート詳細',
+        );
+      }
+      case 'POST fileUpload/load/reg02':
+      case 'POST fileUpload/load/submit': {
+        const accepting = rel === 'fileUpload/load/reg02';
+        return this.json({
+          prefix: accepting ? 'reg02' : 'submit',
+          functionId: '14002B00',
+          itemId: '01',
+          possibleUpload: false,
+          batchDownload: true,
+          temporaryFileList: (accepting ? this.assignmentReferences : []).map((a, i) => ({
+            temporaryId: `TMP${i}`,
+            physicalFileName: a.name,
+            fileExtention: null,
+            fileSize: a.size,
+            fileStatusType: a.deleted ? 'DELETE' : 'STAY',
+            binaryFile: null,
+            uuid: null,
+          })),
+        });
+      }
       case 'POST SubjectInformationSearch/getClassSubjectList': {
         const sem = String(jsonBody?.startSemester ?? '');
         const list = jsonFixture<{ response: unknown[] }>('lcu-getClassSubjectList.json').response;

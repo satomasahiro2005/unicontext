@@ -93,6 +93,14 @@ export interface AssignmentDetailView {
   };
   /** The task view (deadline incl. estimates, status) as in get_assignments. */
   task: AssignmentItem | undefined;
+  /**
+   * Whether the assignment's own text was read, for a source that reads it separately (LiveCampusU):
+   * fetched — description is the 本文; empty — the screen has no 本文; notFetched — not read yet
+   * (a later sync will). Absent for sources without that distinction.
+   */
+  content?: { status: string; fetchedAt?: string; referencesComplete?: boolean; links?: string[] };
+  /** Files the assignment hands out (LiveCampusU 参考資料): open with get_document / download_course_file. */
+  files?: { id: string; name: string; sizeBytes?: number }[];
   lesson?: LessonView;
 }
 
@@ -336,10 +344,40 @@ export function buildAssignmentDetail(uc: UniContext, assignmentId: string): Ass
   const task = buildAssignments(uc, { statuses: ALL_TASK_STATUSES }).find(
     (t) => t.assignmentId === assignmentId,
   );
-  const lessonRaw = stores.sourceRefs
+  const raws = stores.sourceRefs
     .forEntity(assignmentId)
     .map((r) => (r.rawItemId ? stores.raw.get(r.rawItemId) : undefined))
-    .find((r) => r !== undefined && !r.deletedAt && r.sourceType === ED_LESSON_TYPES.lesson);
+    .filter((r): r is RawItemRecord => r !== undefined && !r.deletedAt);
+  const lessonRaw = raws.find((r) => r.sourceType === ED_LESSON_TYPES.lesson);
+  const extra = obj(a.extra);
+  const contentStatus = str(extra.contentStatus);
+  const links = Array.isArray(extra.links)
+    ? extra.links.filter((l): l is string => typeof l === 'string')
+    : [];
+  const content: AssignmentDetailView['content'] = contentStatus
+    ? {
+        status: contentStatus,
+        ...(str(extra.contentFetchedAt) ? { fetchedAt: str(extra.contentFetchedAt) } : {}),
+        ...(extra.referencesComplete === false ? { referencesComplete: false } : {}),
+        ...(links.length ? { links } : {}),
+      }
+    : undefined;
+  // Files handed out with it: the documents its own raw item yields (not the Ed lesson's, which
+  // the lesson view lists), except the document that only repeats the 本文.
+  const files = lessonRaw
+    ? []
+    : raws
+        .flatMap((r) => stores.sourceRefs.byRawItem(r.id))
+        .map((r) => r.entityId)
+        .filter((e): e is string => e !== undefined && isIdOf('document', e))
+        .filter((e, i, all) => all.indexOf(e) === i)
+        .map((e) => stores.entities.getOfKind('document', e))
+        .filter((d) => d !== undefined && obj(d.extra).lcuKind !== 'assignment-body')
+        .map((d) => ({
+          id: d!.id,
+          name: d!.title,
+          ...(d!.sizeBytes !== undefined ? { sizeBytes: d!.sizeBytes } : {}),
+        }));
   return {
     assignment: {
       id: a.id,
@@ -354,6 +392,8 @@ export function buildAssignmentDetail(uc: UniContext, assignmentId: string): Ass
       citations: uc.context.citationsFor([a.id]),
     },
     task,
+    ...(content ? { content } : {}),
+    ...(files.length ? { files } : {}),
     ...(lessonRaw ? { lesson: edLessonView(uc, lessonRaw, a.url) } : {}),
   };
 }

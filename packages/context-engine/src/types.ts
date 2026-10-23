@@ -372,6 +372,8 @@ export interface CourseAssignmentItem extends Cited {
   dueAt: string | undefined;
   availableFrom: string | undefined;
   points: number | undefined;
+  /** The assignment's text as the source gives it (first 300 characters; get_assignment has all). */
+  description?: string;
   /** Status of the submission entity for this assignment; undefined when there is none. */
   status: 'not_submitted' | 'submitted' | 'late' | 'graded' | 'returned' | undefined;
   submittedAt: string | undefined;

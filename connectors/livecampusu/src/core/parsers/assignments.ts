@@ -1,5 +1,6 @@
 import { load } from 'cheerio';
 import { cleanLines, cleanText, fragmentText } from '../html.js';
+import { richText } from './notices.js';
 import { parseTable } from './table.js';
 
 /** Column ids of 課題・アンケートリスト (SC_14002B00_01) in server order. */
@@ -75,4 +76,64 @@ export function parseAssignmentList(html: string): AssignmentRow[] {
     if (r) out.push(r);
   }
   return out;
+}
+
+/**
+ * 課題・アンケート詳細 (SC_14002B00_02) or the submission screen (SC_14002B00_03) a row opens: both
+ * show the heading, the 本文 (`.c-contents-body.-small > p.text`, empty when the teacher wrote
+ * none) and a 参考資料 file widget (`dl.question-reference-data`), whose files come from the
+ * `fileUpload/load/<prefix>` call of that widget. The student's own upload area and the submission
+ * history are other widgets and are never read.
+ */
+export interface AssignmentDetail {
+  title: string;
+  /** '' when the screen shows no text. */
+  body: string;
+  /** http(s) links in the body. */
+  links: string[];
+  /** 受付中 / 締切 / 期限切 … as the screen shows it. */
+  statusText?: string;
+  /** 「2026年10月27日 12時45分」. */
+  deadlineText?: string;
+  /** Whether the screen has a 参考資料 widget at all. */
+  hasReferenceWidget: boolean;
+}
+
+const URL_RE = /https?:\/\/[^\s<>"'（）「」、。]+/g;
+
+export function parseAssignmentDetail(html: string): AssignmentDetail | undefined {
+  const $ = load(html);
+  const heading = $('.question-heading-contents').first();
+  const title = cleanText(heading.find('h2.c-heading').first().text());
+  if (!title) return undefined;
+  const bodyEl = $('.c-contents-body.-small').first().children('p.text').first();
+  const body = richText(bodyEl.html());
+  const links = new Set<string>();
+  bodyEl.find('a[href]').each((_, a) => {
+    const href = ($(a).attr('href') ?? '').trim();
+    if (/^https?:\/\//i.test(href)) links.add(href);
+  });
+  for (const m of body.matchAll(URL_RE)) links.add(m[0]);
+  const statusText = cleanText(heading.find('.status_box .text').first().text());
+  const deadlineText = cleanText(heading.find('.deadline_box .date').first().text());
+  return {
+    title,
+    body,
+    links: [...links],
+    ...(statusText ? { statusText } : {}),
+    ...(deadlineText ? { deadlineText } : {}),
+    hasReferenceWidget: assignmentReferenceLoadPath(html) !== undefined,
+  };
+}
+
+/**
+ * `fileUpload/load/<prefix>` of the 参考資料 widget only (its dropzone is `#prefix<prefix>_fileUpload`
+ * inside `dl.question-reference-data`). The prefix differs per screen (reg02 on the submission
+ * screen, submit on the detail screen); the other widgets of the page are never named here.
+ */
+export function assignmentReferenceLoadPath(html: string): string | undefined {
+  const $ = load(html);
+  const id = $('dl.question-reference-data [id^="prefix"][id$="_fileUpload"]').first().attr('id');
+  const prefix = /^prefix([A-Za-z0-9]{1,16})_fileUpload$/.exec(id ?? '')?.[1];
+  return prefix ? `fileUpload/load/${prefix}` : undefined;
 }

@@ -1,0 +1,76 @@
+<!--
+  Synthetic, anonymized from 課題・アンケート提出 SC_14002B00_03 and 課題・アンケート詳細 SC_14002B00_02
+  (logged in, 2026-10-23): the same markup on both screens. Placeholders: {{TITLE}}, {{STATUS}},
+  {{BODY}} (the 本文 <p class="text">, empty when the teacher wrote none), {{PREFIX}} (prefix of the
+  参考資料 widget: reg02 on the submission screen, submit on the detail screen). The submission
+  screen also carries the student's own upload widget (newReg), which must never be loaded.
+-->
+<main>
+  <div class="c-contents-body">
+    <form id="SC_14002B00_03_Form" class="h-adr" action="/lcu-web/SC_14002B00_03" method="post">
+      <div class="c-expand">
+        <div class="c-box-shadow">
+          <div class="question-heading-container js-sticky">
+            <div class="question-heading-contents">
+              <div class="side-left">
+                <h2 class="c-heading">{{TITLE}}</h2>
+                <div class="submission_box">
+                  <dl class="submission_place"><dt>評価方法：</dt><dd>点数</dd></dl>
+                  <dl class="submission_subject">
+                    <dt>講義名：</dt><dd>情報科学演習</dd><dd>｜</dd><dd>教員　一郎</dd>
+                  </dl>
+                </div>
+              </div>
+              <div class="side-right">
+                <div class="status_box"><p class="text">{{STATUS}}</p></div>
+                <div class="deadline_box">
+                  <p class="title">締め切り</p>
+                  <p class="date">2026年10月27日 12時45分</p>
+                  <p class="days">あと4日</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="c-contents-body -small">
+            <p class="text">{{BODY}}</p>
+            <dl class="question-reference-data">
+              <dt>参考資料</dt>
+              <dd>
+                <script>
+                  Dropzone.autoDiscover = false;
+                </script>
+                <div class="dropzone_wrap">
+                  <div id="prefix{{PREFIX}}_fileUpload" class="dropzone lcu-dropzone" style="visibility: hidden;">
+                    <p class="text u-pc-only">ファイルをドラッグ＆ドロップしてください。<br>またはファイル選択をしてください。</p>
+                  </div>
+                  <output class="filename lcu-output-filename"><ul id="prefix{{PREFIX}}_previews" class="fileList"></ul></output>
+                </div>
+                <script>
+                  function loadFileUploadComponent_{{PREFIX}}() {
+                    const _fileUploadOption = {};
+                    $.ajax({
+                      type: 'POST',
+                      url: "/lcu-web/fileUpload/load/{{PREFIX}}",
+                    });
+                  }
+                  loadFileUploadComponent_{{PREFIX}}();
+                </script>
+              </dd>
+            </dl>
+          </div>
+          <div class="c-contents-body -small">
+            <h3>レポート提出</h3>
+            <div id="prefixnewReg_fileUpload" class="dropzone lcu-dropzone" style="visibility: hidden;"></div>
+            <script>
+              function loadFileUploadComponent_newReg() {
+                $.ajax({ type: 'POST', url: "/lcu-web/fileUpload/load/newReg" });
+              }
+              loadFileUploadComponent_newReg();
+            </script>
+            <p class="text"></p>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+</main>
