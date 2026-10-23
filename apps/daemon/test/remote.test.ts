@@ -969,6 +969,92 @@ describe('Client ID Metadata Documents', () => {
       await js.app.close();
     }
   });
+
+  it('keeps ChatGPT connected while its client document and keys answer 404', async () => {
+    const url = 'https://chatgpt.com/oauth/client.json';
+    const jwksUrl = 'https://chatgpt.com/oauth/jwks.json';
+    const jwtDoc = {
+      client_id: url,
+      client_name: 'ChatGPT',
+      redirect_uris: [CHATGPT],
+      token_endpoint_auth_method: 'private_key_jwt',
+      jwks_uri: jwksUrl,
+    };
+    let up = true;
+    const fakeFetch = (async (u: string | URL) => {
+      if (!up) return new Response('Not Found', { status: 404 });
+      if (String(u) === url) return new Response(JSON.stringify(jwtDoc));
+      if (String(u) === jwksUrl) return new Response(JSON.stringify({ keys: [jwk] }));
+      return new Response('nope', { status: 404 });
+    }) as typeof fetch;
+    const assertion = (jti: string, key = keys.privateKey) => {
+      const exp = Math.floor(now.getTime() / 1000) + 120;
+      const h = Buffer.from(JSON.stringify({ alg: 'ES256', kid: 'k1', typ: 'JWT' })).toString(
+        'base64url',
+      );
+      const p = Buffer.from(
+        JSON.stringify({ iss: url, sub: url, aud: `${PUBLIC}/token`, exp, jti }),
+      ).toString('base64url');
+      const sig = sign('sha256', Buffer.from(`${h}.${p}`), {
+        key,
+        dsaEncoding: 'ieee-p1363',
+      }).toString('base64url');
+      return {
+        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        client_assertion: `${h}.${p}.${sig}`,
+      };
+    };
+    const refresh = (srv: RemoteServer, token: string, extra: Record<string, string>) =>
+      inject(srv, 'POST', '/token', {
+        form: { grant_type: 'refresh_token', client_id: url, refresh_token: token, ...extra },
+      });
+
+    // Connected while the document was up: the stored client keeps its jwks_uri and keys.
+    const first = await makeServer('cimd-outage.json', fakeFetch);
+    let token: string;
+    try {
+      const code = await getCode(first, url);
+      const res = await exchange(first, url, code, assertion('a1'));
+      expect(res.statusCode, res.body).toBe(200);
+      token = body(res).refresh_token as string;
+      expect(first.store.read().clients[url]).toMatchObject({
+        jwksUri: jwksUrl,
+        jwks: [expect.objectContaining({ kid: 'k1' })],
+      });
+    } finally {
+      await first.app.close();
+    }
+
+    // Down (a restarted daemon, nothing cached in memory): the stored keys still verify.
+    up = false;
+    const down = await makeServer('cimd-outage.json', fakeFetch);
+    try {
+      const other = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+      const forged = await refresh(down, token, assertion('a2', other.privateKey));
+      expect(body(forged).error).toBe('invalid_client');
+      const ok = await refresh(down, token, assertion('a3'));
+      expect(ok.statusCode, ok.body).toBe(200);
+    } finally {
+      await down.app.close();
+    }
+
+    // Never connected and the document is down: ChatGPT's stable client is pinned to its
+    // redirect URI and held to PKCE; any other client_id stays unknown.
+    const fresh = await makeServer('cimd-outage-fresh.json', fakeFetch);
+    try {
+      const code = await getCode(fresh, url);
+      const res = await exchange(fresh, url, code);
+      expect(res.statusCode, res.body).toBe(200);
+      const unknown = await inject(
+        fresh,
+        'GET',
+        `/authorize?${authorizeQuery('https://chatgpt.com/oauth/other/client.json')}`,
+      );
+      expect(unknown.statusCode).toBe(400);
+    } finally {
+      await fresh.app.close();
+    }
+  });
 });
 
 describe('cloudflared tunnel config', () => {

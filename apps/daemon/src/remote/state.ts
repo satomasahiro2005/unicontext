@@ -38,6 +38,12 @@ export interface StoredClient {
   tokenEndpointAuthMethod: TokenEndpointAuthMethod;
   /** SHA-256 of the client secret (DCR confidential clients only). */
   secretHash?: string;
+  /**
+   * Metadata-document clients: the last document's jwks_uri and the last keys read, kept so the
+   * client still resolves while its document host is down (public keys only).
+   */
+  jwksUri?: string;
+  jwks?: Record<string, unknown>[];
   createdAt: string;
   lastUsedAt?: string;
 }

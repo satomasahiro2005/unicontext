@@ -352,6 +352,12 @@ Client ID Metadata Documents (an https `client_id`) are fetched only from
 `remote.clientMetadataHosts` (default `chatgpt.com`, `openai.com`, `claude.ai`, `claude.com`,
 `anthropic.com` and their subdomains), without following redirects, 5 s timeout, 64 KiB max.
 Such clients may use `none` or `private_key_jwt` (verified against the document's `jwks`/`jwks_uri`).
+A connected client's last document and keys are kept in the state file: when its document host
+cannot be reached or answers non-2xx (ChatGPT's `client.json` has returned 404 during OpenAI
+outages), the client resolves from them, assertions are verified with the kept keys, and a client
+with no kept keys is held to PKCE and refresh-token rotation like a public client
+(`client_unverified` in the audit log). ChatGPT's stable `client_id` resolves to its stable
+redirect URI the same way even before it ever connected.
 
 ## Endpoints and protocol details
 

@@ -52,6 +52,14 @@ export const LOCKOUT_THRESHOLD = 5;
 export const LOCKOUT_BASE_MS = 15 * 60_000;
 export const LOCKOUT_MAX_MS = 24 * 3600_000;
 const CIMD_CACHE_MS = 3600_000;
+/** How long a client resolved from its stored document is used before the document is tried again. */
+const CIMD_RETRY_MS = 5 * 60_000;
+/**
+ * ChatGPT's stable client_id (docs: developers.openai.com/plugins/build/auth). Its document has
+ * returned 404 during OpenAI outages (2026-10-22, 10-24); then this client resolves to the
+ * redirect URI the docs fix for it.
+ */
+const CHATGPT_STABLE_CLIENT_ID = 'https://chatgpt.com/oauth/client.json';
 const CIMD_MAX_BYTES = 64 * 1024;
 const CLIENT_ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
 
@@ -93,7 +101,15 @@ export interface ResolvedClient {
   secretHash?: string | undefined;
   jwks?: Jwk[] | undefined;
   jwksUri?: string | undefined;
+  /**
+   * The metadata document could not be fetched (its host is down or answers 404/5xx), so this is
+   * the last document stored for the client, or ChatGPT's pinned one.
+   */
+  unreachable?: boolean;
 }
+
+/** A fetch that never got a document (network error, non-2xx), as opposed to a bad document. */
+class FetchFailedError extends OAuthError {}
 
 /** A validated authorization request (GET /authorize), carried through the consent form. */
 export interface AuthorizeRequest {
@@ -428,9 +444,10 @@ export class OAuthServer {
         signal: AbortSignal.timeout(5000),
       });
     } catch {
-      throw new OAuthError('invalid_client', `could not fetch ${url.href}`, 401);
+      throw new FetchFailedError('invalid_client', `could not fetch ${url.href}`, 401);
     }
-    if (!res.ok) throw new OAuthError('invalid_client', `${url.href} returned ${res.status}`, 401);
+    if (!res.ok)
+      throw new FetchFailedError('invalid_client', `${url.href} returned ${res.status}`, 401);
     const text = await res.text();
     if (text.length > CIMD_MAX_BYTES)
       throw new OAuthError('invalid_client', `${url.href} is too large`, 401);
@@ -448,7 +465,17 @@ export class OAuthServer {
     const url = this.checkFetchUrl(clientId, 'client_id');
     if (url.pathname === '/' || url.pathname === '')
       throw new OAuthError('invalid_client', 'client_id URL must have a path', 401);
-    const parsed = CimdSchema.safeParse(await this.fetchJson(url));
+    let fetched: unknown;
+    try {
+      fetched = await this.fetchJson(url);
+    } catch (e) {
+      const fallback = e instanceof FetchFailedError ? this.storedCimd(clientId) : undefined;
+      if (!(e instanceof FetchFailedError) || !fallback) throw e;
+      this.audit({ event: 'client_metadata_unreachable', clientId, reason: e.description });
+      this.cimdCache.set(clientId, { client: fallback, until: t + CIMD_RETRY_MS });
+      return fallback;
+    }
+    const parsed = CimdSchema.safeParse(fetched);
     if (!parsed.success)
       throw new OAuthError('invalid_client', 'client metadata document is invalid', 401);
     const doc = parsed.data;
@@ -473,16 +500,76 @@ export class OAuthServer {
       ...(doc.jwks_uri ? { jwksUri: doc.jwks_uri } : {}),
     };
     this.cimdCache.set(clientId, { client, until: t + CIMD_CACHE_MS });
+    // Keep what a stored client needs to resolve while its document host is down.
+    if (this.store.read().clients[clientId]?.type === 'cimd')
+      this.store.update((s) => {
+        const c = s.clients[clientId];
+        if (c?.type !== 'cimd') return;
+        c.name = client.name;
+        c.redirectUris = client.redirectUris;
+        c.tokenEndpointAuthMethod = method;
+        if (client.jwksUri) c.jwksUri = client.jwksUri;
+        else delete c.jwksUri;
+        if (client.jwks) c.jwks = client.jwks as unknown as Record<string, unknown>[];
+        else if (!client.jwksUri) delete c.jwks;
+      });
     return client;
   }
 
-  private async clientKeys(client: ResolvedClient): Promise<Jwk[]> {
+  /**
+   * The client as last stored (or ChatGPT's stable client, pinned), for when its document cannot be
+   * fetched. Only the redirect URIs matter before the token endpoint; there the stored keys verify
+   * an assertion, and without keys the client is held to PKCE and its refresh token like a public
+   * client — which ChatGPT's document also lists (`none`).
+   */
+  private storedCimd(clientId: string): ResolvedClient | undefined {
+    const c = this.store.read().clients[clientId];
+    if (c?.type === 'cimd')
+      return {
+        clientId,
+        type: 'cimd',
+        name: c.name,
+        redirectUris: c.redirectUris,
+        tokenEndpointAuthMethod: c.tokenEndpointAuthMethod,
+        ...(c.jwks ? { jwks: c.jwks as unknown as Jwk[] } : {}),
+        ...(c.jwksUri ? { jwksUri: c.jwksUri } : {}),
+        unreachable: true,
+      };
+    if (clientId === CHATGPT_STABLE_CLIENT_ID)
+      return {
+        clientId,
+        type: 'cimd',
+        name: 'ChatGPT',
+        redirectUris: [CHATGPT_STABLE_REDIRECT],
+        tokenEndpointAuthMethod: 'none',
+        unreachable: true,
+      };
+    return undefined;
+  }
+
+  /** The client's public keys; undefined when they cannot be fetched (only for an unreachable client). */
+  private async clientKeys(client: ResolvedClient): Promise<Jwk[] | undefined> {
     if (client.jwks) return client.jwks;
-    if (!client.jwksUri) return [];
-    const doc = (await this.fetchJson(this.checkFetchUrl(client.jwksUri, 'jwks_uri'))) as {
-      keys?: unknown;
-    };
-    return Array.isArray(doc.keys) ? (doc.keys as Jwk[]) : [];
+    if (!client.jwksUri) return client.unreachable ? undefined : [];
+    let doc: { keys?: unknown };
+    try {
+      doc = (await this.fetchJson(this.checkFetchUrl(client.jwksUri, 'jwks_uri'))) as {
+        keys?: unknown;
+      };
+    } catch (e) {
+      const stored = this.store.read().clients[client.clientId];
+      if (e instanceof FetchFailedError && stored?.type === 'cimd' && stored.jwks?.length)
+        return stored.jwks as unknown as Jwk[];
+      if (e instanceof FetchFailedError && client.unreachable) return undefined;
+      throw e;
+    }
+    const keys = Array.isArray(doc.keys) ? (doc.keys as Jwk[]) : [];
+    if (keys.length && this.store.read().clients[client.clientId]?.type === 'cimd')
+      this.store.update((s) => {
+        const c = s.clients[client.clientId];
+        if (c?.type === 'cimd') c.jwks = keys as unknown as Record<string, unknown>[];
+      });
+    return keys;
   }
 
   // ---- authorization endpoint -----------------------------------------------------------
@@ -683,6 +770,8 @@ export class OAuthServer {
           name: client.name,
           redirectUris: client.redirectUris,
           tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
+          ...(client.jwksUri ? { jwksUri: client.jwksUri } : {}),
+          ...(client.jwks ? { jwks: client.jwks as unknown as Record<string, unknown>[] } : {}),
           createdAt: this.now().toISOString(),
         };
       });
@@ -762,6 +851,7 @@ export class OAuthServer {
     }
     if (!clientId) throw new OAuthError('invalid_client', 'client_id is missing', 401);
     const client = await this.resolveClient(clientId);
+    if (client.unreachable) return this.authenticateUnreachable(client, method, params);
     if (client.tokenEndpointAuthMethod !== method)
       throw new OAuthError(
         'invalid_client',
@@ -776,9 +866,33 @@ export class OAuthServer {
     return client;
   }
 
+  /**
+   * A metadata-document client whose document cannot be fetched: an assertion is still verified when
+   * the client's keys are known; otherwise it is held to what a public client is (PKCE for a code,
+   * the refresh token's own rotation), since a document host outage must not lock the owner out.
+   */
+  private async authenticateUnreachable(
+    client: ResolvedClient,
+    method: TokenEndpointAuthMethod,
+    params: Record<string, unknown>,
+  ): Promise<ResolvedClient> {
+    if (method !== 'none' && method !== 'private_key_jwt')
+      throw new OAuthError('invalid_client', 'metadata-document clients use no secret', 401);
+    if (method === 'private_key_jwt') {
+      const keys = await this.clientKeys(client);
+      if (keys) {
+        await this.verifyAssertion(client, params, keys);
+        return client;
+      }
+    }
+    this.audit({ event: 'client_unverified', clientId: client.clientId, method });
+    return client;
+  }
+
   private async verifyAssertion(
     client: ResolvedClient,
     params: Record<string, unknown>,
+    knownKeys?: Jwk[],
   ): Promise<void> {
     const fail = (why: string): never => {
       throw new OAuthError('invalid_client', `client assertion rejected: ${why}`, 401);
@@ -786,7 +900,7 @@ export class OAuthServer {
     if (str(params.client_assertion_type) !== CLIENT_ASSERTION_TYPE) fail('unsupported type');
     const jwt = decodeJwt(str(params.client_assertion) ?? '');
     if (!jwt) return fail('malformed');
-    const keys = await this.clientKeys(client);
+    const keys = knownKeys ?? (await this.clientKeys(client)) ?? [];
     if (!verifyJwtSignature(jwt, keys)) fail('bad signature');
     const p = jwt.payload;
     const t = Math.floor(this.now().getTime() / 1000);
