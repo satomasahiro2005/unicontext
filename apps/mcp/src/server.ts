@@ -1126,9 +1126,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
     },
     async (a) => {
       const includeText = a.includeText !== false;
-      // A link (a notice's flyer, a OneDrive folder of slides, a page of the university site):
-      // opened like get_document does, so the AI never hands the download to the student.
-      if (isHttpUrl(a.file)) {
+      // A link (a notice's flyer, a OneDrive folder of slides, a page of the university site), or a
+      // document no source serves as a file (an Ed quiz question): opened like get_document does,
+      // so the AI never hands the download to the student.
+      const openLikeGetDocument = async () => {
         const handle = resolveDocument(uc, a.file.trim(), {
           ...(deps.filesDir ? { filesDir: deps.filesDir } : {}),
           ...(deps.downloadFiles ? { downloadFiles: deps.downloadFiles } : {}),
@@ -1155,7 +1156,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
             citations: read.citations,
           },
         };
-      }
+      };
+      if (isHttpUrl(a.file)) return openLikeGetDocument();
       const run =
         deps.downloadFiles ??
         ((refs: string[], o: { extract: boolean }) => {
@@ -1165,6 +1167,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const report = await run([a.file.trim()], { extract: true });
       const r = report.results[0];
       if (!r || r.status === 'notFound') throw new NotFoundError(r?.error ?? `file ${a.file}`);
+      if (r.status === 'unsupported') return openLikeGetDocument();
       const ok = r.status === 'downloaded' || r.status === 'cached';
       // The remote client cannot use a path on this computer.
       const { path: localPath, ref: _ref, ...meta } = r;

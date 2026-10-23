@@ -521,7 +521,21 @@ function documentHandle(
         unsupported = { reason: `保存済みのファイルを読めませんでした: ${errorMessage(e)}` };
       }
     }
-    // 4. sources whose connector policy or state rules a download out
+    // 4. a document that is text only, with no file behind it (an Ed lesson's text or one of its
+    //    quiz questions, a LiveCampusU assignment's 本文): the stored text is the whole document.
+    if (!unsupported && !doc.mimeType && doc.text) {
+      const text = storedPagesOf(uc, documentId)
+        .map((p) => p.text)
+        .join('\n\n');
+      if (text)
+        return {
+          ok: true,
+          bytes: Buffer.from(text, 'utf8'),
+          fileName: `${fileName}.txt`,
+          mimeType: 'text/plain',
+        };
+    }
+    // 5. sources whose connector policy or state rules a download out
     if (!unsupported)
       for (const raw of raws) {
         const k = sourceKind(uc, raw.sourceId, raw.sourceType);

@@ -71,7 +71,9 @@ function searchTable(
   }
   const useFts = long.length > 0 && (mode === 'all' || short.length === 0);
   const rank = useFts ? `bm25(${table})` : '0';
-  const snippet = useFts ? `snippet(${table}, 3, '[', ']', '…', 16)` : 'NULL';
+  // trigram tokens are about one character each: 64 (FTS5's maximum) keeps a sentence or two, where
+  // 16 cut a Japanese quiz question to 18 characters.
+  const snippet = useFts ? `snippet(${table}, 3, '[', ']', '…', 64)` : 'NULL';
   const sql = `SELECT entity_id, course_offering_id, title, body, ${rank} AS rank, ${snippet} AS snip FROM ${table} WHERE ${clauses.join(' AND ')} ORDER BY rank LIMIT ?`;
   params.push(options.limit ?? 20);
   const rows = db.sqlite.prepare(sql).all(...params) as {

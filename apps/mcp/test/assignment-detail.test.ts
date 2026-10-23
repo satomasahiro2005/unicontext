@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -46,7 +48,7 @@ afterEach(async () => {
   cleanup = undefined;
 });
 
-async function setup(options: { failing?: string[] } = {}) {
+async function setup(options: { failing?: string[]; filesDir?: string } = {}) {
   const calls: { tool: string; args: unknown }[] = [];
   const uc: UniContext = createUniContext({
     profile: 'shizuoka-university',
@@ -73,6 +75,7 @@ async function setup(options: { failing?: string[] } = {}) {
   const server = createMcpServer({
     uc,
     proposals: new ProposalStore(join(process.cwd(), '.never-written'), { clock: uc.clock }),
+    ...(options.filesDir ? { filesDir: options.filesDir } : {}),
   });
   const client = new Client({ name: 'assignment-test', version: '0.0.0' });
   const [a, b] = InMemoryTransport.createLinkedPair();
@@ -88,7 +91,7 @@ async function setup(options: { failing?: string[] } = {}) {
     if (res.isError) throw new Error(text);
     return JSON.parse(text) as McpEnvelope<T>;
   };
-  return { uc, calls, call };
+  return { uc, calls, call, client };
 }
 
 type Item = { taskId: string; assignmentId?: string; title: string };
@@ -219,5 +222,39 @@ describe('get_assignment (Ed lesson)', () => {
     );
     expect(lesson.data.assignment).toBeUndefined();
     expect(lesson.data.lesson.slides.map((x) => x.title)).toEqual(['講義資料', 'まとめ']);
+  });
+
+  it('shows a question beyond its first characters in search, and opens it whole as a file', async () => {
+    const filesDir = mkdtempSync(join(tmpdir(), 'uc-ed-files-'));
+    try {
+      const { call, client } = await setup({ filesDir });
+      const res = await call<{ hits: { id: string; title: string; snippet: string }[] }>('search', {
+        query: '授業の感想',
+      });
+      const hit = res.data.hits.find((r) => r.title === '当日課題 (小レポート1) 質問2');
+      // The snippet keeps a sentence, not 18 characters.
+      expect(hit?.snippet).toMatch(/スレッド番号を記載/);
+      // A question is text only: download_course_file returns that text, not "unsupported".
+      const file = await call<{
+        file: { status: string };
+        text?: { excerpt: string };
+        unsupported?: unknown;
+      }>('download_course_file', { file: hit!.id });
+      expect(file.data.unsupported).toBeUndefined();
+      expect(file.data.file.status).toBe('downloaded');
+      expect(file.data.text?.excerpt).toContain(
+        '授業の感想をDiscussionのスレッドに投稿し、そのスレッド番号を記載してください',
+      );
+      // get_document (its body is the JSON text itself, not an envelope): the text, no refusal.
+      const doc = await client.callTool({ name: 'get_document', arguments: { id: hit!.id } });
+      const body = JSON.parse((doc.content as { text: string }[])[0]?.text ?? '{}') as {
+        pages: { text: string }[];
+        unsupported?: unknown;
+      };
+      expect(body.unsupported).toBeUndefined();
+      expect(body.pages[0]?.text).toContain('そのスレッド番号を記載してください');
+    } finally {
+      rmSync(filesDir, { recursive: true, force: true });
+    }
   });
 });
