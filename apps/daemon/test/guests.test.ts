@@ -63,6 +63,53 @@ describe('guestView', () => {
   });
 });
 
+describe('guest deadlines', () => {
+  const at = '2026-10-15T00:00:00.000Z';
+  const item = (o: Record<string, unknown>) => ({
+    taskId: String(o.title),
+    kind: 'assignment',
+    course: { id: 'c', title: 'DB', courseCode: undefined, linkedIds: [] },
+    status: 'pending',
+    overdue: false,
+    ...o,
+  });
+  const week = (deadlines: unknown[]) =>
+    ({
+      generatedAt: at,
+      timezone: 'Asia/Tokyo',
+      from: at,
+      to: at,
+      days: [],
+      deadlines,
+      exams: [],
+    }) as never;
+
+  it('hides past dates read from notices and never calls a past assignment 期限切れ', () => {
+    const v = guestView(
+      week([
+        item({
+          title: 'past notice',
+          kind: 'extracted',
+          dueAt: '2026-10-14T08:00:00.000Z',
+          overdue: true,
+        }),
+        item({ title: 'past report', dueAt: '2026-10-14T08:00:00.000Z', overdue: true }),
+        item({ title: 'old report', dueAt: '2026-10-01T08:00:00.000Z', overdue: true }),
+        item({ title: 'handed in', dueAt: '2026-10-13T08:00:00.000Z', status: 'submitted' }),
+        item({ title: 'x'.repeat(80), dueAt: '2026-10-20T08:00:00.000Z' }),
+        item({ title: 'personal', course: undefined, dueAt: '2026-10-20T08:00:00.000Z' }),
+      ]),
+      'family',
+    );
+    expect(v.deadlines?.map((d) => [d.title.slice(0, 11), d.done, d.overdue])).toEqual([
+      ['handed in', true, false],
+      ['past report', false, true],
+      ['xxxxxxxxxxx', false, false],
+    ]);
+    expect(v.deadlines?.[2]?.title).toHaveLength(60);
+  });
+});
+
 describe('guest pages', () => {
   let server: RemoteServer;
   let store: GuestStore;
@@ -96,6 +143,7 @@ describe('guest pages', () => {
       store: new RemoteStateStore(path.join(dir, 'oauth.json')),
       guests: store,
       ai: new UniContextAi(secrets, config.ai, fake),
+      now: () => new Date('2026-10-01T03:00:00.000Z'), // a Thursday: this week's timetable
       audit: (e) => void audit.push(e),
     });
     await server.app.ready();

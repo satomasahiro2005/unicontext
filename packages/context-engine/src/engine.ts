@@ -2103,9 +2103,14 @@ export class ContextEngine {
     return this.day('tomorrow', 1);
   }
 
-  week(): WeekContext {
+  /** This week (Monday start), or with `offsetWeeks` a later/earlier one (1 = next week). */
+  week(options: { offsetWeeks?: number } = {}): WeekContext {
     const now = this.now();
-    const from = startOfZonedWeek(now, this.timezone);
+    const from = addZonedDays(
+      startOfZonedWeek(now, this.timezone),
+      7 * (options.offsetWeeks ?? 0),
+      this.timezone,
+    );
     const to = addZonedDays(from, 7, this.timezone);
     const personal = this.personalSchedule();
     const days = Array.from({ length: 7 }, (_, i) => {

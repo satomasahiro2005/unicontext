@@ -12,7 +12,7 @@ import { AiUnavailableError, UniContextAi } from '../ai.js';
 import { createAuditLog, remoteAuditFile, type AuditRecord } from './audit.js';
 import { FileLinks, tokenTag } from './file-links.js';
 import { guestGonePage, guestPage } from './guest-page.js';
-import { guestView } from './guest-view.js';
+import { guestView, type GuestView } from './guest-view.js';
 import { GuestStore, hashGuestToken, type GuestRole } from './guests.js';
 import { hasScope, OAuthServer, WRITE_SCOPE, type AuditEvent } from './oauth.js';
 import { consentPage, messagePage } from './pages.js';
@@ -559,12 +559,26 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
   const guestTag = (token: string): string => hashGuestToken(token).slice(0, 12);
   const askEnabled = async (): Promise<boolean> =>
     runtime.config.ai.guestQuestions && (await ai.available().catch(() => false));
-  const viewFor = (role: GuestRole) =>
-    guestView(
-      getView(runtime.uc.context, 'week', {}),
+  // The views take seconds on a Raspberry Pi: a guest's page and questions reuse one for 5 minutes.
+  const guestViews = new Map<GuestRole, { at: number; view: GuestView }>();
+  const viewFor = (role: GuestRole): GuestView => {
+    const hit = guestViews.get(role);
+    const nowMs = (options.now?.() ?? new Date()).getTime();
+    if (hit && nowMs - hit.at < 5 * 60_000) return hit.view;
+    // Saturday and Sunday show the coming week.
+    const weekday = new Date(
+      new Date(nowMs).toLocaleString('en-US', { timeZone: runtime.uc.context.timezone }),
+    ).getDay();
+    const nextWeek = weekday === 0 || weekday === 6;
+    const view = guestView(
+      runtime.uc.context.week({ offsetWeeks: nextWeek ? 1 : 0 }),
       role,
       role === 'family' ? getView(runtime.uc.context, 'deadline', { days: 14 }) : undefined,
+      nextWeek,
     );
+    guestViews.set(role, { at: nowMs, view });
+    return view;
+  };
 
   app.get<{ Params: { token: string } }>('/g/:token', async (request, reply) => {
     const ip = infoOf(request).ip ?? '?';

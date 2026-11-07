@@ -72,7 +72,7 @@ function deadlineHtml(view: GuestView, d: GuestDeadline): string {
   const badge = d.done
     ? '<span class="badge ok">提出済み</span>'
     : d.overdue
-      ? '<span class="badge warn">期限切れ</span>'
+      ? '<span class="badge warn">提出未確認</span>'
       : '<span class="badge">未提出</span>';
   return `<li><span class="when">${escapeHtml(zoned(d.dueAt, view.timezone, true))}</span><span>${escapeHtml(d.course)}：${escapeHtml(d.title)}</span>${badge}</li>`;
 }
@@ -97,7 +97,7 @@ export function guestPage(input: GuestPageInput): string {
         `<div class="day${d.date === view.today ? ' today' : ''}"><div class="date">${dateLabel(d.date)}${d.date === view.today ? ' <span class="badge">今日</span>' : ''}</div>${classesHtml(view, d)}</div>`,
     )
     .join('');
-  sections.push(`<section><h2>今週の時間割</h2>${days}</section>`);
+  sections.push(`<section><h2>${view.nextWeek ? '来週' : '今週'}の時間割</h2>${days}</section>`);
 
   if (view.deadlines) {
     const list = view.deadlines.length

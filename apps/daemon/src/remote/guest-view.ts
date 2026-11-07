@@ -28,11 +28,17 @@ export interface GuestDeadline {
   title: string;
   dueAt: string;
   done: boolean;
+  /**
+   * Past due and not marked handed in. Only for assignments a submission system tracks, and
+   * shown as 「提出未確認」, never 「未提出」: handing in on paper or by mail leaves no trace here.
+   */
   overdue: boolean;
 }
 
 export interface GuestView {
   role: GuestRole;
+  /** The week shown is next week (on Saturday and Sunday). */
+  nextWeek: boolean;
   generatedAt: string;
   timezone: string;
   /** YYYY-MM-DD in the university's time zone. */
@@ -62,17 +68,35 @@ function guestClass(c: ClassItem): GuestClass {
   };
 }
 
-function guestDeadlines(items: DeadlineItem[]): GuestDeadline[] {
+const PAST_DAYS_SHOWN = 7;
+
+const shortTitle = (t: string): string => {
+  const one = t.replace(/\s+/g, ' ').trim();
+  return one.length > 60 ? `${one.slice(0, 59)}…` : one;
+};
+
+/**
+ * Course deadlines without the student's own pacing. Past ones only for the last week and only
+ * when a submission system tracks them (`assignment`): a date read out of a notice has no
+ * submission status, and a guest must not read 「期限切れ」 into it.
+ */
+function guestDeadlines(items: DeadlineItem[], now: Date): GuestDeadline[] {
   const seen = new Set<string>();
+  const oldest = now.getTime() - PAST_DAYS_SHOWN * 86_400_000;
   return items
     .filter((d) => !seen.has(d.taskId) && seen.add(d.taskId))
     .filter((d) => d.course && d.kind !== 'weekly_pace' && !HIDDEN.has(d.status))
+    .filter((d) => {
+      const due = Date.parse(d.dueAt);
+      if (due >= now.getTime()) return true;
+      return due >= oldest && (d.kind === 'assignment' || DONE.has(d.status));
+    })
     .map((d) => ({
       course: d.course?.title ?? '',
-      title: d.title,
+      title: shortTitle(d.title),
       dueAt: d.dueAt,
       done: DONE.has(d.status),
-      overdue: d.overdue && !DONE.has(d.status),
+      overdue: Date.parse(d.dueAt) < now.getTime() && !DONE.has(d.status),
     }))
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
 }
@@ -90,9 +114,12 @@ export function guestView(
   week: WeekContext,
   role: GuestRole,
   upcoming?: Pick<DeadlineContext, 'overdue' | 'upcoming'>,
+  nextWeek = false,
 ): GuestView {
+  const now = new Date(week.generatedAt);
   const view: GuestView = {
     role,
+    nextWeek,
     generatedAt: week.generatedAt,
     timezone: week.timezone,
     today: zonedDate(week.generatedAt, week.timezone),
@@ -105,12 +132,11 @@ export function guestView(
     })),
   };
   if (role === 'family') {
-    view.deadlines = guestDeadlines([
-      ...week.deadlines,
-      ...(upcoming?.overdue ?? []),
-      ...(upcoming?.upcoming ?? []),
-    ]);
-    view.exams = guestDeadlines(week.exams);
+    view.deadlines = guestDeadlines(
+      [...week.deadlines, ...(upcoming?.overdue ?? []), ...(upcoming?.upcoming ?? [])],
+      now,
+    );
+    view.exams = guestDeadlines(week.exams, now);
   }
   return view;
 }
