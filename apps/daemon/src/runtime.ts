@@ -144,6 +144,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
       ? new MemorySecretStore()
       : await createSecretStore({
           backend: 'auto',
+          file: path.join(paths.root, 'secrets.json'),
           onFallback: (reason) =>
             logger.warn('OS keychain unavailable, secrets are kept in memory only', {
               reason: errorMessage(reason),

@@ -119,6 +119,7 @@ export class CliContext {
   secrets(): Promise<SecretStore> {
     this.secretStore ??= this.deps.secretStore({
       noKeychain: this.noKeychain,
+      ...(this.noKeychain ? {} : { file: path.join(this.paths().root, 'secrets.json') }),
       onFallback: (reason) => {
         if (this.verbose)
           this.err(

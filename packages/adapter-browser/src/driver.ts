@@ -1,9 +1,22 @@
+import { existsSync } from 'node:fs';
 import { ConnectorError } from '@unicontext/core';
 import { BrowserProfileInUseError, isProfileHandOffError } from './profile-lock.js';
 import type { BrowserContextLike, BrowserDriver, LaunchOptions } from './types.js';
 
 /** Channels tried in order when none is configured: an installed Chrome, then Edge. */
 export const DEFAULT_CHANNELS = ['chrome', 'msedge'] as const;
+
+/**
+ * The distribution's Chromium on Linux, tried after the channels: Chrome and Edge are not built for
+ * Linux on ARM (Raspberry Pi), where Debian ships Chromium as /usr/bin/chromium(-browser).
+ */
+export function systemChromium(
+  platform: NodeJS.Platform = process.platform,
+  exists: (file: string) => boolean = existsSync,
+): string | undefined {
+  if (platform !== 'linux') return undefined;
+  return ['/usr/bin/chromium', '/usr/bin/chromium-browser'].find((file) => exists(file));
+}
 
 interface PlaywrightChromium {
   launchPersistentContext(dir: string, options: Record<string, unknown>): Promise<unknown>;
@@ -17,6 +30,7 @@ interface PlaywrightChromium {
 export function playwrightDriver(
   load: () => Promise<{ chromium: PlaywrightChromium }> = async () =>
     (await import('playwright-core')) as unknown as { chromium: PlaywrightChromium },
+  fallbackExecutable: () => string | undefined = systemChromium,
 ): BrowserDriver {
   return {
     async launchPersistentContext(userDataDir: string, options: LaunchOptions) {
@@ -36,7 +50,8 @@ export function playwrightDriver(
             executablePath: options.executablePath,
           })) as BrowserContextLike;
         } catch (e) {
-          if (isProfileHandOffError(e)) throw new BrowserProfileInUseError(userDataDir, { cause: e });
+          if (isProfileHandOffError(e))
+            throw new BrowserProfileInUseError(userDataDir, { cause: e });
           throw e;
         }
       }
@@ -51,13 +66,27 @@ export function playwrightDriver(
         } catch (e) {
           // The browser started but found the profile already open: trying another channel would
           // fail the same way, and "no browser could be launched" would be wrong.
-          if (isProfileHandOffError(e)) throw new BrowserProfileInUseError(userDataDir, { cause: e });
+          if (isProfileHandOffError(e))
+            throw new BrowserProfileInUseError(userDataDir, { cause: e });
+          lastError = e;
+        }
+      }
+      const fallback = options.channel ? undefined : fallbackExecutable();
+      if (fallback) {
+        try {
+          return (await chromium.launchPersistentContext(userDataDir, {
+            ...base,
+            executablePath: fallback,
+          })) as BrowserContextLike;
+        } catch (e) {
+          if (isProfileHandOffError(e))
+            throw new BrowserProfileInUseError(userDataDir, { cause: e });
           lastError = e;
         }
       }
       const detail = firstLine(lastError);
       throw new ConnectorError(
-        `No browser could be launched (tried channels: ${channels.join(', ')})${detail ? `: ${detail}` : ''}. Install Google Chrome or Microsoft Edge, or set "browser.executablePath".`,
+        `No browser could be launched (tried channels: ${channels.join(', ')}${fallback ? `, ${fallback}` : ''})${detail ? `: ${detail}` : ''}. Install Google Chrome or Microsoft Edge, or set "browser.executablePath".`,
         { cause: lastError },
       );
     },

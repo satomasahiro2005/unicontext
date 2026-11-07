@@ -80,7 +80,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | type
 function keychainFix(platform: NodeJS.Platform): string {
   switch (platform) {
     case 'linux':
-      return 'Secret Service（gnome-keyring・KWalletなど）を起動してください。使わない場合は--no-keychainを付けます';
+      return 'Secret Service（gnome-keyring・KWalletなど）を起動してください。画面のないマシン（Raspberry Piなど）ではUNICONTEXT_SECRET_STORE=fileで、データフォルダのsecrets.json（所有者だけ読める）に保存します';
     case 'darwin':
       return 'キーチェーンアクセスでログインキーチェーンのロックを解除してください';
     default:
@@ -509,6 +509,15 @@ export async function runDoctor(ctx: CliContext): Promise<DoctorCheck[]> {
         'warn',
         'キーチェーンを使わない設定です。秘密情報はメモリ上にだけ保持され、終了すると失われます',
         '--no-keychainを外すとログイン情報を保存できます',
+      ),
+    );
+  } else if ((await ctx.secrets()).backend === 'file') {
+    checks.push(
+      check(
+        'keychain',
+        'OSキーチェーン',
+        'ok',
+        `キーチェーンの代わりに${path.join(ctx.paths().root, 'secrets.json')}（所有者だけ読める）に保存しています`,
       ),
     );
   } else {

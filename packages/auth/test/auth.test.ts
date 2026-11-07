@@ -1,9 +1,13 @@
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AuthRequiredError, ManualClock, secretKey } from '@unicontext/core';
 import { describe, expect, it } from 'vitest';
 import {
   authorizeWithPkce,
   buildAuthorizationUrl,
   createSecretStore,
+  FileSecretStore,
   generatePkce,
   KeyringSecretStore,
   MemorySecretStore,
@@ -31,6 +35,40 @@ describe('SecretStore', () => {
 
   it('createSecretStore("memory") never touches the keychain', async () => {
     expect((await createSecretStore({ backend: 'memory' })).backend).toBe('memory');
+  });
+
+  it('file store round-trips, keeps other keys and is owner-only', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'uc-secrets-'));
+    try {
+      const file = join(dir, 'secrets.json');
+      const s = new FileSecretStore(file);
+      expect(await s.get('a/x')).toBeUndefined();
+      await s.set('a/x', '1');
+      await s.set('b/y', '2');
+      expect(await new FileSecretStore(file).get('a/x')).toBe('1');
+      expect(await s.delete('a/x')).toBe(true);
+      expect(await s.delete('a/x')).toBe(false);
+      expect(await s.get('b/y')).toBe('2');
+      if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('createSecretStore picks the file store when it exists or the env asks for it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'uc-secrets-'));
+    try {
+      const file = join(dir, 'secrets.json');
+      const env = { UNICONTEXT_SECRET_STORE: 'file' };
+      expect((await createSecretStore({ file, env })).backend).toBe('file');
+      expect(
+        (await createSecretStore({ file, env: { UNICONTEXT_SECRET_STORE: 'memory' } })).backend,
+      ).toBe('memory');
+      writeFileSync(file, '{}');
+      expect((await createSecretStore({ file, env: {} })).backend).toBe('file');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // Touches the real OS keychain; opt in with UNICONTEXT_TEST_KEYRING=1.

@@ -55,6 +55,8 @@ export interface DaemonTarget {
 export interface SecretStoreRequest {
   /** Keep secrets in memory only (--no-keychain, --dev). */
   noKeychain: boolean;
+  /** `<data dir>/secrets.json`: used instead of the keychain when it exists (headless Linux). */
+  file?: string;
   onFallback?: (reason: unknown) => void;
 }
 
@@ -241,10 +243,14 @@ export function defaultDeps(overrides: Partial<CliDeps> = {}): CliDeps {
             ...(waitMs ? { waitMs } : {}),
             ...(onWait ? { onWait: (lock) => onWait(lock.pid) } : {}),
           }),
-    secretStore: async ({ noKeychain, onFallback }) =>
+    secretStore: async ({ noKeychain, file, onFallback }) =>
       noKeychain
         ? new MemorySecretStore()
-        : createSecretStore({ backend: 'auto', ...(onFallback ? { onFallback } : {}) }),
+        : createSecretStore({
+            backend: 'auto',
+            ...(file ? { file } : {}),
+            ...(onFallback ? { onFallback } : {}),
+          }),
     prompt: defaultPrompt,
     promptSecret: defaultPromptSecret,
     probes: defaultProbes(),
