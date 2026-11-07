@@ -32,6 +32,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
     "@fastify/static": "^10.1.5",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "@unicontext/auth": "workspace:*",
@@ -43,25 +44,25 @@
     "@unicontext/mcp": "workspace:*",
     "@unicontext/notifications": "workspace:*",
     "@unicontext/provenance": "workspace:*",
+    "@unicontext/search": "workspace:*",
     "@unicontext/sync-engine": "workspace:*",
     "fastify": "^5.12.5",
     "yaml": "^2.9.1",
-    "zod": "^4.6.5",
-    "@unicontext/search": "workspace:*"
+    "zod": "^4.6.5"
   },
   "optionalDependencies": {
-    "@unicontext/livecampusu": "workspace:*",
-    "@unicontext/microsoft365": "workspace:*",
-    "@unicontext/local-files": "workspace:*",
-    "@unicontext/syllabus": "workspace:*",
-    "@unicontext/chatgpt-record": "workspace:*",
-    "@unicontext/adapter-mcp": "workspace:*",
-    "@unicontext/adapter-cli": "workspace:*",
-    "@unicontext/adapter-rest": "workspace:*",
     "@unicontext/adapter-browser": "workspace:*",
-    "@unicontext/wordpress-portal": "workspace:*",
+    "@unicontext/adapter-cli": "workspace:*",
+    "@unicontext/adapter-mcp": "workspace:*",
+    "@unicontext/adapter-rest": "workspace:*",
+    "@unicontext/chatgpt-record": "workspace:*",
+    "@unicontext/livecampusu": "workspace:*",
+    "@unicontext/local-files": "workspace:*",
+    "@unicontext/microsoft365": "workspace:*",
+    "@unicontext/shizuoka-vpn-files": "workspace:*",
+    "@unicontext/syllabus": "workspace:*",
     "@unicontext/teams-web": "workspace:*",
-    "@unicontext/shizuoka-vpn-files": "workspace:*"
+    "@unicontext/wordpress-portal": "workspace:*"
   },
   "devDependencies": {
     "@unicontext/mapping": "workspace:*"

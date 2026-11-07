@@ -341,6 +341,48 @@ completely, stop cloudflared and/or set `remote.enabled: false` and restart the 
 passphrase (`unicontext remote set-passphrase`) does not revoke existing grants; run
 `remote revoke --all` too if you think the passphrase leaked.
 
+## 6. Share a read-only page with family and friends (guests)
+
+A guest gets a link, `https://uc.nemut.ai/g/<token>`, that opens a page with this week's
+schedule. No account, no app and no MCP: anyone with the link sees the page, so send it only to
+that person. The link is a random 256-bit token kept only as a SHA-256 hash in
+`<data dir>/remote/guests.json`.
+
+```
+unicontext guest add 母 --role family      # prints the link once
+unicontext guest add 友達 --expires 30d    # friend (default role), valid 30 days
+unicontext guest list                      # who, role, last viewed
+unicontext guest revoke 母                 # by name or id; the link stops at once
+```
+
+| role     | shows                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------- |
+| `friend` | this week's classes: period, time, course, room (「要確認」 when sources disagree), 休講                |
+| `family` | the same, plus deadlines (this week and the next two weeks) and exams with 提出済み / 未提出 / 期限切れ |
+
+Never shown to a guest: notice bodies, mail, Teams posts, notes and lecture summaries, grades,
+attendance, calendar events, self-study slots, deadlines without a course (就活, personal), and
+citations or source ids. Every view is in the audit log (`guest_view`, guest id, never the
+token).
+
+### Guests asking questions (Claude)
+
+When an Anthropic API key is stored, the page also has a question box: 「来週の水曜は何時に終わる？」.
+Claude (`ai.model`, default `claude-opus-5-5`) answers from the same data the page shows and
+nothing else (no tools, no other UniContext data), with the server-side refusal fallback on.
+Nothing from an answer is stored. Limits: `ai.guestQuestionsPerDay` (20) per guest and
+`ai.totalQuestionsPerDay` (100) for everyone, per day; every question is audited (`guest_ask`,
+ok and duration, never the text).
+
+```
+unicontext ai set-key     # an API key from the Claude Console (Claude Max includes monthly API credits)
+unicontext ai test        # one small call
+unicontext ai status
+```
+
+`ai.provider` set to another provider (openai, ollama) turns the question box off;
+`ai.guestQuestions: false` too.
+
 ## Allowed redirect URIs
 
 - `https://chatgpt.com/connector_platform_oauth_redirect`

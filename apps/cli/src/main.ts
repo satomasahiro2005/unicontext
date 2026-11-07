@@ -12,6 +12,8 @@ import { registerGrades } from './commands/grades.js';
 import { registerLogin } from './commands/login.js';
 import { registerMcp } from './commands/mcp.js';
 import { registerPace } from './commands/pace.js';
+import { registerAi } from './commands/ai.js';
+import { registerGuest } from './commands/guest.js';
 import { registerRemote } from './commands/remote.js';
 import { registerSecrets } from './commands/secrets.js';
 import { registerService } from './commands/service.js';
@@ -77,6 +79,8 @@ export function buildProgram(deps: CliDeps): Command {
   registerService(program, harness);
   registerDaemon(program, harness);
   registerRemote(program, harness);
+  registerGuest(program, harness);
+  registerAi(program, harness);
   return program;
 }
 

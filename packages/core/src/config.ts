@@ -61,8 +61,22 @@ export const ConfigSchema = z.object({
       baseUrl: z.string().optional(),
       /** Key name in the SecretStore holding the API key. Never put the key itself here. */
       apiKeyRef: z.string().optional(),
+      /**
+       * Guests may ask questions about what their shared page shows. Answered by Claude
+       * (`model`, default claude-opus-5-5) once an Anthropic key is stored (`unicontext ai
+       * set-key`) and `provider` is anthropic or none; nothing is stored from the answers.
+       */
+      guestQuestions: z.boolean().default(true),
+      /** Guest questions per guest per day, and for all guests together per day. */
+      guestQuestionsPerDay: z.number().int().min(0).default(20),
+      totalQuestionsPerDay: z.number().int().min(0).default(100),
     })
-    .default({ provider: 'none' }),
+    .default({
+      provider: 'none',
+      guestQuestions: true,
+      guestQuestionsPerDay: 20,
+      totalQuestionsPerDay: 100,
+    }),
   embeddings: z
     .object({
       provider: EmbeddingProviderIdSchema.default('none'),

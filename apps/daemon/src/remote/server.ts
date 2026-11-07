@@ -1,15 +1,19 @@
 import { createReadStream, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { IncomingMessage } from 'node:http';
-import { localFile } from '@unicontext/context-engine';
+import { getView, localFile } from '@unicontext/context-engine';
 import { errorMessage, parseDuration, type Logger } from '@unicontext/core';
 import { handleMcpHttp } from '@unicontext/mcp';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Runtime } from '../runtime.js';
 import { bearerToken, parseHostHeader } from '../security.js';
 import { contentDisposition } from '../rest.js';
+import { AiUnavailableError, UniContextAi } from '../ai.js';
 import { createAuditLog, remoteAuditFile, type AuditRecord } from './audit.js';
 import { FileLinks, tokenTag } from './file-links.js';
+import { guestGonePage, guestPage } from './guest-page.js';
+import { guestView } from './guest-view.js';
+import { GuestStore, hashGuestToken, type GuestRole } from './guests.js';
 import { hasScope, OAuthServer, WRITE_SCOPE, type AuditEvent } from './oauth.js';
 import { consentPage, messagePage } from './pages.js';
 import { WindowRateLimiter } from './ratelimit.js';
@@ -20,6 +24,8 @@ export interface RemoteServerOptions {
   version: string;
   /** Overrides for tests. */
   store?: RemoteStateStore;
+  guests?: GuestStore;
+  ai?: UniContextAi;
   fetch?: typeof fetch;
   now?: () => Date;
   audit?: (event: Omit<AuditRecord, 'at'>) => void;
@@ -542,6 +548,77 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       .header('Content-Disposition', contentDisposition(entry.name))
       .header('Content-Security-Policy', "default-src 'none'; sandbox")
       .send(createReadStream(entry.path));
+  });
+
+  // ---- guest pages (`unicontext guest add`): read-only, no sign-in, the link is the key ----
+  const guests = options.guests ?? GuestStore.forPaths(runtime.paths, options.now);
+  const ai = options.ai ?? new UniContextAi(runtime.secrets, runtime.config.ai);
+  const guestPageLimiter = new WindowRateLimiter(60, 60_000);
+  const guestAskLimiter = new WindowRateLimiter(runtime.config.ai.guestQuestionsPerDay, 86_400_000);
+  const totalAskLimiter = new WindowRateLimiter(runtime.config.ai.totalQuestionsPerDay, 86_400_000);
+  const guestTag = (token: string): string => hashGuestToken(token).slice(0, 12);
+  const askEnabled = async (): Promise<boolean> =>
+    runtime.config.ai.guestQuestions && (await ai.available().catch(() => false));
+  const viewFor = (role: GuestRole) =>
+    guestView(
+      getView(runtime.uc.context, 'week', {}),
+      role,
+      role === 'family' ? getView(runtime.uc.context, 'deadline', { days: 14 }) : undefined,
+    );
+
+  app.get<{ Params: { token: string } }>('/g/:token', async (request, reply) => {
+    const ip = infoOf(request).ip ?? '?';
+    if (!guestPageLimiter.hit(ip)) return tooMany(reply, guestPageLimiter, ip);
+    const g = guests.resolve(request.params.token);
+    audit({
+      event: 'guest_view',
+      ok: Boolean(g),
+      guestId: g?.id,
+      link: guestTag(request.params.token),
+      ip,
+    });
+    if (!g) return html(reply, 404, guestGonePage());
+    const canAsk = await askEnabled();
+    return html(
+      reply,
+      200,
+      guestPage({
+        view: viewFor(g.role),
+        guestName: g.name,
+        askUrl: canAsk ? `/g/${request.params.token}/ask` : undefined,
+      }),
+    );
+  });
+
+  app.post<{ Params: { token: string } }>('/g/:token/ask', async (request, reply) => {
+    const ip = infoOf(request).ip ?? '?';
+    if (!guestPageLimiter.hit(ip)) return tooMany(reply, guestPageLimiter, ip);
+    const g = guests.resolve(request.params.token);
+    if (!g) return html(reply, 404, guestGonePage());
+    const askUrl = `/g/${request.params.token}/ask`;
+    const view = viewFor(g.role);
+    const q = String((request.body as Record<string, unknown> | undefined)?.q ?? '')
+      .trim()
+      .slice(0, 300);
+    const render = (fields: { answer?: string; answerError?: string }) =>
+      html(reply, 200, guestPage({ view, guestName: g.name, askUrl, question: q, ...fields }));
+    if (!(await askEnabled())) return render({ answerError: '質問は使えない設定です。' });
+    if (!q) return render({ answerError: '質問を入力してください。' });
+    if (!guestAskLimiter.hit(g.id) || !totalAskLimiter.hit('all'))
+      return render({ answerError: '今日はこれ以上質問できません。明日また試してください。' });
+    const started = Date.now();
+    try {
+      const answer = await ai.answerGuest(view, q);
+      audit({ event: 'guest_ask', ok: true, guestId: g.id, ms: Date.now() - started, ip });
+      return render({ answer });
+    } catch (e) {
+      audit({ event: 'guest_ask', ok: false, guestId: g.id, ms: Date.now() - started, ip });
+      if (!(e instanceof AiUnavailableError))
+        log.warn('guest question failed', { guestId: g.id, error: errorMessage(e) });
+      return render({
+        answerError: 'AIが答えられませんでした。時間をおいてもう一度試してください。',
+      });
+    }
   });
 
   app.get('/', async (_request, reply) =>

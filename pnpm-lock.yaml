@@ -28,7 +28,7 @@ importers:
         version: 8.71.0(eslint@10.11.0)(typescript@6.0.3)
       vitest:
         specifier: ^4.1.0
-        version: 4.1.11(@types/node@22.20.4)(vite@8.3.1(@types/node@22.20.4)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(vite@8.3.1(@types/node@22.20.4)(yaml@2.9.1))
 
   apps/cli:
     dependencies:
@@ -71,6 +71,9 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^1.6.0
+        version: 1.6.0(zod@4.6.5)
       '@fastify/static':
         specifier: ^10.1.5
         version: 10.1.5
@@ -552,7 +555,7 @@ importers:
     devDependencies:
       vitest:
         specifier: ^4.1.0
-        version: 4.1.11(@types/node@22.20.4)(vite@8.3.1(@types/node@22.20.4)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(vite@8.3.1(@types/node@22.20.4)(yaml@2.9.1))
 
   packages/context-engine:
     dependencies:
@@ -621,7 +624,7 @@ importers:
         version: 13.0.3
       drizzle-orm:
         specifier: ^0.45.3
-        version: 0.45.3(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
+        version: 0.45.3(@opentelemetry/api@1.10.0)(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
       zod:
         specifier: ^4.6.5
         version: 4.6.5
@@ -643,7 +646,7 @@ importers:
         version: link:../database
       drizzle-orm:
         specifier: ^0.45.3
-        version: 0.45.3(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
+        version: 0.45.3(@opentelemetry/api@1.10.0)(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
 
   packages/mapping:
     dependencies:
@@ -711,7 +714,7 @@ importers:
         version: link:../database
       drizzle-orm:
         specifier: ^0.45.3
-        version: 0.45.3(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
+        version: 0.45.3(@opentelemetry/api@1.10.0)(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -735,7 +738,7 @@ importers:
         version: link:../provenance
       drizzle-orm:
         specifier: ^0.45.3
-        version: 0.45.3(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
+        version: 0.45.3(@opentelemetry/api@1.10.0)(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
 
   packages/sync-engine:
     dependencies:
@@ -771,7 +774,7 @@ importers:
         version: link:../provenance
       drizzle-orm:
         specifier: ^0.45.3
-        version: 0.45.3(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
+        version: 0.45.3(@opentelemetry/api@1.10.0)(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3)
 
   tests:
     dependencies:
@@ -795,6 +798,19 @@ importers:
         version: link:../connectors/shizuoka-vpn-files
 
 packages:
+
+  '@anthropic-ai/sdk@1.6.0':
+    resolution: {integrity: sha512-XqiO/46n8S6So8jQ/6/uNCkHntyW6QHHs1gZ+hlwTx1fWDr929g4VmwIXfdMVk7SuBWNdQvAlwyi1G3t6SEIuQ==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
+  '@babel/runtime@7.29.13':
+    resolution: {integrity: sha512-v+oN26xP4YIlQsbQ/CbTH1WG5m/l/DjKKZNy/Kp3f/AFvbgt7Em/D0FeMM3O2hX0YzeN2M16W8lOpyhIkfCBcQ==}
+    engines: {node: '>=6.9.0'}
 
   '@cacheable/memory@2.2.0':
     resolution: {integrity: sha512-CTLKqLItRCEixEAewD3/j9DB3/o96gpTPD4eJ1v+DGOlxZRZncRQkGYqqnAGCscYd6RNeXfGeiuCphsPtqyIfQ==}
@@ -1151,6 +1167,10 @@ packages:
     resolution: {integrity: sha512-km9J3fomkGSLpImpelq0cMvLBrJ5eVlTzuWdG3Iy0laP6gU90MmHYjqhUhG32aYq0/0++r2TLuAA9xlnh4XU1g==}
     engines: {node: '>= 10'}
 
+  '@opentelemetry/api@1.10.0':
+    resolution: {integrity: sha512-lMkyes8iHrG+mk6WH7X70MdCLI2RS0FwNBY1PyQ8UemaijE2m5mv5A0Niy3HtbYTFrgkUEQjFMXmSAk2hQDuPQ==}
+    engines: {node: '>=8.0.0'}
+
   '@oxc-project/types@0.151.0':
     resolution: {integrity: sha512-J1yXrIlNDZVzE3ada310xeAw7nH8yCAyLPuUIsjKatFPmfn5bS1oW+cM+QsGOtVWd5nhSpbwZWx/rue+r5Z+PA==}
 
@@ -1255,6 +1275,9 @@ packages:
 
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
+
+  '@stablelib/base64@1.0.1':
+    resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -1860,6 +1883,9 @@ packages:
   fast-querystring@1.1.2:
     resolution: {integrity: sha512-g6KuKWmFXc0fID8WWH0jit4g0AGBoJhCkJMb1RmbsSEUNvQ+ZC8D6CUZ+GtF8nMzSPXnhiePyyqqipzNNEnHjg==}
 
+  fast-sha256@1.3.0:
+    resolution: {integrity: sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==}
+
   fast-uri@3.1.8:
     resolution: {integrity: sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==}
 
@@ -2051,6 +2077,10 @@ packages:
 
   json-schema-ref-resolver@3.0.0:
     resolution: {integrity: sha512-hOrZIVL5jyYFjzk7+y7n5JDzGlU8rfWDuYyHwGa2WA8/pcmMHezp2xsVwxrebD/Q9t8Nc5DboieySDpCp4WG4A==}
+
+  json-schema-to-ts@3.1.1:
+    resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
+    engines: {node: '>=16'}
 
   json-schema-traverse@0.4.1:
     resolution: {integrity: sha512-xbbCH5dCYU5T8LcEhhuh7HJ88HXuW3qsI3Y0zOZFKfZEHcpWiHU/Jxzk629Brsab/mMiHQti9wMP+845RPe3Vg==}
@@ -2532,6 +2562,9 @@ packages:
   stackback@0.0.2:
     resolution: {integrity: sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw==}
 
+  standardwebhooks@1.1.1:
+    resolution: {integrity: sha512-bCbX9ZEyFkWPsRz7Bl3NuQUJohmwGSev/yhr7vhaGPlc4AfIrspIRa6cPTBuI1ItmrTDJ4d/S2hCsfe4+vQGnQ==}
+
   statuses@2.0.2:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
@@ -2568,6 +2601,9 @@ packages:
   toidentifier@1.0.1:
     resolution: {integrity: sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA==}
     engines: {node: '>=0.6'}
+
+  ts-algebra@2.0.0:
+    resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
 
   ts-api-utils@2.5.0:
     resolution: {integrity: sha512-OJ/ibxhPlqrMM0UiNHJ/0CKQkoKF243/AEmplt3qpRgkW8VG7IfOS41h7V8TjITqdByHzrjcS/2si+y4lIh8NA==}
@@ -2770,6 +2806,16 @@ packages:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
 snapshots:
+
+  '@anthropic-ai/sdk@1.6.0(zod@4.6.5)':
+    dependencies:
+      '@opentelemetry/api': 1.10.0
+      json-schema-to-ts: 3.1.1
+      standardwebhooks: 1.1.1
+    optionalDependencies:
+      zod: 4.6.5
+
+  '@babel/runtime@7.29.13': {}
 
   '@cacheable/memory@2.2.0':
     dependencies:
@@ -3060,6 +3106,8 @@ snapshots:
       '@napi-rs/keyring-win32-ia32-msvc': 2.1.0
       '@napi-rs/keyring-win32-x64-msvc': 2.1.0
 
+  '@opentelemetry/api@1.10.0': {}
+
   '@oxc-project/types@0.151.0': {}
 
   '@pinojs/redact@0.4.0': {}
@@ -3110,6 +3158,8 @@ snapshots:
     optional: true
 
   '@rolldown/pluginutils@1.0.1': {}
+
+  '@stablelib/base64@1.0.1': {}
 
   '@standard-schema/spec@1.1.0': {}
 
@@ -3514,8 +3564,9 @@ snapshots:
       domelementtype: 2.3.0
       domhandler: 5.0.3
 
-  drizzle-orm@0.45.3(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3):
+  drizzle-orm@0.45.3(@opentelemetry/api@1.10.0)(@types/better-sqlite3@9.6.0)(better-sqlite3@13.0.3):
     optionalDependencies:
+      '@opentelemetry/api': 1.10.0
       '@types/better-sqlite3': 9.6.0
       better-sqlite3: 13.0.3
 
@@ -3699,6 +3750,8 @@ snapshots:
   fast-querystring@1.1.2:
     dependencies:
       fast-decode-uri-component: 1.0.1
+
+  fast-sha256@1.3.0: {}
 
   fast-uri@3.1.8: {}
 
@@ -3892,6 +3945,11 @@ snapshots:
   json-schema-ref-resolver@3.0.0:
     dependencies:
       dequal: 2.0.3
+
+  json-schema-to-ts@3.1.1:
+    dependencies:
+      '@babel/runtime': 7.29.13
+      ts-algebra: 2.0.0
 
   json-schema-traverse@0.4.1: {}
 
@@ -4357,6 +4415,11 @@ snapshots:
 
   stackback@0.0.2: {}
 
+  standardwebhooks@1.1.1:
+    dependencies:
+      '@stablelib/base64': 1.0.1
+      fast-sha256: 1.3.0
+
   statuses@2.0.2: {}
 
   std-env@4.3.0: {}
@@ -4383,6 +4446,8 @@ snapshots:
   toad-cache@3.7.4: {}
 
   toidentifier@1.0.1: {}
+
+  ts-algebra@2.0.0: {}
 
   ts-api-utils@2.5.0(typescript@6.0.3):
     dependencies:
@@ -4454,7 +4519,7 @@ snapshots:
       fsevents: 2.3.3
       yaml: 2.9.1
 
-  vitest@4.1.11(@types/node@22.20.4)(vite@8.3.1(@types/node@22.20.4)(yaml@2.9.1)):
+  vitest@4.1.11(@opentelemetry/api@1.10.0)(@types/node@22.20.4)(vite@8.3.1(@types/node@22.20.4)(yaml@2.9.1)):
     dependencies:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@8.3.1(@types/node@22.20.4)(yaml@2.9.1))
@@ -4477,6 +4542,7 @@ snapshots:
       vite: 8.3.1(@types/node@22.20.4)(yaml@2.9.1)
       why-is-node-running: 2.3.0
     optionalDependencies:
+      '@opentelemetry/api': 1.10.0
       '@types/node': 22.20.4
     transitivePeerDependencies:
       - msw

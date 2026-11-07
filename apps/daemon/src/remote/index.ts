@@ -6,3 +6,4 @@ export * from './passphrase.js';
 export * from './ratelimit.js';
 export * from './state.js';
 export * from './tunnel.js';
+export * from './guests.js';
