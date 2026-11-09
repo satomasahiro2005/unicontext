@@ -19,7 +19,7 @@ export interface SecretStatus extends NamedSecret {
 }
 
 /** The source's adapter when it signs in by itself with saved credentials (SavedCredentialsAdapter). */
-async function credentialAdapter(
+export async function credentialAdapter(
   ctx: CliContext,
   sourceId: string,
 ): Promise<SavedCredentialsAdapter | undefined> {
@@ -43,7 +43,7 @@ const asNamed = (c: CredentialSecret): NamedSecret => ({
  * The secrets `sources.<id>.envSecrets / headerSecrets` name (effective config, profile merged),
  * plus the sign-in credentials an adapter may store (opt-in, SavedCredentialsAdapter).
  */
-async function secretsOfSource(ctx: CliContext, sourceId: string): Promise<NamedSecret[]> {
+export async function secretsOfSource(ctx: CliContext, sourceId: string): Promise<NamedSecret[]> {
   const rt = await ctx.runtime();
   const config = rt.config.sources[sourceId];
   if (!config)
@@ -74,7 +74,7 @@ async function statusOf(
 }
 
 /** The SecretStore, refusing one that would forget the value when this command exits. */
-async function persistentStore(ctx: CliContext): Promise<SecretStore> {
+export async function persistentStore(ctx: CliContext): Promise<SecretStore> {
   const store = await ctx.secrets();
   if (store.backend === 'memory')
     throw new CliError(
@@ -288,8 +288,9 @@ export function registerSecrets(program: Command, h: Harness): void {
       '--from-env <name>',
       '環境変数から読む（スクリプト用） / read it from an environment variable',
     )
+    .option('--stdin', '標準入力から読む（例: Get-Clipboard | …） / read it from stdin')
     .action(
-      action<{ fromEnv?: string }>(h, async (ctx, { args, opts }) => {
+      action<{ fromEnv?: string; stdin?: boolean }>(h, async (ctx, { args, opts }) => {
         const sourceId = String(args[0]);
         const name = args[1] === undefined ? undefined : String(args[1]);
         const target = pickSecret(sourceId, await secretsOfSource(ctx, sourceId), name);
@@ -300,10 +301,10 @@ export function registerSecrets(program: Command, h: Harness): void {
           if (!v) throw new UsageError(`環境変数${opts.fromEnv}が空です`);
           value = v;
         } else {
-          if (!ctx.canPrompt())
+          if (!opts.stdin && !ctx.canPrompt())
             throw new UsageError(
               '対話できない環境では入力できません',
-              '端末から実行するか --from-env <環境変数名> を使ってください',
+              '端末から実行するか --stdin / --from-env <環境変数名> を使ってください',
             );
           const login = (await credentialAdapter(ctx, sourceId))
             ?.credentialSecrets()

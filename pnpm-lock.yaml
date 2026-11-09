@@ -32,6 +32,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@unicontext/adapter-browser':
+        specifier: workspace:*
+        version: link:../../packages/adapter-browser
       '@unicontext/auth':
         specifier: workspace:*
         version: link:../../packages/auth

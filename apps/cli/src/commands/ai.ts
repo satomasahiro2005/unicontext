@@ -22,17 +22,18 @@ export function registerAi(program: Command, h: Harness): void {
       'Anthropic APIキーを保存する（Claude MaxのAPIクレジットが使える） / Store the Anthropic API key',
     )
     .option('--from-env <name>', '環境変数から読む / read it from an environment variable')
+    .option('--stdin', '標準入力から読む（例: Get-Clipboard | …） / read it from stdin')
     .action(
-      action<{ fromEnv?: string }>(h, async (ctx, { opts }) => {
+      action<{ fromEnv?: string; stdin?: boolean }>(h, async (ctx, { opts }) => {
         let key: string;
         if (opts.fromEnv) {
           key = ctx.deps.env[opts.fromEnv] ?? '';
           if (!key) throw new UsageError(`環境変数${opts.fromEnv}が空です`);
         } else {
-          if (!ctx.canPrompt())
+          if (!opts.stdin && !ctx.canPrompt())
             throw new UsageError(
               '対話できない環境ではキーを入力できません',
-              '端末から実行するか --from-env <環境変数名> を使ってください',
+              '端末から実行するか --stdin / --from-env <環境変数名> を使ってください',
             );
           key = await (ctx.deps.promptSecret ?? ctx.deps.prompt)('Anthropic APIキー（sk-ant-…）: ');
         }

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
+import type { BrowserDriver } from '@unicontext/adapter-browser';
 import { createSecretStore, MemorySecretStore } from '@unicontext/auth';
 import type { DataPaths, SecretStore } from '@unicontext/core';
 import {
@@ -95,6 +96,10 @@ export interface CliDeps {
   healthTimeoutMs?: number;
   /** How long `daemon start` waits for the daemon to answer. */
   daemonStartTimeoutMs?: number;
+  /** Browser for moving a sign-in between machines (tests). Default: playwright-core. */
+  browserDriver?: BrowserDriver;
+  /** All of stdin (tests). Default: process.stdin. */
+  readStdin?: () => Promise<string>;
 }
 
 export function resolveDaemonScript(): string {

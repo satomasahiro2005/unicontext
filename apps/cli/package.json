@@ -23,6 +23,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@unicontext/adapter-browser": "workspace:*",
     "@unicontext/auth": "workspace:*",
     "@unicontext/canonical-model": "workspace:*",
     "@unicontext/connector-sdk": "workspace:*",
