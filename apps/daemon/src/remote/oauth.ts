@@ -80,6 +80,8 @@ export interface OAuthServerOptions {
   fetch?: typeof fetch;
   now?: () => Date;
   audit?: (event: AuditEvent) => void;
+  /** People the student shares with: their invite code signs them in instead of the passphrase. */
+  members?: { resolveCode(code: string): { id: string; name: string } | undefined };
 }
 
 export class OAuthError extends Error {
@@ -129,7 +131,8 @@ export type AuthorizeValidation =
   | { ok: false; error: string; description: string; redirect: string };
 
 export type UnlockResult =
-  | { ok: true }
+  /** `memberId`: signed in with a shared person's invite code (else the owner's passphrase). */
+  | { ok: true; memberId?: string; memberName?: string }
   | { ok: false; reason: 'no_passphrase' }
   | { ok: false; reason: 'locked'; until: string }
   | { ok: false; reason: 'wrong'; remaining: number; lockedUntil?: string };
@@ -141,7 +144,15 @@ export interface TokenResponse {
 }
 
 export type AccessCheck =
-  | { ok: true; clientId: string; clientName: string | undefined; grantId: string; scope: string }
+  | {
+      ok: true;
+      clientId: string;
+      clientName: string | undefined;
+      grantId: string;
+      scope: string;
+      /** The grant is a shared person's (else the owner's). */
+      memberId?: string;
+    }
   | { ok: false; error: 'invalid_token' | 'insufficient_scope'; description: string };
 
 interface CodeRecord {
@@ -153,6 +164,7 @@ interface CodeRecord {
   expiresAt: number;
   used: boolean;
   grantId?: string;
+  memberId?: string;
 }
 
 const DcrRequestSchema = z.looseObject({
@@ -701,10 +713,18 @@ export class OAuthServer {
 
   private async unlockNow(passphrase: string, ip: string | undefined): Promise<UnlockResult> {
     const owner = this.store.read().owner;
-    if (!owner.passphrase) return { ok: false, reason: 'no_passphrase' };
+    if (!owner.passphrase && !this.options.members) return { ok: false, reason: 'no_passphrase' };
     const t = this.now();
     if (owner.lockedUntil && Date.parse(owner.lockedUntil) > t.getTime())
       return { ok: false, reason: 'locked', until: owner.lockedUntil };
+    // A shared person's invite code. Their success does not reset the failure count: knowing one
+    // code must not buy more guesses at the passphrase.
+    const member = this.options.members?.resolveCode(passphrase);
+    if (member) {
+      this.audit({ event: 'unlock_ok', member: member.id, ip });
+      return { ok: true, memberId: member.id, memberName: member.name };
+    }
+    if (!owner.passphrase) return { ok: false, reason: 'no_passphrase' };
     const good = await verifyPassphrase(passphrase, owner.passphrase);
     if (good) {
       this.store.update((s) => {
@@ -744,13 +764,14 @@ export class OAuthServer {
     request: AuthorizeRequest,
     client: ResolvedClient,
     ip: string | undefined,
-    options: { write?: boolean } = {},
+    options: { write?: boolean; memberId?: string } = {},
   ): string {
     const code = randomToken('ucd_');
     this.sweepCodes();
     const scope = [
       READ_SCOPE,
-      ...(options.write === true ? [WRITE_SCOPE] : []),
+      // A shared person's connection is read-only whatever the checkbox says.
+      ...(options.write === true && !options.memberId ? [WRITE_SCOPE] : []),
       ...(hasScope(request.scope, OFFLINE_SCOPE) ? [OFFLINE_SCOPE] : []),
     ].join(' ');
     this.codes.set(sha256Hex(code), {
@@ -761,6 +782,7 @@ export class OAuthServer {
       resource: request.resource,
       expiresAt: this.now().getTime() + AUTH_CODE_TTL_MS,
       used: false,
+      ...(options.memberId ? { memberId: options.memberId } : {}),
     });
     if (client.type === 'cimd')
       this.store.update((s) => {
@@ -780,6 +802,7 @@ export class OAuthServer {
       clientId: request.clientId,
       clientName: client.name,
       scope,
+      ...(options.memberId ? { member: options.memberId } : {}),
       ip,
     });
     const u = new URL(request.redirectUri);
@@ -1006,6 +1029,7 @@ export class OAuthServer {
       refreshHash: sha256Hex(refresh),
       refreshExpiresAt: new Date(t.getTime() + this.options.refreshTokenTtlMs).toISOString(),
       rotatedRefreshHashes: [],
+      ...(rec.memberId ? { memberId: rec.memberId } : {}),
     };
     rec.grantId = grant.grantId;
     this.store.update((s) => {
@@ -1136,6 +1160,7 @@ export class OAuthServer {
       clientName: state.clients[rec.clientId]?.name,
       grantId: rec.grantId,
       scope: rec.scope,
+      ...(grant.memberId ? { memberId: grant.memberId } : {}),
     };
   }
 }

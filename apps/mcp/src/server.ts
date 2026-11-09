@@ -162,6 +162,14 @@ export interface McpDeps extends OpenLinkDeps {
    * registered. The propose-only tools never are. The local surface always has the record tools.
    */
   allowWrite?: boolean;
+  /**
+   * Someone the student shares with: only these tools are registered (read-only), no resources,
+   * and `instructions` replaces the server instructions. Undefined = the student (everything).
+   */
+  onlyTools?: ReadonlySet<string>;
+  instructions?: string;
+  /** Registers more tools on the server (the daemon's projections for shared people). */
+  extend?: (server: McpServer) => void;
   /** Who is calling (remote: the OAuth client). Default `local:<MCP client name>`. */
   client?: AdditionClient;
   /**
@@ -500,11 +508,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
       ...(deps.icons ? { icons: deps.icons } : {}),
     },
     {
-      instructions: remote
-        ? deps.allowWrite
-          ? REMOTE_WRITE_SERVER_INSTRUCTIONS
-          : REMOTE_SERVER_INSTRUCTIONS
-        : SERVER_INSTRUCTIONS,
+      instructions: deps.instructions
+        ? deps.instructions
+        : remote
+          ? deps.allowWrite
+            ? REMOTE_WRITE_SERVER_INSTRUCTIONS
+            : REMOTE_SERVER_INSTRUCTIONS
+          : SERVER_INSTRUCTIONS,
     },
   );
 
@@ -519,6 +529,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   ): void {
     // The remote surface is read-only by construction: a write tool is never registered there.
     if (remote && meta.readOnly === false) return;
+    if (deps.onlyTools && !deps.onlyTools.has(name)) return;
     const audit = (ok: boolean, started: number): void => {
       try {
         deps.onToolCall?.({ tool: name, ok, ms: Date.now() - started });
@@ -570,6 +581,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     ) => Promise<{ structured: Record<string, unknown>; write?: ToolCallEvent['write'] }>,
   ): void {
     if (remote && !deps.allowWrite) return;
+    if (deps.onlyTools) return;
     const callback = async (args: unknown): Promise<CallToolResult> => {
       const started = Date.now();
       let write: ToolCallEvent['write'];
@@ -1882,6 +1894,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
     };
   }
 
+  deps.extend?.(server);
+  // Resources read whole views; someone the student shares with gets tools only.
+  if (deps.onlyTools) return server;
   const mimeType = 'application/json';
   const read = (uri: URL, produce: () => ToolOutput) => {
     try {

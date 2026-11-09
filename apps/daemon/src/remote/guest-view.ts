@@ -5,10 +5,12 @@ import type {
   WeekContext,
 } from '@unicontext/context-engine';
 import { termPartLabel, type TermHalf } from '@unicontext/core';
+import type { AccessCategory } from '@unicontext/mcp';
 import type { GuestRole } from './guests.js';
 
 /**
- * What a guest may see, cut down from the week view. Only facts a timetable or a deadline list
+ * What someone the student shares with sees of a week, cut down from the week view by their
+ * categories (@unicontext/mcp access.ts). Only facts a timetable or a deadline list
  * states: course titles, times, rooms, 休講, due dates and whether work was handed in. Never notice
  * bodies, mail, Teams posts, notes, grades, attendance, calendar events, the student's own
  * self-study slots or deadlines without a course (就活, personal), nor citations or source ids.
@@ -28,15 +30,17 @@ export interface GuestDeadline {
   course: string;
   title: string;
   dueAt: string;
-  done: boolean;
+  /** Present only with the submissions category (or assignments). */
+  done?: boolean;
   /**
    * Past due and not marked handed in. Only for assignments a submission system tracks, and
    * shown as 「提出未確認」, never 「未提出」: handing in on paper or by mail leaves no trace here.
    */
-  overdue: boolean;
+  overdue?: boolean;
 }
 
 export interface GuestView {
+  /** family when deadlines are shared, else friend (how the page and the prompt name the reader). */
   role: GuestRole;
   /** The week shown is next week (on Saturday and Sunday). */
   nextWeek: boolean;
@@ -47,9 +51,9 @@ export interface GuestView {
   from: string;
   to: string;
   days: { date: string; classes: GuestClass[]; note: string | undefined }[];
-  /** family only: this week's deadlines plus open and overdue ones of the next two weeks. */
+  /** With deadlines shared: this week's plus open and overdue ones of the next two weeks. */
   deadlines?: GuestDeadline[];
-  /** family only. */
+  /** With deadlines shared. */
   exams?: GuestDeadline[];
 }
 
@@ -81,7 +85,7 @@ const shortTitle = (t: string): string => {
  * when a submission system tracks them (`assignment`): a date read out of a notice has no
  * submission status, and a guest must not read 「期限切れ」 into it.
  */
-function guestDeadlines(items: DeadlineItem[], now: Date): GuestDeadline[] {
+function guestDeadlines(items: DeadlineItem[], now: Date, status: boolean): GuestDeadline[] {
   const seen = new Set<string>();
   const oldest = now.getTime() - PAST_DAYS_SHOWN * 86_400_000;
   return items
@@ -96,8 +100,12 @@ function guestDeadlines(items: DeadlineItem[], now: Date): GuestDeadline[] {
       course: d.course?.title ?? '',
       title: shortTitle(d.title),
       dueAt: d.dueAt,
-      done: DONE.has(d.status),
-      overdue: Date.parse(d.dueAt) < now.getTime() && !DONE.has(d.status),
+      ...(status
+        ? {
+            done: DONE.has(d.status),
+            overdue: Date.parse(d.dueAt) < now.getTime() && !DONE.has(d.status),
+          }
+        : {}),
     }))
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
 }
@@ -113,13 +121,13 @@ export function zonedDate(iso: string, timezone: string): string {
 
 export function guestView(
   week: WeekContext,
-  role: GuestRole,
+  access: ReadonlySet<AccessCategory>,
   upcoming?: Pick<DeadlineContext, 'overdue' | 'upcoming'>,
   nextWeek = false,
 ): GuestView {
   const now = new Date(week.generatedAt);
   const view: GuestView = {
-    role,
+    role: access.has('deadlines') ? 'family' : 'friend',
     nextWeek,
     generatedAt: week.generatedAt,
     timezone: week.timezone,
@@ -132,12 +140,14 @@ export function guestView(
       note: d.noClassesReason,
     })),
   };
-  if (role === 'family') {
+  if (access.has('deadlines')) {
+    const status = access.has('submissions') || access.has('assignments');
     view.deadlines = guestDeadlines(
       [...week.deadlines, ...(upcoming?.overdue ?? []), ...(upcoming?.upcoming ?? [])],
       now,
+      status,
     );
-    view.exams = guestDeadlines(week.exams, now);
+    view.exams = guestDeadlines(week.exams, now, status);
   }
   return view;
 }

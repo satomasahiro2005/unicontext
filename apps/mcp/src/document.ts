@@ -298,6 +298,7 @@ function redactionOptions(deps: McpDeps): { extraValuePatterns?: RegExp[] } {
 
 /** Register get_document (read-only, so also on the remote surface). */
 export function registerDocumentTools(server: McpServer, deps: McpDeps): void {
+  if (deps.onlyTools && !deps.onlyTools.has('get_document')) return;
   const remote = deps.surface === 'remote';
   server.registerTool(
     'get_document',

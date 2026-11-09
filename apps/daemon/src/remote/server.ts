@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import type { IncomingMessage } from 'node:http';
 import { getView, localFile } from '@unicontext/context-engine';
 import { errorMessage, parseDuration, type Logger } from '@unicontext/core';
-import { handleMcpHttp } from '@unicontext/mcp';
+import { handleMcpHttp, sharedTools, type AccessCategory, type McpDeps } from '@unicontext/mcp';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Runtime } from '../runtime.js';
 import { bearerToken, parseHostHeader } from '../security.js';
@@ -11,10 +11,10 @@ import { contentDisposition } from '../rest.js';
 import { AiUnavailableError, UniContextAi } from '../ai.js';
 import { createAuditLog, remoteAuditFile, type AuditRecord } from './audit.js';
 import { FileLinks, tokenTag } from './file-links.js';
-import { handleGuestMcp } from './guest-mcp.js';
 import { guestGonePage, guestPage, parseGuestTurns } from './guest-page.js';
 import { guestCourses, guestView, type GuestView } from './guest-view.js';
-import { GuestStore, hashGuestToken, type GuestRole } from './guests.js';
+import { accessOf, GuestStore, hashGuestToken, type StoredGuest } from './guests.js';
+import { memberInstructions, registerMemberTools } from './member-mcp.js';
 import { hasScope, OAuthServer, WRITE_SCOPE, type AuditEvent } from './oauth.js';
 import { consentPage, messagePage } from './pages.js';
 import { WindowRateLimiter } from './ratelimit.js';
@@ -117,6 +117,8 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
   const store = options.store ?? RemoteStateStore.forPaths(runtime.paths, options.now);
   const auditLog = options.audit ?? createAuditLog(remoteAuditFile(runtime.paths), options.now);
   const audit = (e: AuditEvent): void => auditLog(e);
+  // People the student shares with (`unicontext share add`): their invite code signs them in.
+  const guests = options.guests ?? GuestStore.forPaths(runtime.paths, options.now);
   const oauth = new OAuthServer({
     publicUrl: publicUrl.origin,
     store,
@@ -127,6 +129,12 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.now ? { now: options.now } : {}),
     audit,
+    members: {
+      resolveCode: (code) => {
+        const g = guests.resolveCode(code);
+        return g ? { id: g.id, name: g.name } : undefined;
+      },
+    },
   });
   const expectedHost = parseHostHeader(publicUrl.host);
   const requireHttps = publicUrl.protocol === 'https:';
@@ -300,7 +308,7 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
         writeRequested: hasScope(req.scope, WRITE_SCOPE),
         sealed,
         message,
-        canUnlock: store.hasPassphrase(),
+        canUnlock: store.hasPassphrase() || guests.read().some((g) => g.codeHash),
       }),
       // Chrome applies form-action to the redirect that follows the POST.
       [redirect.origin],
@@ -360,7 +368,10 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     const result = await oauth.unlock(passphrase, ip);
     if (result.ok)
       return reply.redirect(
-        oauth.approve(req, client, ip, { write: body.write === '1' || body.write === 'on' }),
+        oauth.approve(req, client, ip, {
+          write: body.write === '1' || body.write === 'on',
+          ...(result.memberId ? { memberId: result.memberId } : {}),
+        }),
         303,
       );
     if (result.reason === 'no_passphrase')
@@ -382,7 +393,7 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       sealed,
       req,
       client.name,
-      `パスフレーズが違います（あと${result.remaining}回でロック）。`,
+      `パスフレーズか招待コードが違います（あと${result.remaining}回でロック）。`,
       401,
     );
   });
@@ -403,6 +414,60 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     };
   app.post('/token', tokenRoute('token'));
   app.post('/revoke', tokenRoute('revoke'));
+
+  /** The MCP server's dependencies for one caller (the student's or a shared person's client). */
+  const mcpDeps = (
+    who: { clientId: string; clientName: string | undefined; member?: string | undefined },
+    ip: string | undefined,
+  ): McpDeps => ({
+    uc: runtime.uc,
+    proposals: runtime.proposals,
+    logger: runtime.logger,
+    version: options.version,
+    ...(icons ? { icons } : {}),
+    surface: 'remote',
+    client: { id: who.clientId, name: who.clientName },
+    filesDir: runtime.filesDir,
+    fileLink: (documentId) => {
+      const f = localFile(runtime.uc, documentId, { filesDir: runtime.filesDir });
+      if (!f) return undefined;
+      const { token, expiresAt } = fileLinks.mint({
+        clientId: who.clientId,
+        documentId,
+        ...f,
+      });
+      audit({
+        event: 'file_link',
+        clientId: who.clientId,
+        clientName: who.clientName,
+        documentId,
+        link: tokenTag(token),
+        expiresAt,
+        ip: ip,
+      });
+      return { url: `${publicUrl.origin}/files/${token}`, expiresAt };
+    },
+    onToolCall: (e) =>
+      audit({
+        event: 'tool',
+        clientId: who.clientId,
+        clientName: who.clientName,
+        ...(who.member ? { member: who.member } : {}),
+        tool: e.tool,
+        ok: e.ok,
+        ms: e.ms,
+        ip: ip,
+        // Writes: what was stored (ids only, never the text).
+        ...(e.write
+          ? {
+              write: e.write.status,
+              additionId: e.write.additionId,
+              entityIds: e.write.entityIds.join(' ').slice(0, 4000),
+              factIds: e.write.factIds.join(' ').slice(0, 2000),
+            }
+          : {}),
+      }),
+  });
 
   // ---- read-only MCP ----------------------------------------------------------------------
   // `/` too: AI apps are often given the bare https://host, and would otherwise get a 404 after
@@ -436,6 +501,26 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
             )
             .send({ error: check.error, error_description: check.description });
         }
+        // A shared person's grant lives only as long as their share (revoke ends it at once).
+        const member = check.memberId ? guests.active(check.memberId) : undefined;
+        if (check.memberId && !member) {
+          audit({
+            event: 'mcp_rejected',
+            error: 'share_revoked',
+            member: check.memberId,
+            ip: info.ip,
+          });
+          return reply
+            .code(401)
+            .header(
+              'WWW-Authenticate',
+              oauth.wwwAuthenticate({
+                error: 'invalid_token',
+                description: 'access was withdrawn',
+              }),
+            )
+            .send({ error: 'invalid_token', error_description: 'access was withdrawn' });
+        }
         if (!mcpLimiter.hit(check.grantId)) return tooMany(reply, mcpLimiter, check.grantId);
         const rpc = (request.body as { method?: unknown } | undefined)?.method;
         if (typeof rpc === 'string' && rpc !== 'tools/call')
@@ -453,53 +538,13 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
         try {
           await handleMcpHttp(
             {
-              uc: runtime.uc,
-              proposals: runtime.proposals,
-              logger: runtime.logger,
-              version: options.version,
-              ...(icons ? { icons } : {}),
-              surface: 'remote',
-              allowWrite: hasScope(check.scope, WRITE_SCOPE),
-              client: { id: check.clientId, name: check.clientName },
-              filesDir: runtime.filesDir,
-              fileLink: (documentId) => {
-                const f = localFile(runtime.uc, documentId, { filesDir: runtime.filesDir });
-                if (!f) return undefined;
-                const { token, expiresAt } = fileLinks.mint({
-                  clientId: check.clientId,
-                  documentId,
-                  ...f,
-                });
-                audit({
-                  event: 'file_link',
-                  clientId: check.clientId,
-                  clientName: check.clientName,
-                  documentId,
-                  link: tokenTag(token),
-                  expiresAt,
-                  ip: info.ip,
-                });
-                return { url: `${publicUrl.origin}/files/${token}`, expiresAt };
-              },
-              onToolCall: (e) =>
-                audit({
-                  event: 'tool',
-                  clientId: check.clientId,
-                  clientName: check.clientName,
-                  tool: e.tool,
-                  ok: e.ok,
-                  ms: e.ms,
-                  ip: info.ip,
-                  // Writes: what was stored (ids only, never the text).
-                  ...(e.write
-                    ? {
-                        write: e.write.status,
-                        additionId: e.write.additionId,
-                        entityIds: e.write.entityIds.join(' ').slice(0, 4000),
-                        factIds: e.write.factIds.join(' ').slice(0, 2000),
-                      }
-                    : {}),
-                }),
+              ...mcpDeps(
+                { clientId: check.clientId, clientName: check.clientName, member: member?.id },
+                info.ip,
+              ),
+              ...(member
+                ? { allowWrite: false, ...memberMcp(member) }
+                : { allowWrite: hasScope(check.scope, WRITE_SCOPE) }),
             },
             request.raw,
             reply.raw,
@@ -550,8 +595,7 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       .send(createReadStream(entry.path));
   });
 
-  // ---- guest pages (`unicontext guest add`): read-only, no sign-in, the link is the key ----
-  const guests = options.guests ?? GuestStore.forPaths(runtime.paths, options.now);
+  // ---- shared pages (`unicontext share add`): read-only, no sign-in, the link is the key ----
   const ai = options.ai ?? new UniContextAi(runtime.secrets, runtime.config.ai);
   const guestPageLimiter = new WindowRateLimiter(60, 60_000);
   const guestAskLimiter = new WindowRateLimiter(runtime.config.ai.guestQuestionsPerDay, 86_400_000);
@@ -568,16 +612,20 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     ).getDay();
     return weekday === 0 || weekday === 6 ? 1 : 0;
   };
-  /** A calendar week (0 this, 1 next); `upcoming` adds the 14-day deadlines for family. */
-  const viewAt = (role: GuestRole, offset: number, upcoming: boolean): GuestView => {
+  /** A calendar week (0 this, 1 next) as `access` may see it; `upcoming` adds 14 days of deadlines. */
+  const viewAt = (
+    access: ReadonlySet<AccessCategory>,
+    offset: number,
+    upcoming: boolean,
+  ): GuestView => {
     const nowMs = (options.now?.() ?? new Date()).getTime();
-    const withUpcoming = upcoming && role === 'family';
-    const key = `${role}:${offset}:${withUpcoming}`;
+    const withUpcoming = upcoming && access.has('deadlines');
+    const key = `${[...access].sort().join(',')}:${offset}:${withUpcoming}`;
     const hit = guestViews.get(key);
     if (hit && nowMs - hit.at < 5 * 60_000) return hit.view;
     const view = guestView(
       runtime.uc.context.week({ offsetWeeks: offset }),
-      role,
+      access,
       withUpcoming ? getView(runtime.uc.context, 'deadline', { days: 14 }) : undefined,
       offset > 0,
     );
@@ -585,12 +633,30 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     return view;
   };
   /** The page's week (`later` weeks after it), with the deadlines on the page itself. */
-  const viewFor = (role: GuestRole, later = 0): GuestView =>
-    viewAt(role, shownOffset((options.now?.() ?? new Date()).getTime()) + later, later === 0);
+  const viewFor = (g: StoredGuest, later = 0): GuestView =>
+    viewAt(
+      accessOf(g),
+      shownOffset((options.now?.() ?? new Date()).getTime()) + later,
+      later === 0,
+    );
   /** What Claude answers from: the week on the page and the one after it ("来週は?"). */
-  const askViews = (role: GuestRole): GuestView[] => {
-    const { deadlines: _d, exams: _e, ...following } = viewFor(role, 1);
-    return [viewFor(role), following];
+  const askViews = (g: StoredGuest): GuestView[] => {
+    const { deadlines: _d, exams: _e, ...following } = viewFor(g, 1);
+    return [viewFor(g), following];
+  };
+  /** A shared person's MCP: their categories' own tools plus the member projections. */
+  const memberMcp = (g: StoredGuest): Pick<McpDeps, 'onlyTools' | 'instructions' | 'extend'> => {
+    const access = accessOf(g);
+    return {
+      onlyTools: sharedTools(access),
+      instructions: memberInstructions(g.name, access),
+      extend: (server) =>
+        registerMemberTools(server, {
+          access,
+          view: (offset, upcoming) => viewAt(access, offset, upcoming),
+          courses: () => guestCourses(runtime.uc.tasks.schedule.enrolledOfferings()),
+        }),
+    };
   };
 
   app.get<{ Params: { token: string } }>('/g/:token', async (request, reply) => {
@@ -610,7 +676,7 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       reply,
       200,
       guestPage({
-        view: viewFor(g.role),
+        view: viewFor(g),
         guestName: g.name,
         askUrl: canAsk ? `/g/${request.params.token}/ask` : undefined,
       }),
@@ -623,7 +689,7 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     const g = guests.resolve(request.params.token);
     if (!g) return html(reply, 404, guestGonePage());
     const askUrl = `/g/${request.params.token}/ask`;
-    const view = viewFor(g.role);
+    const view = viewFor(g);
     const body = request.body as Record<string, unknown> | undefined;
     const q = String(body?.q ?? '')
       .trim()
@@ -641,7 +707,7 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       return render({ answerError: '今日はこれ以上質問できません。明日また試してください。' });
     const started = Date.now();
     try {
-      const answer = await ai.answerGuest(askViews(g.role), q, history);
+      const answer = await ai.answerGuest(askViews(g), q, history);
       audit({ event: 'guest_ask', ok: true, guestId: g.id, ms: Date.now() - started, ip });
       return render({ answer });
     } catch (e) {
@@ -654,7 +720,7 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     }
   });
 
-  // A guest's own connector: their ChatGPT or Claude reads what the page shows (guest-mcp.ts).
+  // The link's own connector (no sign-in): the same MCP a shared person gets with their code.
   const guestMcpLimiter = new WindowRateLimiter(120, 60_000);
   app.route<{ Params: { token: string } }>({
     method: ['GET', 'POST', 'DELETE'],
@@ -679,14 +745,11 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       for (const [k, v] of Object.entries(reply.getHeaders()))
         if (v !== undefined) reply.raw.setHeader(k, v as string);
       reply.hijack();
-      await handleGuestMcp(
+      await handleMcpHttp(
         {
-          role: g.role,
-          guestName: g.name,
-          version: options.version,
-          view: (offset, upcoming) => viewAt(g.role, offset, upcoming),
-          courses: () => guestCourses(runtime.uc.tasks.schedule.enrolledOfferings()),
-          logger: log,
+          ...mcpDeps({ clientId: `link:${g.id}`, clientName: g.name, member: g.id }, ip),
+          allowWrite: false,
+          ...memberMcp(g),
         },
         request.raw,
         reply.raw,

@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DataPaths } from '@unicontext/core';
+import { ACCESS_PRESETS, isAccessCategory, type AccessCategory } from '@unicontext/mcp';
 
 /**
  * Guests: people the student shares a read-only page with (`<publicUrl>/g/<token>`), such as a
@@ -25,8 +26,14 @@ export const GUEST_ROLES: readonly GuestRole[] = ['friend', 'family'];
 export interface StoredGuest {
   id: string;
   name: string;
+  /** The preset the person was added with; `allow`, when present, is what counts. */
   role: GuestRole;
+  /** What the person may see (@unicontext/mcp access.ts). Absent = the role's preset. */
+  allow?: AccessCategory[];
+  /** Link capability (`/g/<token>`), kept as a hash. */
   tokenHash: string;
+  /** Invite code for signing in to the connector, kept as a hash. */
+  codeHash?: string;
   createdAt: string;
   expiresAt?: string;
   revokedAt?: string;
@@ -42,6 +49,27 @@ export const hashGuestToken = (token: string): string =>
   createHash('sha256').update(token).digest('hex');
 
 export const isGuestTokenShape = (token: string): boolean => /^[A-Za-z0-9_-]{43}$/.test(token);
+
+export function accessOf(g: StoredGuest): Set<AccessCategory> {
+  return new Set(g.allow?.filter(isAccessCategory) ?? ACCESS_PRESETS[g.role]);
+}
+
+/** 12 letters without look-alikes (no 0/O, 1/I/L), shown as XXXX-XXXX-XXXX: about 59 bits. */
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function newInviteCode(): string {
+  const bytes = randomBytes(12);
+  const chars = [...bytes].map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
+  return `${chars.slice(0, 4)}-${chars.slice(4, 8)}-${chars.slice(8)}`;
+}
+const normalizeCode = (code: string): string =>
+  code
+    .normalize('NFKC')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+export const hashInviteCode = (code: string): string =>
+  createHash('sha256')
+    .update(`invite:${normalizeCode(code)}`)
+    .digest('hex');
 
 export function guestActive(g: StoredGuest, now: Date): boolean {
   return !g.revokedAt && (!g.expiresAt || Date.parse(g.expiresAt) > now.getTime());
@@ -72,23 +100,80 @@ export class GuestStore {
     if (process.platform !== 'win32') chmodSync(this.file, 0o600);
   }
 
-  /** Creates a guest and returns it with the token, which is shown once and never stored. */
-  add(input: { name: string; role: GuestRole; ttlMs?: number }): {
+  /** Creates a person; the link token and the invite code are shown once and never stored. */
+  add(input: { name: string; role: GuestRole; allow?: AccessCategory[]; ttlMs?: number }): {
     guest: StoredGuest;
     token: string;
+    code: string;
   } {
     const token = randomBytes(32).toString('base64url');
+    const code = newInviteCode();
     const now = this.now();
     const guest: StoredGuest = {
       id: `g_${randomUUID().slice(0, 8)}`,
       name: input.name,
       role: input.role,
+      ...(input.allow ? { allow: input.allow } : {}),
       tokenHash: hashGuestToken(token),
+      codeHash: hashInviteCode(code),
       createdAt: now.toISOString(),
       ...(input.ttlMs ? { expiresAt: new Date(now.getTime() + input.ttlMs).toISOString() } : {}),
     };
     this.write([...this.read(), guest]);
-    return { guest, token };
+    return { guest, token, code };
+  }
+
+  /** The active person with this id or name (the first one when names repeat). */
+  find(idOrName: string): StoredGuest | undefined {
+    const now = this.now();
+    return this.read().find(
+      (g) => guestActive(g, now) && (g.id === idOrName || g.name === idOrName),
+    );
+  }
+
+  /** Replaces what an active person may see; takes effect on their next request. */
+  setAllow(idOrName: string, allow: AccessCategory[]): StoredGuest | undefined {
+    const target = this.find(idOrName);
+    if (!target) return undefined;
+    const guests = this.read();
+    const g = guests.find((x) => x.id === target.id);
+    if (!g) return undefined;
+    g.allow = allow;
+    this.write(guests);
+    return g;
+  }
+
+  /** A new invite code (the old one stops working; connections already made keep working). */
+  newCode(idOrName: string): { guest: StoredGuest; code: string } | undefined {
+    const target = this.find(idOrName);
+    if (!target) return undefined;
+    const guests = this.read();
+    const g = guests.find((x) => x.id === target.id);
+    if (!g) return undefined;
+    const code = newInviteCode();
+    g.codeHash = hashInviteCode(code);
+    this.write(guests);
+    return { guest: g, code };
+  }
+
+  /** The active person an invite code belongs to. */
+  resolveCode(code: string): StoredGuest | undefined {
+    if (normalizeCode(code).length !== 12) return undefined;
+    const hash = hashInviteCode(code);
+    const now = this.now();
+    return this.read().find((g) => g.codeHash === hash && guestActive(g, now));
+  }
+
+  /** An active person by id (a connector's grant points at it); records the use once a minute. */
+  active(id: string): StoredGuest | undefined {
+    const now = this.now();
+    const guests = this.read();
+    const g = guests.find((x) => x.id === id && guestActive(x, now));
+    if (g && (!g.lastUsedAt || now.getTime() - Date.parse(g.lastUsedAt) > 60_000)) {
+      g.lastUsedAt = now.toISOString();
+      this.write(guests);
+    }
+    return g;
   }
 
   /** Revokes by id or by name (every active guest with that name). Returns the revoked guests. */

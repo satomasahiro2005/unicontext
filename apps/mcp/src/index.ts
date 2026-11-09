@@ -23,6 +23,7 @@ export {
   type ToolCallEvent,
 } from './server.js';
 export { handleMcpHttp, runStdioServer } from './transports.js';
+export * from './access.js';
 export {
   applyProposal,
   DEFAULT_PROPOSAL_TTL_MS,

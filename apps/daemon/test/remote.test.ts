@@ -9,6 +9,7 @@ import { ConfigSchema } from '@unicontext/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startDaemon, type RunningDaemon } from '../src/daemon.js';
 import { createRemoteServer, remoteRequestInfo, type RemoteServer } from '../src/remote/server.js';
+import { GuestStore } from '../src/remote/guests.js';
 import { hashPassphrase } from '../src/remote/passphrase.js';
 import { RemoteStateStore } from '../src/remote/state.js';
 import { tunnelConfigYaml } from '../src/remote/tunnel.js';
@@ -710,6 +711,88 @@ describe('authorization code + PKCE + resource binding', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.headers.location).toBeUndefined();
+  });
+});
+
+describe('people the student shares with', () => {
+  let s: RemoteServer;
+  beforeAll(async () => {
+    s = await makeServer('state-share.json');
+  });
+
+  it('sign in with their invite code and see only their categories, read-only, live', async () => {
+    const guests = GuestStore.forPaths(runtime.paths, () => now);
+    const { guest, code } = guests.add({
+      name: '母',
+      role: 'friend',
+      allow: ['schedule', 'courses', 'announcements'],
+    });
+    const { client } = await register(s);
+    const { page, sealed } = await consent(s, client.client_id, {
+      scope: 'unicontext.read unicontext.write offline_access',
+    });
+    expect(page.body).toContain('パスフレーズまたは招待コード');
+    const res = await inject(s, 'POST', '/authorize', {
+      // typed loosely: lower case, no dashes
+      form: {
+        request: sealed,
+        passphrase: code.toLowerCase().replace(/-/g, ''),
+        write: '1',
+        action: 'approve',
+      },
+      ip: '198.51.100.91',
+    });
+    expect(res.statusCode, res.body).toBe(303);
+    const authCode = new URL(res.headers.location as string).searchParams.get('code') as string;
+    const tok = await exchange(s, client.client_id, authCode);
+    expect(tok.statusCode, tok.body).toBe(200);
+    const t = body<{ access_token: string; scope: string }>(tok);
+    expect(t.scope).not.toContain('unicontext.write');
+    const names = async () =>
+      body<{ result: { tools: { name: string }[] } }>(
+        await mcp(s, t.access_token, { jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      ).result.tools.map((x) => x.name);
+    const first = await names();
+    expect(first).toEqual(
+      expect.arrayContaining([
+        'get_schedule',
+        'get_courses',
+        'get_syllabus',
+        'get_announcements',
+        'get_announcement',
+      ]),
+    );
+    for (const hidden of [
+      'get_week',
+      'get_today',
+      'search',
+      'get_course',
+      'get_deadlines',
+      'add_deadline',
+      'get_credit_summary',
+    ])
+      expect(first).not.toContain(hidden);
+
+    guests.setAllow(guest.id, ['schedule']);
+    const after = await names();
+    expect(after).toContain('get_schedule');
+    expect(after).not.toContain('get_announcements');
+    expect(after).not.toContain('get_courses');
+
+    guests.revoke(guest.id);
+    const gone = await mcp(s, t.access_token, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    expect(gone.statusCode).toBe(401);
+    expect(JSON.stringify(audit)).not.toContain(code);
+  });
+
+  it('a wrong invite code counts toward the lockout like a wrong passphrase', async () => {
+    const { client } = await register(s);
+    const { sealed } = await consent(s, client.client_id);
+    const res = await inject(s, 'POST', '/authorize', {
+      form: { request: sealed, passphrase: 'ABCD-EFGH-JKLM', action: 'approve' },
+      ip: '198.51.100.92',
+    });
+    expect(res.statusCode).toBe(401);
   });
 });
 

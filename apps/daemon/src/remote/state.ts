@@ -61,6 +61,8 @@ export interface StoredGrant {
   /** Hashes of refresh tokens already rotated away; presenting one again revokes the grant. */
   rotatedRefreshHashes: string[];
   revokedAt?: string;
+  /** A shared person's grant (guests.json id); absent = the owner's. */
+  memberId?: string;
 }
 
 export interface StoredAccessToken {

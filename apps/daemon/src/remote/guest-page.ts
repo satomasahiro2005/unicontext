@@ -101,11 +101,14 @@ function classesHtml(view: GuestView, day: GuestView['days'][number]): string {
 }
 
 function deadlineHtml(view: GuestView, d: GuestDeadline): string {
-  const badge = d.done
-    ? '<span class="badge ok">提出済み</span>'
-    : d.overdue
-      ? '<span class="badge warn">提出未確認</span>'
-      : '<span class="badge">未提出</span>';
+  const badge =
+    d.done === undefined
+      ? ''
+      : d.done
+        ? '<span class="badge ok">提出済み</span>'
+        : d.overdue
+          ? '<span class="badge warn">提出未確認</span>'
+          : '<span class="badge">未提出</span>';
   return `<li><span class="when">${escapeHtml(zoned(d.dueAt, view.timezone, true))}</span><span>${escapeHtml(d.course)}：${escapeHtml(d.title)}</span>${badge}</li>`;
 }
 

@@ -45,7 +45,7 @@ export function consentPage(input: ConsentPageInput): string {
     ? `<form method="post" action="/authorize" autocomplete="off">
 <input type="hidden" name="request" value="${escapeHtml(input.sealed)}">
 <label class="check"><input type="checkbox" name="write" value="1"${input.writeRequested ? ' checked' : ''}>締切・やること・メモ・講義の記録をUniContextに登録することも許可する（unicontext.write）</label>
-<label for="passphrase">UniContextのパスフレーズ</label>
+<label for="passphrase">パスフレーズまたは招待コード</label>
 <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" autofocus>
 <div class="row" style="flex-direction:row-reverse"><button class="primary" type="submit" name="action" value="approve">許可</button>
 <button class="secondary" type="submit" name="action" value="deny">拒否</button></div></form>`

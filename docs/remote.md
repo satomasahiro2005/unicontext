@@ -341,37 +341,48 @@ completely, stop cloudflared and/or set `remote.enabled: false` and restart the 
 passphrase (`unicontext remote set-passphrase`) does not revoke existing grants; run
 `remote revoke --all` too if you think the passphrase leaked.
 
-## 6. Share a read-only page with family and friends (guests)
+## 6. Share with family and friends
 
-A guest gets a link, `https://uc.nemut.ai/g/<token>`, that opens a page with this week's
-schedule. No account, no app and no MCP: anyone with the link sees the page, so send it only to
-that person. The link is a random 256-bit token kept only as a SHA-256 hash in
-`<data dir>/remote/guests.json`.
+Someone the student shares with uses the same connector as the student
+(`https://uc.nemut.ai`) in their own ChatGPT or Claude, and signs in on the consent page with
+their own invite code instead of the passphrase. What they can see is chosen per person from
+categories, and changing it takes effect on their next request:
 
 ```
-unicontext guest add 母 --role family      # prints the link once
-unicontext guest add 友達 --expires 30d    # friend (default role), valid 30 days
-unicontext guest list                      # who, role, last viewed
-unicontext guest revoke 母                 # by name or id; the link stops at once
+unicontext share add 母 --allow family,grades   # prints the connector and the invite code once
+unicontext share allow 母 attendance            # show more
+unicontext share deny 母 grades                 # show less
+unicontext share code 母                        # new invite code (connections made keep working)
+unicontext share list                           # who sees what, last use
+unicontext share revoke 母                      # every connection of theirs stops at once
+unicontext share categories                     # the categories and presets
 ```
 
-| role     | shows                                                                                                   |
-| -------- | ------------------------------------------------------------------------------------------------------- |
-| `friend` | this week's classes: period, time, course, room (「要確認」 when sources disagree), 休講                |
-| `family` | the same, plus deadlines (this week and the next two weeks) and exams with 提出済み / 未提出 / 期限切れ |
+| category        | tools                                                                  |
+| --------------- | ---------------------------------------------------------------------- |
+| `schedule`      | `get_schedule` (this or next week: classes, rooms, 休講)               |
+| `courses`       | `get_courses` (every registered course with its slots), syllabus tools |
+| `deadlines`     | `get_deadlines` (deadlines and exams)                                  |
+| `submissions`   | whether each deadline was handed in (in `get_deadlines`)               |
+| `assignments`   | `get_assignments`, `get_assignment`                                    |
+| `announcements` | `get_announcements`, `get_announcement`                                |
+| `materials`     | `get_document`, course files, Teams posts, VPN files                   |
+| `lectures`      | `get_notes`                                                            |
+| `grades`        | `get_credit_summary`                                                   |
+| `attendance`    | `get_attendance`                                                       |
 
-Never shown to a guest: notice bodies, mail, Teams posts, notes and lecture summaries, grades,
-attendance, calendar events, self-study slots, deadlines without a course (就活, personal), and
-citations or source ids. Every view is in the audit log (`guest_view`, guest id, never the
-token).
+Presets: `friend` = schedule, courses; `family` = friend + deadlines, submissions. Tools that mix
+categories (`get_today`, `get_week`, `search`, `get_course`, …), resources and every write tool
+are never given to a shared person; their connection is read-only whatever the consent checkbox
+says. Invite codes are 12 letters (`XXXX-XXXX-XXXX`, stored as a hash) and wrong ones count
+toward the passphrase lockout. People are kept in `<data dir>/remote/guests.json` (`unicontext
+guest` is the same command).
 
-### A guest's own AI (MCP connector)
+### Links without sign-in
 
-`guest add` also prints `https://uc.nemut.ai/g/<token>/mcp`. Added to the guest's ChatGPT or Claude
-as a connector with no authentication (the URL is the capability, like the page link), it serves
-the same data read-only: `get_schedule` (this or next week), `get_courses` (every registered course
-with its weekly slots, the whole timetable at once) and, for `family`, `get_deadlines`. Revoking
-the guest ends it too; calls are audited as `guest_mcp`.
+Each person also has a link, `https://uc.nemut.ai/g/<token>` (a page) and `…/g/<token>/mcp` (the
+same MCP as above, no sign-in), kept from the first version; the link is the key, so the invite
+code is the way to share.
 
 ### Guests asking questions (Claude, then OpenAI)
 

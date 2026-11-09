@@ -18,6 +18,9 @@ import { createRemoteServer, type RemoteServer } from '../src/remote/server.js';
 import { RemoteStateStore } from '../src/remote/state.js';
 import { createRuntime, type Runtime } from '../src/runtime.js';
 
+const FRIEND = new Set(['schedule', 'courses'] as const);
+const FAMILY = new Set(['schedule', 'courses', 'deadlines', 'submissions'] as const);
+
 let dir: string;
 let runtime: Runtime;
 let now = new Date('2026-10-01T00:00:00.000Z');
@@ -56,10 +59,10 @@ describe('GuestStore', () => {
 describe('guestView', () => {
   it('gives friends the timetable only and never citations or source ids', () => {
     const week = getView(runtime.uc.context, 'week', {});
-    const friend = guestView(week, 'friend');
+    const friend = guestView(week, FRIEND);
     expect(friend.deadlines).toBeUndefined();
     expect(friend.exams).toBeUndefined();
-    const family = guestView(week, 'family', getView(runtime.uc.context, 'deadline', { days: 14 }));
+    const family = guestView(week, FAMILY, getView(runtime.uc.context, 'deadline', { days: 14 }));
     expect(Array.isArray(family.deadlines)).toBe(true);
     for (const v of [friend, family]) {
       const json = JSON.stringify(v);
@@ -107,7 +110,7 @@ describe('guest deadlines', () => {
         item({ title: 'x'.repeat(80), dueAt: '2026-10-20T08:00:00.000Z' }),
         item({ title: 'personal', course: undefined, dueAt: '2026-10-20T08:00:00.000Z' }),
       ]),
-      'family',
+      FAMILY,
     );
     expect(v.deadlines?.map((d) => [d.title.slice(0, 11), d.done, d.overdue])).toEqual([
       ['handed in', true, false],
@@ -115,6 +118,14 @@ describe('guest deadlines', () => {
       ['xxxxxxxxxxx', false, false],
     ]);
     expect(v.deadlines?.[2]?.title).toHaveLength(60);
+    // Deadlines without the submissions category: no 提出済み / 提出未確認 at all.
+    const bare = guestView(
+      week([item({ title: 'handed in', dueAt: '2026-10-16T08:00:00.000Z', status: 'submitted' })]),
+      new Set(['schedule', 'deadlines'] as const),
+    );
+    expect(bare.deadlines).toEqual([
+      { course: 'DB', title: 'handed in', dueAt: '2026-10-16T08:00:00.000Z' },
+    ]);
   });
 });
 
@@ -204,8 +215,14 @@ describe('guest pages', () => {
           result: { tools: { name: string }[] };
         }
       ).result.tools.map((t) => t.name);
-    expect(await list(friend.token)).toEqual(['get_schedule', 'get_courses']);
-    expect(await list(family.token)).toEqual(['get_schedule', 'get_courses', 'get_deadlines']);
+    const friendTools = await list(friend.token);
+    expect(friendTools.sort()).toEqual(
+      ['get_courses', 'get_schedule', 'get_syllabus', 'search_syllabus'].sort(),
+    );
+    const familyTools = await list(family.token);
+    expect(familyTools).toEqual(expect.arrayContaining(['get_deadlines', 'get_schedule']));
+    for (const owner of ['get_week', 'get_today', 'search', 'get_course', 'get_announcements'])
+      expect(familyTools).not.toContain(owner);
     const courses = await mcp(friend.token, {
       jsonrpc: '2.0',
       id: 4,
