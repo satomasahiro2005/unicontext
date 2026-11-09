@@ -4,6 +4,7 @@ import type {
   DeadlineItem,
   WeekContext,
 } from '@unicontext/context-engine';
+import { termPartLabel, type TermHalf } from '@unicontext/core';
 import type { GuestRole } from './guests.js';
 
 /**
@@ -139,4 +140,65 @@ export function guestView(
     view.exams = guestDeadlines(week.exams, now);
   }
   return view;
+}
+
+/** One registered course as a guest sees it: when and where it meets, nothing else. */
+export interface GuestCourse {
+  title: string;
+  academicYear?: number;
+  term?: string;
+  /** 「後期前半」 when the course meets in one half of the term only. */
+  termPart?: string;
+  /** regular = weekly slots; unscheduled = 時間割外; intensive = 集中講義. */
+  scheduleType: 'regular' | 'unscheduled' | 'intensive';
+  slots: { day: string; period?: number; room?: string }[];
+}
+
+const DAY_JA = '日月火水木金土';
+
+const termOrder = (term: string | undefined): number =>
+  !term ? 3 : /前期|春/.test(term) ? 0 : /後期|秋/.test(term) ? 1 : 2;
+
+/** The parts of the task engine's EnrolledOffering read here. */
+export interface EnrolledLike {
+  offering: {
+    title: string;
+    academicYear?: number | undefined;
+    term?: string | undefined;
+    room?: string | undefined;
+    schedule: { dayOfWeek: number; period?: number | undefined; room?: string | undefined }[];
+  };
+  scheduleType: GuestCourse['scheduleType'];
+  termParts: { halves: TermHalf[] } | undefined;
+}
+
+/** Everything the student registered for (every term), for a guest: the whole timetable at once. */
+export function guestCourses(enrolled: readonly EnrolledLike[]): GuestCourse[] {
+  const firstSlot = (c: EnrolledLike) => {
+    const s = c.offering.schedule[0];
+    return s ? ((s.dayOfWeek + 6) % 7) * 100 + (s.period ?? 0) : 9999;
+  };
+  return [...enrolled]
+    .sort(
+      (a, b) =>
+        (a.offering.academicYear ?? 0) - (b.offering.academicYear ?? 0) ||
+        termOrder(a.offering.term) - termOrder(b.offering.term) ||
+        firstSlot(a) - firstSlot(b),
+    )
+    .map((c) => {
+      const o = c.offering;
+      const termPart = termPartLabel(o.term, c.termParts?.halves);
+      return {
+        title: o.title,
+        ...(o.academicYear !== undefined ? { academicYear: o.academicYear } : {}),
+        ...(o.term ? { term: o.term } : {}),
+        ...(termPart ? { termPart } : {}),
+        scheduleType: c.scheduleType,
+        slots: o.schedule.map((s) => ({
+          day: DAY_JA[s.dayOfWeek] ?? '?',
+          ...(s.period !== undefined ? { period: s.period } : {}),
+          ...((s.room ?? o.room) ? { room: s.room ?? o.room } : {}),
+        })),
+      };
+    });
 }

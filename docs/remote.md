@@ -365,12 +365,23 @@ attendance, calendar events, self-study slots, deadlines without a course (就�
 citations or source ids. Every view is in the audit log (`guest_view`, guest id, never the
 token).
 
-### Guests asking questions (Claude)
+### A guest's own AI (MCP connector)
+
+`guest add` also prints `https://uc.nemut.ai/g/<token>/mcp`. Added to the guest's ChatGPT or Claude
+as a connector with no authentication (the URL is the capability, like the page link), it serves
+the same data read-only: `get_schedule` (this or next week), `get_courses` (every registered course
+with its weekly slots, the whole timetable at once) and, for `family`, `get_deadlines`. Revoking
+the guest ends it too; calls are audited as `guest_mcp`.
+
+### Guests asking questions (Claude, then OpenAI)
 
 When an Anthropic API key is stored, the page also has a question box: 「来週の水曜は何時に終わる？」.
 Claude (`ai.model`, default `claude-opus-5-5`) answers from the same data the page shows and
 nothing else (no tools, no other UniContext data), with the server-side refusal fallback on.
-Nothing from an answer is stored. Limits: `ai.guestQuestionsPerDay` (20) per guest and
+When Claude fails and an OpenAI key is stored (`unicontext ai set-key openai`; ChatGPT Pro
+includes API credits), `ai.openaiModel` (default `gpt-6.1-sol`) answers instead. A guest can ask
+follow-ups (the last three turns ride along in the form) and ask for detail. Nothing from an
+answer is stored. Limits: `ai.guestQuestionsPerDay` (20) per guest and
 `ai.totalQuestionsPerDay` (100) for everyone, per day; every question is audited (`guest_ask`,
 ok and duration, never the text).
 

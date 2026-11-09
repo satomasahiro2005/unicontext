@@ -12,7 +12,7 @@ import {
   type AnthropicClientFactory,
 } from '../src/ai.js';
 import { guestPage, parseGuestTurns } from '../src/remote/guest-page.js';
-import { guestView, type GuestView } from '../src/remote/guest-view.js';
+import { guestCourses, guestView, type GuestView } from '../src/remote/guest-view.js';
 import { GuestStore } from '../src/remote/guests.js';
 import { createRemoteServer, type RemoteServer } from '../src/remote/server.js';
 import { RemoteStateStore } from '../src/remote/state.js';
@@ -40,7 +40,9 @@ describe('GuestStore', () => {
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(JSON.stringify(store.read())).not.toContain(token);
     expect(store.resolve(token)?.id).toBe(guest.id);
-    expect(store.resolve(`${token.slice(0, -1)}A`)).toBeUndefined();
+    expect(
+      store.resolve(`${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`),
+    ).toBeUndefined();
     expect(store.revoke('母').map((g) => g.id)).toEqual([guest.id]);
     expect(store.resolve(token)).toBeUndefined();
 
@@ -181,6 +183,61 @@ describe('guest pages', () => {
     expect(audit.some((e) => e.event === 'guest_view' && e.ok === true)).toBe(true);
   });
 
+  it('serves the guest view to their own AI as an MCP connector, never the token in logs', async () => {
+    const mcp = (token: string, body: unknown) =>
+      server.app.inject({
+        method: 'POST',
+        url: `/g/${token}/mcp`,
+        headers: {
+          host: 'uc.example.test',
+          'x-forwarded-proto': 'https',
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        payload: JSON.stringify(body),
+      });
+    const friend = store.add({ name: '友達', role: 'friend' });
+    const family = store.add({ name: '父', role: 'family' });
+    const list = async (token: string) =>
+      (
+        (await mcp(token, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json() as {
+          result: { tools: { name: string }[] };
+        }
+      ).result.tools.map((t) => t.name);
+    expect(await list(friend.token)).toEqual(['get_schedule', 'get_courses']);
+    expect(await list(family.token)).toEqual(['get_schedule', 'get_courses', 'get_deadlines']);
+    const courses = await mcp(friend.token, {
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: { name: 'get_courses', arguments: {} },
+    });
+    const all = JSON.parse(
+      (courses.json() as { result: { content: { text: string }[] } }).result.content[0]?.text ??
+        '{}',
+    ) as { courses: { title: string; slots: { day: string }[] }[] };
+    expect(Array.isArray(all.courses)).toBe(true);
+    const call = await mcp(family.token, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: 'get_schedule', arguments: { week: 'next' } },
+    });
+    const text = (call.json() as { result: { content: { text: string }[] } }).result.content[0]
+      ?.text;
+    const week = JSON.parse(text ?? '{}') as Record<string, unknown>;
+    expect(week.nextWeek).toBe(true);
+    expect(week.deadlines).toBeUndefined();
+    expect(text).not.toMatch(/citations|sourceReference|taskId/);
+    store.revoke('友達');
+    expect(
+      (await mcp(friend.token, { jsonrpc: '2.0', id: 3, method: 'tools/list' })).statusCode,
+    ).toBe(404);
+    const logged = JSON.stringify(audit);
+    expect(logged).not.toContain(friend.token);
+    expect(logged).not.toContain(family.token);
+  });
+
   it('answers a question from the guest view only, escaped, within the daily limit', async () => {
     const { token } = store.add({ name: '友達', role: 'friend' });
     const res = await req('POST', `/g/${token}/ask`, '水曜は何時まで？');
@@ -279,5 +336,32 @@ describe('guest answers', () => {
     const kept = parseGuestTurns(JSON.stringify(many));
     expect(kept.map((t) => t.q)).toEqual(['q6', 'q7', 'q8']);
     expect(kept[0]?.a).toHaveLength(12_000);
+  });
+});
+
+describe('guestCourses', () => {
+  it('lists every registered course with its slots, Monday first, and nothing else', () => {
+    const c = (title: string, term: string, slots: { dayOfWeek: number; period?: number }[]) => ({
+      offering: { title, academicYear: 2026, term, room: '情13', schedule: slots },
+      scheduleType: 'regular' as const,
+      termParts: undefined,
+    });
+    const out = guestCourses([
+      c('データベース', '後期', [{ dayOfWeek: 4, period: 2 }]),
+      {
+        ...c('応用プログラミングB', '後期', [{ dayOfWeek: 2, period: 3 }]),
+        termParts: { halves: ['前半'] },
+      },
+      c('論理回路', '前期', [{ dayOfWeek: 1, period: 5 }]),
+    ]);
+    expect(out.map((x) => x.title)).toEqual(['論理回路', '応用プログラミングB', 'データベース']);
+    expect(out[1]).toEqual({
+      title: '応用プログラミングB',
+      academicYear: 2026,
+      term: '後期',
+      termPart: '後期前半',
+      scheduleType: 'regular',
+      slots: [{ day: '火', period: 3, room: '情13' }],
+    });
   });
 });

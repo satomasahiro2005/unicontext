@@ -11,8 +11,9 @@ import { contentDisposition } from '../rest.js';
 import { AiUnavailableError, UniContextAi } from '../ai.js';
 import { createAuditLog, remoteAuditFile, type AuditRecord } from './audit.js';
 import { FileLinks, tokenTag } from './file-links.js';
+import { handleGuestMcp } from './guest-mcp.js';
 import { guestGonePage, guestPage, parseGuestTurns } from './guest-page.js';
-import { guestView, type GuestView } from './guest-view.js';
+import { guestCourses, guestView, type GuestView } from './guest-view.js';
 import { GuestStore, hashGuestToken, type GuestRole } from './guests.js';
 import { hasScope, OAuthServer, WRITE_SCOPE, type AuditEvent } from './oauth.js';
 import { consentPage, messagePage } from './pages.js';
@@ -158,11 +159,10 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     audit({
       event: 'http',
       method: request.method,
-      // file links carry a bearer secret in the path: log only its tag
-      path: (request.url.split('?')[0] ?? '').replace(
-        /^\/files\/([^/]+)/,
-        (_m, t: string) => `/files/${tokenTag(t)}`,
-      ),
+      // file and guest links carry a bearer secret in the path: log only its tag
+      path: (request.url.split('?')[0] ?? '')
+        .replace(/^\/files\/([^/]+)/, (_m, t: string) => `/files/${tokenTag(t)}`)
+        .replace(/^\/g\/([^/]+)/, (_m, t: string) => `/g/${hashGuestToken(t).slice(0, 12)}`),
       status: reply.statusCode,
       ua: String(request.headers['user-agent'] ?? '').slice(0, 80),
       ip: infoOf(request).ip,
@@ -568,23 +568,25 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     ).getDay();
     return weekday === 0 || weekday === 6 ? 1 : 0;
   };
-  const viewFor = (role: GuestRole, later = 0): GuestView => {
+  /** A calendar week (0 this, 1 next); `upcoming` adds the 14-day deadlines for family. */
+  const viewAt = (role: GuestRole, offset: number, upcoming: boolean): GuestView => {
     const nowMs = (options.now?.() ?? new Date()).getTime();
-    const offset = shownOffset(nowMs) + later;
-    const key = `${role}:${offset}`;
+    const withUpcoming = upcoming && role === 'family';
+    const key = `${role}:${offset}:${withUpcoming}`;
     const hit = guestViews.get(key);
     if (hit && nowMs - hit.at < 5 * 60_000) return hit.view;
     const view = guestView(
       runtime.uc.context.week({ offsetWeeks: offset }),
       role,
-      role === 'family' && later === 0
-        ? getView(runtime.uc.context, 'deadline', { days: 14 })
-        : undefined,
+      withUpcoming ? getView(runtime.uc.context, 'deadline', { days: 14 }) : undefined,
       offset > 0,
     );
     guestViews.set(key, { at: nowMs, view });
     return view;
   };
+  /** The page's week (`later` weeks after it), with the deadlines on the page itself. */
+  const viewFor = (role: GuestRole, later = 0): GuestView =>
+    viewAt(role, shownOffset((options.now?.() ?? new Date()).getTime()) + later, later === 0);
   /** What Claude answers from: the week on the page and the one after it ("来週は?"). */
   const askViews = (role: GuestRole): GuestView[] => {
     const { deadlines: _d, exams: _e, ...following } = viewFor(role, 1);
@@ -650,6 +652,47 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
         answerError: 'AIが答えられませんでした。時間をおいてもう一度試してください。',
       });
     }
+  });
+
+  // A guest's own connector: their ChatGPT or Claude reads what the page shows (guest-mcp.ts).
+  const guestMcpLimiter = new WindowRateLimiter(120, 60_000);
+  app.route<{ Params: { token: string } }>({
+    method: ['GET', 'POST', 'DELETE'],
+    url: '/g/:token/mcp',
+    handler: async (request, reply) => {
+      const ip = infoOf(request).ip ?? '?';
+      if (!guestMcpLimiter.hit(ip)) return tooMany(reply, guestMcpLimiter, ip);
+      const g = guests.resolve(request.params.token);
+      const rpc = (request.body as { method?: unknown } | undefined)?.method;
+      audit({
+        event: 'guest_mcp',
+        ok: Boolean(g),
+        guestId: g?.id,
+        link: guestTag(request.params.token),
+        method: typeof rpc === 'string' ? rpc : request.method,
+        ip,
+      });
+      if (!g)
+        return reply
+          .code(404)
+          .send({ jsonrpc: '2.0', error: { code: -32001, message: 'link revoked' }, id: null });
+      for (const [k, v] of Object.entries(reply.getHeaders()))
+        if (v !== undefined) reply.raw.setHeader(k, v as string);
+      reply.hijack();
+      await handleGuestMcp(
+        {
+          role: g.role,
+          guestName: g.name,
+          version: options.version,
+          view: (offset, upcoming) => viewAt(g.role, offset, upcoming),
+          courses: () => guestCourses(runtime.uc.tasks.schedule.enrolledOfferings()),
+          logger: log,
+        },
+        request.raw,
+        reply.raw,
+        request.body,
+      );
+    },
   });
 
   app.get('/', async (_request, reply) =>

@@ -49,12 +49,14 @@ export function registerGuest(program: Command, h: Harness): void {
           ...(opts.expires ? { ttlMs: parseDuration(opts.expires) } : {}),
         });
         const url = `${publicUrl.replace(/\/+$/, '')}/g/${token}`;
+        const mcpUrl = `${url}/mcp`;
         if (ctx.json) {
-          ctx.printJson({ ...g, tokenHash: undefined, url }, { local: true });
+          ctx.printJson({ ...g, tokenHash: undefined, url, mcpUrl }, { local: true });
           return;
         }
         ctx.out(ctx.style.green(`${name}さん用の共有リンクを作りました（${ROLE_LABEL[g.role]}）`));
-        ctx.out(`  ${url}`);
+        ctx.out(`  ページ:    ${url}`);
+        ctx.out(`  コネクタ:  ${mcpUrl}`);
         ctx.out(
           ctx.style.dim(
             `  このリンクはもう表示できません。取り消し: unicontext guest revoke ${g.id}`,

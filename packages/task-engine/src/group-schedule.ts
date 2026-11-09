@@ -179,9 +179,9 @@ export function courseOfTable<C extends { id: string; title: string }>(
     const hit = named.find((c) => h.includes(norm(c.title)));
     if (hit) return hit;
   }
-  // Rows name topics (「論理回路」 in 「FPGAと論理合成ツールと論理回路」), so the lines around the
-  // table are asked first, then the whole text.
-  for (const part of [context, text]) {
+  // Rows name topics (「論理回路」 in 「FPGAと論理合成ツールと論理回路」), so only the lines around
+  // the table name its course; the whole text is read only when those lines are not known.
+  for (const part of context === undefined ? [text] : [context]) {
     if (!part) continue;
     const body = norm(part);
     if (own && body.includes(norm(own.title))) return own;
@@ -190,5 +190,32 @@ export function courseOfTable<C extends { id: string; title: string }>(
     if (titles.size === 1) return mentioned[0];
     if (titles.size > 1) break;
   }
+  if (
+    own &&
+    namesSibling(
+      own.title,
+      `${heading ?? ''}
+${context ?? ''}`,
+      named.map((c) => c.title),
+    )
+  )
+    return undefined;
   return own;
+}
+
+/**
+ * 「情報科学実験C」 named around a table in the 実験B team: the table is for that other course
+ * (one the student does not take, or it would have matched above).
+ */
+function namesSibling(ownTitle: string, around: string, enrolled: readonly string[]): boolean {
+  const norm = (s: string): string => s.normalize('NFKC').replace(/\s+/g, '');
+  const own = norm(ownTitle);
+  const stem = own.replace(/[A-Z0-9]+$/u, '');
+  if (stem === own || stem.length < 3) return false;
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const m of norm(around).matchAll(new RegExp(`${escaped}([A-Z0-9]+)`, 'gu'))) {
+    const title = `${stem}${m[1] ?? ''}`;
+    if (title !== own && !enrolled.some((t) => norm(t) === title)) return true;
+  }
+  return false;
 }

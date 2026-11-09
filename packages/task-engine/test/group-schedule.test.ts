@@ -131,6 +131,20 @@ describe('courseOfTable', () => {
       )?.id,
     ).toBe('c');
   });
+  it('never takes a course from a row topic, nor a table of a course the student does not take', () => {
+    const title = '20260924_実験スケジュール.pdf';
+    const enrolled = courses.filter((c) => c.id !== 'c');
+    const t = parseGroupScheduleTable(LAYOUT_NUMBER_TOPIC_GROUP, { academicYear: 2026 });
+    // The real PDF: 「情報科学実験C」 in its title lines, 「論理回路」 only in row topics.
+    for (const own of [undefined, enrolled[0]])
+      expect(
+        courseOfTable(LAYOUT_NUMBER_TOPIC_GROUP, title, own, enrolled, t?.context),
+      ).toBeUndefined();
+    const untitled = LAYOUT_NUMBER_TOPIC_GROUP.replace('2026年度 後期 情報科学実験C\n', '');
+    const u = parseGroupScheduleTable(untitled, { academicYear: 2026 });
+    expect(courseOfTable(untitled, title, undefined, enrolled, u?.context)).toBeUndefined();
+    expect(courseOfTable(untitled, title, enrolled[0], enrolled, u?.context)?.id).toBe('b');
+  });
 });
 
 describe('deadline sentence context', () => {
