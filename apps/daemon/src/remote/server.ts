@@ -560,24 +560,35 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
   const askEnabled = async (): Promise<boolean> =>
     runtime.config.ai.guestQuestions && (await ai.available().catch(() => false));
   // The views take seconds on a Raspberry Pi: a guest's page and questions reuse one for 5 minutes.
-  const guestViews = new Map<GuestRole, { at: number; view: GuestView }>();
-  const viewFor = (role: GuestRole): GuestView => {
-    const hit = guestViews.get(role);
-    const nowMs = (options.now?.() ?? new Date()).getTime();
-    if (hit && nowMs - hit.at < 5 * 60_000) return hit.view;
-    // Saturday and Sunday show the coming week.
+  const guestViews = new Map<string, { at: number; view: GuestView }>();
+  /** The week a guest's page shows: this week, or the coming one on Saturday and Sunday. */
+  const shownOffset = (nowMs: number): number => {
     const weekday = new Date(
       new Date(nowMs).toLocaleString('en-US', { timeZone: runtime.uc.context.timezone }),
     ).getDay();
-    const nextWeek = weekday === 0 || weekday === 6;
+    return weekday === 0 || weekday === 6 ? 1 : 0;
+  };
+  const viewFor = (role: GuestRole, later = 0): GuestView => {
+    const nowMs = (options.now?.() ?? new Date()).getTime();
+    const offset = shownOffset(nowMs) + later;
+    const key = `${role}:${offset}`;
+    const hit = guestViews.get(key);
+    if (hit && nowMs - hit.at < 5 * 60_000) return hit.view;
     const view = guestView(
-      runtime.uc.context.week({ offsetWeeks: nextWeek ? 1 : 0 }),
+      runtime.uc.context.week({ offsetWeeks: offset }),
       role,
-      role === 'family' ? getView(runtime.uc.context, 'deadline', { days: 14 }) : undefined,
-      nextWeek,
+      role === 'family' && later === 0
+        ? getView(runtime.uc.context, 'deadline', { days: 14 })
+        : undefined,
+      offset > 0,
     );
-    guestViews.set(role, { at: nowMs, view });
+    guestViews.set(key, { at: nowMs, view });
     return view;
+  };
+  /** What Claude answers from: the week on the page and the one after it ("来週は?"). */
+  const askViews = (role: GuestRole): GuestView[] => {
+    const { deadlines: _d, exams: _e, ...following } = viewFor(role, 1);
+    return [viewFor(role), following];
   };
 
   app.get<{ Params: { token: string } }>('/g/:token', async (request, reply) => {
@@ -622,7 +633,7 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
       return render({ answerError: '今日はこれ以上質問できません。明日また試してください。' });
     const started = Date.now();
     try {
-      const answer = await ai.answerGuest(view, q);
+      const answer = await ai.answerGuest(askViews(g.role), q);
       audit({ event: 'guest_ask', ok: true, guestId: g.id, ms: Date.now() - started, ip });
       return render({ answer });
     } catch (e) {

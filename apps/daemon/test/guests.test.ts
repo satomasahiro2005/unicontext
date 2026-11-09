@@ -183,6 +183,8 @@ describe('guest pages', () => {
     expect(sent).toContain('水曜は何時まで？');
     expect(sent).not.toContain('"deadlines"');
     expect(sent).toContain('claude-opus-5-5');
+    const asked = calls.at(-1) as { messages: { content: string }[] };
+    expect(asked.messages[0]?.content).toContain('"nextWeek":true'); // the next week too: 「来週は？」
     const again = await req('POST', `/g/${token}/ask`, 'もう一回');
     expect(again.body).toContain('今日はこれ以上質問できません');
     expect(calls).toHaveLength(1);
