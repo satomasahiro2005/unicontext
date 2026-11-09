@@ -1,7 +1,39 @@
+import type { GuestTurn } from '../ai.js';
 import type { GuestDeadline, GuestView } from './guest-view.js';
 import { escapeHtml } from './pages.js';
 
 /** The guest's read-only page (`/g/<token>`): server-rendered, no scripts, no external assets. */
+
+const MAX_TURNS = 3;
+const MAX_QUESTION = 300;
+const MAX_ANSWER = 12_000;
+
+/** The last few turns, each cut to size (they come back from the browser). */
+export function keepTurns(turns: GuestTurn[]): GuestTurn[] {
+  return turns
+    .slice(-MAX_TURNS)
+    .map((t) => ({ q: t.q.slice(0, MAX_QUESTION), a: t.a.slice(0, MAX_ANSWER) }));
+}
+
+/** The `h` form field: earlier turns as JSON; anything malformed counts as none. */
+export function parseGuestTurns(raw: unknown): GuestTurn[] {
+  if (typeof raw !== 'string' || raw === '') return [];
+  try {
+    const list: unknown = JSON.parse(raw);
+    if (!Array.isArray(list)) return [];
+    return keepTurns(
+      list.filter(
+        (t): t is GuestTurn =>
+          typeof t === 'object' &&
+          t !== null &&
+          typeof (t as GuestTurn).q === 'string' &&
+          typeof (t as GuestTurn).a === 'string',
+      ),
+    );
+  } catch {
+    return [];
+  }
+}
 
 const STYLE = `
 :root{color-scheme:light dark;--fg:#1d1d1f;--bg:#f6f6f4;--card:#fff;--muted:#6b6b6b;--line:#e4e4e0;--accent:#1f5fbf;--ok:#1e7a3c;--warn:#b3261e;--today:#eef3fc}
@@ -84,6 +116,8 @@ export interface GuestPageInput {
   askUrl?: string | undefined;
   question?: string | undefined;
   answer?: string | undefined;
+  /** Earlier questions and answers in this conversation, shown above the current one. */
+  history?: GuestTurn[] | undefined;
   answerError?: string | undefined;
 }
 
@@ -111,13 +145,24 @@ export function guestPage(input: GuestPageInput): string {
     );
 
   if (input.askUrl) {
+    const turn = (t: GuestTurn) =>
+      `<p class="muted">Q. ${escapeHtml(t.q)}</p><p class="answer">${escapeHtml(t.a)}</p>`;
+    const earlier = (input.history ?? []).map(turn).join('');
+    // The conversation so far rides along with the next question (nothing is kept on the server).
+    const carried = input.answer
+      ? keepTurns([...(input.history ?? []), { q: input.question ?? '', a: input.answer }])
+      : (input.history ?? []);
+    const hidden =
+      carried.length > 0
+        ? `<input type="hidden" name="h" value="${escapeHtml(JSON.stringify(carried))}">`
+        : '';
     const answer = input.answer
-      ? `<p class="muted">Q. ${escapeHtml(input.question ?? '')}</p><p class="answer">${escapeHtml(input.answer)}</p>`
+      ? earlier + turn({ q: input.question ?? '', a: input.answer })
       : input.answerError
-        ? `<p class="warn">${escapeHtml(input.answerError)}</p>`
+        ? `${earlier}<p class="warn">${escapeHtml(input.answerError)}</p>`
         : '';
     sections.push(
-      `<section><h2>質問する</h2>${answer}<form method="post" action="${escapeHtml(input.askUrl)}"><textarea name="q" maxlength="300" required placeholder="例: 来週の水曜は何時に終わる？"></textarea><button type="submit">AIに聞く</button></form><p class="muted">このページの内容だけをもとにAIが答えます。</p></section>`,
+      `<section><h2>質問する</h2>${answer}<form method="post" action="${escapeHtml(input.askUrl)}">${hidden}<textarea name="q" maxlength="300" required placeholder="例: 来週の水曜は何時に終わる？"></textarea><button type="submit">AIに聞く</button></form><p class="muted">このページの内容だけをもとにAIが答えます。</p></section>`,
     );
   }
 

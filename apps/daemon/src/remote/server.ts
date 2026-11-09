@@ -11,7 +11,7 @@ import { contentDisposition } from '../rest.js';
 import { AiUnavailableError, UniContextAi } from '../ai.js';
 import { createAuditLog, remoteAuditFile, type AuditRecord } from './audit.js';
 import { FileLinks, tokenTag } from './file-links.js';
-import { guestGonePage, guestPage } from './guest-page.js';
+import { guestGonePage, guestPage, parseGuestTurns } from './guest-page.js';
 import { guestView, type GuestView } from './guest-view.js';
 import { GuestStore, hashGuestToken, type GuestRole } from './guests.js';
 import { hasScope, OAuthServer, WRITE_SCOPE, type AuditEvent } from './oauth.js';
@@ -622,18 +622,24 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
     if (!g) return html(reply, 404, guestGonePage());
     const askUrl = `/g/${request.params.token}/ask`;
     const view = viewFor(g.role);
-    const q = String((request.body as Record<string, unknown> | undefined)?.q ?? '')
+    const body = request.body as Record<string, unknown> | undefined;
+    const q = String(body?.q ?? '')
       .trim()
       .slice(0, 300);
+    const history = parseGuestTurns(body?.h);
     const render = (fields: { answer?: string; answerError?: string }) =>
-      html(reply, 200, guestPage({ view, guestName: g.name, askUrl, question: q, ...fields }));
+      html(
+        reply,
+        200,
+        guestPage({ view, guestName: g.name, askUrl, question: q, history, ...fields }),
+      );
     if (!(await askEnabled())) return render({ answerError: '質問は使えない設定です。' });
     if (!q) return render({ answerError: '質問を入力してください。' });
     if (!guestAskLimiter.hit(g.id) || !totalAskLimiter.hit('all'))
       return render({ answerError: '今日はこれ以上質問できません。明日また試してください。' });
     const started = Date.now();
     try {
-      const answer = await ai.answerGuest(askViews(g.role), q);
+      const answer = await ai.answerGuest(askViews(g.role), q, history);
       audit({ event: 'guest_ask', ok: true, guestId: g.id, ms: Date.now() - started, ip });
       return render({ answer });
     } catch (e) {

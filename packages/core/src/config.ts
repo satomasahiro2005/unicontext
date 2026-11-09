@@ -61,10 +61,13 @@ export const ConfigSchema = z.object({
       baseUrl: z.string().optional(),
       /** Key name in the SecretStore holding the API key. Never put the key itself here. */
       apiKeyRef: z.string().optional(),
+      /** OpenAI model for UniContext's own calls when Claude fails (default gpt-6.1-sol). */
+      openaiModel: z.string().optional(),
       /**
        * Guests may ask questions about what their shared page shows. Answered by Claude
-       * (`model`, default claude-opus-5-5) once an Anthropic key is stored (`unicontext ai
-       * set-key`) and `provider` is anthropic or none; nothing is stored from the answers.
+       * (`model`, default claude-opus-5-5), or by OpenAI when Claude fails, once a key is stored
+       * (`unicontext ai set-key`) and `provider` is anthropic, openai or none; nothing is stored
+       * from the answers.
        */
       guestQuestions: z.boolean().default(true),
       /** Guest questions per guest per day, and for all guests together per day. */

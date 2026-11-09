@@ -5,8 +5,14 @@ import { MemorySecretStore } from '@unicontext/auth';
 import { getView } from '@unicontext/context-engine';
 import { ConfigSchema } from '@unicontext/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AI_KEY_SECRET, UniContextAi, type AnthropicClientFactory } from '../src/ai.js';
-import { guestView } from '../src/remote/guest-view.js';
+import {
+  AI_KEY_SECRET,
+  OPENAI_KEY_SECRET,
+  UniContextAi,
+  type AnthropicClientFactory,
+} from '../src/ai.js';
+import { guestPage, parseGuestTurns } from '../src/remote/guest-page.js';
+import { guestView, type GuestView } from '../src/remote/guest-view.js';
 import { GuestStore } from '../src/remote/guests.js';
 import { createRemoteServer, type RemoteServer } from '../src/remote/server.js';
 import { RemoteStateStore } from '../src/remote/state.js';
@@ -188,5 +194,90 @@ describe('guest pages', () => {
     const again = await req('POST', `/g/${token}/ask`, 'もう一回');
     expect(again.body).toContain('今日はこれ以上質問できません');
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('guest answers', () => {
+  const view = {
+    role: 'family',
+    nextWeek: false,
+    generatedAt: '2026-10-01T00:00:00.000Z',
+    timezone: 'Asia/Tokyo',
+    today: '2026-10-01',
+    from: '2026-09-27T15:00:00.000Z',
+    to: '2026-10-04T15:00:00.000Z',
+    days: [],
+  } as unknown as GuestView;
+
+  it('falls back to OpenAI when Claude fails, carrying the conversation', async () => {
+    const secrets = new MemorySecretStore();
+    await secrets.set(AI_KEY_SECRET, 'sk-ant-test');
+    await secrets.set(OPENAI_KEY_SECRET, 'sk-proj-test');
+    const failing: AnthropicClientFactory = () =>
+      ({
+        beta: { messages: { create: async () => Promise.reject(new Error('credit balance')) } },
+      }) as unknown as ReturnType<AnthropicClientFactory>;
+    const sent: { url: string; body: Record<string, unknown> }[] = [];
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      sent.push({ url, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      return new Response(
+        JSON.stringify({
+          output: [
+            { type: 'reasoning', summary: [] },
+            { type: 'message', content: [{ type: 'output_text', text: '詳しくはこうです' }] },
+          ],
+        }),
+        { status: 200 },
+      );
+    };
+    const ai = new UniContextAi(secrets, { provider: 'none' }, failing, fetchFn);
+    expect(await ai.backends()).toEqual(['anthropic', 'openai']);
+    const answer = await ai.answerGuest([{ ...view }], 'もっと詳しく', [
+      { q: '水曜は？', a: '4限まで' },
+    ]);
+    expect(answer).toBe('詳しくはこうです');
+    expect(sent[0]?.url).toBe('https://api.openai.com/v1/responses');
+    expect(sent[0]?.body).toMatchObject({ model: 'gpt-6.1-sol', store: false });
+    const input = sent[0]?.body.input as { role: string; content: string }[];
+    expect(input.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(input[0]?.content).toContain('<data>');
+    expect(input[0]?.content).toContain('質問: 水曜は？');
+    expect(input[2]?.content).toBe('質問: もっと詳しく');
+
+    const openaiFirst = new UniContextAi(secrets, { provider: 'openai' }, failing, fetchFn);
+    expect(await openaiFirst.backends()).toEqual(['openai', 'anthropic']);
+    const off = new UniContextAi(secrets, { provider: 'ollama' }, failing, fetchFn);
+    expect(await off.available()).toBe(false);
+  });
+
+  it('carries earlier turns in the page and trusts nothing malformed coming back', () => {
+    const page = guestPage({
+      view: { ...view },
+      guestName: '母',
+      askUrl: '/g/x/ask',
+      question: '次は？',
+      answer: '金曜です',
+      history: [{ q: '水曜は？', a: '4限まで' }],
+    });
+    expect(page).toContain('name="h"');
+    const carried = /name="h" value="([^"]*)"/.exec(page)?.[1]?.replaceAll('&quot;', '"');
+    expect(parseGuestTurns(carried)).toEqual([
+      { q: '水曜は？', a: '4限まで' },
+      { q: '次は？', a: '金曜です' },
+    ]);
+    expect(page.indexOf('水曜は？')).toBeLessThan(page.indexOf('次は？'));
+    expect(parseGuestTurns('not json')).toEqual([]);
+    expect(
+      parseGuestTurns(
+        JSON.stringify([
+          { q: 1, a: 'x' },
+          { q: 'ok', a: 'y' },
+        ]),
+      ),
+    ).toEqual([{ q: 'ok', a: 'y' }]);
+    const many = Array.from({ length: 9 }, (_, i) => ({ q: `q${i}`, a: 'a'.repeat(20_000) }));
+    const kept = parseGuestTurns(JSON.stringify(many));
+    expect(kept.map((t) => t.q)).toEqual(['q6', 'q7', 'q8']);
+    expect(kept[0]?.a).toHaveLength(12_000);
   });
 });
