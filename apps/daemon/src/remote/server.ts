@@ -2,8 +2,15 @@ import { createReadStream, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { IncomingMessage } from 'node:http';
 import { getView, localFile } from '@unicontext/context-engine';
-import { errorMessage, parseDuration, type Logger } from '@unicontext/core';
-import { handleMcpHttp, sharedTools, type AccessCategory, type McpDeps } from '@unicontext/mcp';
+import { errorMessage, formatShortJa, parseDuration, type Logger } from '@unicontext/core';
+import {
+  createMcpServer,
+  handleMcpHttp,
+  mcpToolNames,
+  sharedTools,
+  type AccessCategory,
+  type McpDeps,
+} from '@unicontext/mcp';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Runtime } from '../runtime.js';
 import { bearerToken, parseHostHeader } from '../security.js';
@@ -19,6 +26,7 @@ import { hasScope, OAuthServer, WRITE_SCOPE, type AuditEvent } from './oauth.js'
 import { consentPage, messagePage } from './pages.js';
 import { WindowRateLimiter } from './ratelimit.js';
 import { RemoteStateStore } from './state.js';
+import { outdatedToolListHint, ToolListTracker, toolSetHash } from './tool-lists.js';
 
 export interface RemoteServerOptions {
   runtime: Runtime;
@@ -26,6 +34,7 @@ export interface RemoteServerOptions {
   /** Overrides for tests. */
   store?: RemoteStateStore;
   guests?: GuestStore;
+  toolLists?: ToolListTracker;
   ai?: UniContextAi;
   fetch?: typeof fetch;
   now?: () => Date;
@@ -119,6 +128,23 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
   const audit = (e: AuditEvent): void => auditLog(e);
   // People the student shares with (`unicontext share add`): their invite code signs them in.
   const guests = options.guests ?? GuestStore.forPaths(runtime.paths, options.now);
+  const toolLists = options.toolLists ?? ToolListTracker.forPaths(runtime.paths, options.now);
+  // The tool set a connection is served depends on its scope (write tools) or, for a shared
+  // person, on what they may see; built once per variant (names only).
+  const toolSets = new Map<string, string>();
+  const toolSetOf = (deps: McpDeps): string => {
+    const key = deps.onlyTools
+      ? `member:${[...deps.onlyTools].sort().join(',')}`
+      : `owner:${deps.allowWrite === true}`;
+    let set = toolSets.get(key);
+    if (set === undefined) {
+      const server = createMcpServer(deps);
+      set = toolSetHash(mcpToolNames(server));
+      void server.close().catch(() => undefined);
+      toolSets.set(key, set);
+    }
+    return set;
+  };
   const oauth = new OAuthServer({
     publicUrl: publicUrl.origin,
     store,
@@ -536,20 +562,31 @@ export async function createRemoteServer(options: RemoteServerOptions): Promise<
           if (v !== undefined) reply.raw.setHeader(k, v as string);
         reply.hijack();
         try {
-          await handleMcpHttp(
-            {
-              ...mcpDeps(
-                { clientId: check.clientId, clientName: check.clientName, member: member?.id },
-                info.ip,
-              ),
-              ...(member
-                ? { allowWrite: false, ...memberMcp(member) }
-                : { allowWrite: hasScope(check.scope, WRITE_SCOPE) }),
-            },
-            request.raw,
-            reply.raw,
-            request.body,
-          );
+          const deps: McpDeps = {
+            ...mcpDeps(
+              { clientId: check.clientId, clientName: check.clientName, member: member?.id },
+              info.ip,
+            ),
+            ...(member
+              ? { allowWrite: false, ...memberMcp(member) }
+              : { allowWrite: hasScope(check.scope, WRITE_SCOPE) }),
+          };
+          // AI apps keep the tool list they read once (ChatGPT: until the connector is refreshed):
+          // remember what each connection listed, and say so while it differs from today's.
+          try {
+            if (rpc === 'tools/list') toolLists.listed(check.grantId, toolSetOf(deps));
+          } catch (e) {
+            log.warn('remote tool list record failed', { error: errorMessage(e) });
+          }
+          deps.toolListHint = () => {
+            const outdated = toolLists.outdated(check.grantId, toolSetOf(deps));
+            return outdated
+              ? outdatedToolListHint(outdated.listedAt, (iso) =>
+                  formatShortJa(new Date(iso), runtime.uc.timezone),
+                )
+              : undefined;
+          };
+          await handleMcpHttp(deps, request.raw, reply.raw, request.body);
         } catch (e) {
           log.error('remote mcp request failed', { error: errorMessage(e) });
           if (!reply.raw.headersSent) {

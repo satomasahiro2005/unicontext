@@ -4,7 +4,7 @@ import {
   SourceReferenceSchema,
   SourceLocationSchema,
 } from '@unicontext/canonical-model';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, lt } from 'drizzle-orm';
 import type { UniContextDatabase } from '../db.js';
 import { sourceReferences } from '../schema/entities.js';
 
@@ -51,6 +51,23 @@ export class SourceReferenceStore {
       .onConflictDoUpdate({ target: sourceReferences.id, set: row })
       .run();
     return ref;
+  }
+
+  /**
+   * The raw item was fetched again and its content had not changed: what it supports was confirmed
+   * at `retrievedAt`, so its references (the 「…取得」 time of citations) move forward to it.
+   */
+  touchRawItem(rawItemId: string, retrievedAt: string): number {
+    return this.db.orm
+      .update(sourceReferences)
+      .set({ retrievedAt })
+      .where(
+        and(
+          eq(sourceReferences.rawItemId, rawItemId),
+          lt(sourceReferences.retrievedAt, retrievedAt),
+        ),
+      )
+      .run().changes;
   }
 
   get(id: string): SourceReference | undefined {

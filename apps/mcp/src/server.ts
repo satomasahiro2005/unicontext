@@ -203,6 +203,11 @@ export interface McpDeps extends OpenLinkDeps {
   fileLink?: (documentId: string) => { url: string; expiresAt: string } | undefined;
   /** Called after every tool call (audit log of the remote surface). Never receives arguments. */
   onToolCall?: (event: ToolCallEvent) => void;
+  /**
+   * Remote: a sentence for every read tool's answerHint while the connection's AI app still holds
+   * an older tool list than the one it would be served now (it cannot call the newer tools).
+   */
+  toolListHint?: () => string | undefined;
 }
 
 export type McpSurface = 'local' | 'remote';
@@ -493,6 +498,18 @@ const jsonValueInput = z.union([
 
 // ---------- server ----------
 
+/** Names of the tools a server built by createMcpServer serves (what tools/list returns). */
+export function mcpToolNames(server: McpServer): string[] {
+  const registered = (
+    server as unknown as { _registeredTools?: Record<string, { enabled?: boolean }> }
+  )._registeredTools;
+  if (!registered) return [];
+  return Object.entries(registered)
+    .filter(([, t]) => t.enabled !== false)
+    .map(([name]) => name)
+    .sort();
+}
+
 export function createMcpServer(deps: McpDeps): McpServer {
   const { uc, proposals } = deps;
   const logger = deps.logger ?? silentLogger;
@@ -543,7 +560,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
         const out = await run(args as z.infer<z.ZodObject<S>>);
         logger.debug('mcp tool', { tool: name, ms: Date.now() - started });
         audit(true, started);
-        return envelopeResult(compactEnvelope(buildEnvelope(out.data, out.options)), remote);
+        let notice: string | undefined;
+        try {
+          notice = deps.toolListHint?.();
+        } catch (e) {
+          logger.warn('mcp tool list check failed', { tool: name, error: errorMessage(e) });
+        }
+        const options = notice
+          ? { ...out.options, hint: [out.options?.hint, notice].filter(Boolean).join(' ') }
+          : out.options;
+        return envelopeResult(compactEnvelope(buildEnvelope(out.data, options)), remote);
       } catch (e) {
         logger.debug('mcp tool error', { tool: name, ms: Date.now() - started });
         audit(false, started);

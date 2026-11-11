@@ -95,8 +95,9 @@ describe('integration: seed → today context', () => {
     ]);
     expect(db?.summary).toContain('情報が食い違っています');
     expect(today.classes[0]?.room).toMatchObject({ status: 'resolved', value: '共通教育A棟301' });
+    // read again unchanged on day 2: the citation says when it was last confirmed (#4)
     expect(today.classes[0]?.summary).toMatch(
-      /教室: 共通教育A棟301（根拠: 学務情報システム 9\/30 09:00取得）/,
+      /教室: 共通教育A棟301（根拠: 学務情報システム 10\/1 09:00取得）/,
     );
 
     expect(today.conflicts).toHaveLength(1);

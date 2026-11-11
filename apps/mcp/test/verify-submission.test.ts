@@ -350,6 +350,35 @@ const teamsWork = (status: string, submittedDateTime: string | null): RawItem =>
   },
 });
 
+describe('verify_submission (Ed lesson partly done, #4)', () => {
+  it('a fully answered slide next to an unfinished one is named, not reported as a bare 未提出', async () => {
+    const lesson = ED_LESSONS[2] as { status: string };
+    const was = lesson.status;
+    lesson.status = 'attempted';
+    try {
+      const { call } = await setupEd();
+      const list = await call<{ assignments: Item[] }>('get_assignments', {});
+      const quiz = list.data.assignments.find((x) => x.title === 'Quiz 2');
+      expect(quiz).toBeDefined();
+      const out = await call<Verified>('verify_submission', { id: quiz?.assignmentId });
+      expect(out.data.submission).toMatchObject({
+        status: 'not_submitted',
+        sourceStatus: 'attempted',
+        answeredQuestions: { answered: 1, total: 2 },
+      });
+      expect(out.data.slides).toEqual([
+        expect.objectContaining({ title: '前半', answered: 1, questions: 1 }),
+        expect.objectContaining({ title: '後半', answered: 0, questions: 1 }),
+      ]);
+      const limits = out.data.limits.join(' ');
+      expect(limits).toMatch(/「前半」の設問にはすべて回答が保存されています/);
+      expect(limits).toMatch(/「後半」（0\/1問）が終わっていない/);
+    } finally {
+      lesson.status = was;
+    }
+  });
+});
+
 describe('verify_submission (LiveCampusU / Teams)', () => {
   it('LiveCampusU: re-reads 提出済 / 未提出 and says what cannot be confirmed there', async () => {
     const adapter = new StateAdapter('lcu', [lcuRow('未提出')]);

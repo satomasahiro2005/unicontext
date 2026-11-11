@@ -211,8 +211,22 @@ inside the 30 s answers with it; nothing else is rate-limited away by freshness)
   (`edKind: response-file`, path `/Ed Lessons/<module>/<lesson>/提出/<file>`, authority
   `submission-system`) only when the answers are read on request; `files[].documentId` opens one
   with `get_document`, which is the only time its bytes are fetched (the `files:` rules above).
+- `slides[]`: each quiz slide's progress with `answered` / `questions`.
 - `limits`: what Ed does not tell (no submission time; code / SQL slide submissions are not
-  readable through the pinned server).
+  readable through the pinned server). Ed marks a lesson `completed` only when every slide is, so
+  a report slide fully answered next to an unfinished review quiz stays `attempted`
+  (not_submitted); `limits` then names the slides that are fully answered and the ones that are
+  not, instead of a bare 未提出.
+
+Citations of a lesson read again with unchanged content say when it was last read (the raw item's
+`fetchedAt` moves its source references' `retrievedAt` forward), while facts keep `observedAt`, when
+the value was first seen.
+
+If an AI app says `verify_submission` or `get_assignment` "failed internally" and the call never
+shows in `remote-audit.jsonl`, the app is using a tool list it read before those tools existed
+(ChatGPT keeps the list until the connector is refreshed). The remote server records each
+connection's last `tools/list` (`remote/tool-lists.json`) and, while it differs from today's tool
+set, adds a sentence to every answer asking the student to refresh the connector once.
 
 A sync never reads the saved answers or the file list and never fetches a file body (test
 `verify_submission (Ed lesson)` in apps/mcp).

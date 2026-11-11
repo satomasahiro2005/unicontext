@@ -307,6 +307,25 @@ describe('SyncEngine', () => {
     expect(r.normalized.items).toBe(0);
   });
 
+  it('an unchanged raw item read again moves its citations forward to the new read (#4)', async () => {
+    await engine.sync('lms');
+    const raw = engine.stores.raw.list({ sourceId: 'lms' }).find((r) => r.externalId === 'a1');
+    expect(raw).toBeDefined();
+    const before = engine.stores.sourceRefs.byRawItem(raw!.id);
+    expect(before.length).toBeGreaterThan(0);
+    const facts = engine.facts.active({ subjects: [id('assignment', 'a1')] });
+    clock.set('2026-10-04T00:00:00Z');
+    const r = await engine.sync('lms', { mode: 'full' });
+    expect(r.raw.unchanged).toBe(5);
+    const fetchedAt = engine.stores.raw.get(raw!.id)!.fetchedAt;
+    expect(fetchedAt > before[0]!.retrievedAt).toBe(true);
+    for (const ref of engine.stores.sourceRefs.byRawItem(raw!.id))
+      expect(ref.retrievedAt).toBe(fetchedAt);
+    // The facts keep when the value was first observed.
+    const after = engine.facts.active({ subjects: [id('assignment', 'a1')] });
+    expect(after.map((f) => f.observedAt)).toEqual(facts.map((f) => f.observedAt));
+  });
+
   it('tracks health transitions (§38)', async () => {
     const health: HealthChangedEvent[] = [];
     engine.bus.on('health', (h) => {

@@ -3,6 +3,7 @@ export const PACKAGE_NAME = '@unicontext/mcp';
 export {
   coverageHint,
   createMcpServer,
+  mcpToolNames,
   DEFAULT_MCP_VERSION,
   ESTIMATE_HINT_JA,
   HOW_TO_CONFIRM,

@@ -365,6 +365,8 @@ export class SyncEngine {
         });
         seen.add(rec.id);
         report[status]++;
+        // Read again, same content: its citations say it was confirmed now, not when it changed.
+        if (status === 'unchanged') this.stores.sourceRefs.touchRawItem(rec.id, rec.fetchedAt);
         for (const b of item.blobs ?? [])
           this.stores.raw.putBlob({
             sourceId,

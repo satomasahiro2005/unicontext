@@ -400,6 +400,19 @@ describe('authorization code + PKCE + resource binding', () => {
     expect(state).not.toContain(t.access_token);
     expect(state).not.toContain(t.refresh_token);
 
+    // Before this connection ever listed the tools, every answer says its tool list may be old
+    // (AI apps keep the list they read once; #4).
+    type Hinted = { result: { structuredContent: { answerHint: string } } };
+    const early = await mcp(s, t.access_token, {
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'tools/call',
+      params: { name: 'get_today', arguments: {} },
+    });
+    expect(body<Hinted>(early).result.structuredContent.answerHint).toMatch(
+      /ツール一覧.*UniContext を更新/,
+    );
+
     const list = await mcp(s, t.access_token, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
     expect(list.statusCode, list.body).toBe(200);
     const tools = body<{
@@ -438,6 +451,8 @@ describe('authorization code + PKCE + resource binding', () => {
     }>(call).result;
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent.citations.length).toBeGreaterThan(0);
+    // listed just now: no notice
+    expect(body<Hinted>(call).result.structuredContent.answerHint).not.toMatch(/ツール一覧/);
     const toolEvents = audit.filter((e) => e.event === 'tool');
     expect(toolEvents).toEqual([
       expect.objectContaining({

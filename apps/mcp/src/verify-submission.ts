@@ -123,8 +123,14 @@ export interface VerifySubmissionView {
   answers?: SubmittedAnswerView[];
   /** Submitted files (names only; get_document opens one). */
   files: SubmittedFileView[];
-  /** Ed: progress of each quiz slide. */
-  slides?: { number: number; title?: string; status?: string }[];
+  /** Ed: progress of each quiz slide, with how many of its questions have a saved answer. */
+  slides?: {
+    number: number;
+    title?: string;
+    status?: string;
+    answered?: number;
+    questions?: number;
+  }[];
   /** What this source does not let UniContext confirm. */
   limits: string[];
 }
@@ -429,11 +435,15 @@ export function buildSubmissionView(
     if (lastAnswerAt) view.submission.lastAnswerAt = lastAnswerAt;
     view.files = edResponseFiles(uc, raw);
     const quiz = lesson.slides.filter((s) => s.questions?.length || s.type === 'quiz');
+    const answeredOn = (n: number): number => answers.filter((a) => a.slide === n).length;
     if (quiz.length > 0)
       view.slides = quiz.map((s) => ({
         number: s.number,
         ...(s.title ? { title: s.title } : {}),
         ...(s.status ? { status: s.status } : {}),
+        ...(s.questions?.length
+          ? { answered: answeredOn(s.number), questions: s.questions.length }
+          : {}),
       }));
     view.limits.push(
       'Ed はレッスンを提出した日時を返しません（回答ごとの保存日時 savedAt / lastAnswerAt はあります）。',
@@ -446,6 +456,25 @@ export function buildSubmissionView(
       view.limits.push(
         'すべての設問に回答が保存されていますが、Ed ではレッスンがまだ完了（completed）になっていません（未閲覧のスライドがあるなど）。',
       );
+    else if (!view.submission.submitted && answers.length > 0) {
+      // Ed marks a lesson completed only when every slide is: a report slide fully answered next
+      // to an unopened review quiz stays "attempted". Say which slides are done instead of a bare
+      // 未提出.
+      const slides = view.slides ?? [];
+      const done = slides.filter((x) => x.questions && x.answered === x.questions);
+      const open = slides.filter((x) => x.questions && (x.answered ?? 0) < x.questions);
+      if (done.length > 0 && open.length > 0) {
+        const name = (x: { number: number; title?: string }): string =>
+          x.title ? `「${x.title}」` : `スライド${x.number}`;
+        view.limits.push(
+          `${done.map(name).join('・')}の設問にはすべて回答が保存されています。Ed のレッスンが完了（completed）になっていないのは、${open
+            .map((x) => `${name(x)}（${x.answered ?? 0}/${x.questions}問）`)
+            .join(
+              '・',
+            )}が終わっていないためで、Ed はスライドごとの提出済み・未提出を返しません。どこまでが課題かは assignment.url で確かめてください。`,
+        );
+      }
+    }
   } else if (platform === 'livecampusu') {
     const st = str(p.submittalStatus);
     if (st) view.submission.sourceStatus = st;
